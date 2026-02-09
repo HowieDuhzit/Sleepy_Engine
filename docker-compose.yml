@@ -1,0 +1,9 @@
+version: '3.9'
+services:
+  app:
+    build:
+      context: .
+      target: allinone
+    ports:
+      - "5175:80"
+      - "2567:2567"
