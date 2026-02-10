@@ -4,7 +4,8 @@ services:
       context: .
       target: allinone
     environment:
-      - PORT=2567
+      - GAME_PORT=2567
+      - PORT=8080
       - SERVICE_FQDN_APP_8080
       - SERVICE_URL_APP_8080
       - SERVICE_FQDN_APP_2567

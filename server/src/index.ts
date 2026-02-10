@@ -5,7 +5,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
 
-const port = Number(process.env.PORT ?? 2567);
+const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const animationsDir =
   process.env.ANIMATIONS_DIR ?? path.join(process.cwd(), 'client', 'public', 'animations');
 const configDir = process.env.CONFIG_DIR ?? path.join(process.cwd(), 'client', 'public', 'config');
