@@ -146,6 +146,7 @@ export class GameApp {
   private localVelocityY = 0;
   private localVelocityX = 0;
   private localVelocityZ = 0;
+  private localVisualOffset = new THREE.Vector3(); // Visual smoothing for network corrections
   private parkourState: 'normal' | 'slide' | 'vault' | 'climb' | 'roll' = 'normal';
   private parkourTimer = 0;
   private vaultCooldown = 0;
@@ -315,6 +316,11 @@ export class GameApp {
     this.animateCrowd(elapsed, delta);
     this.input.updateGamepad();
     this.animateLocalPlayer(delta);
+
+    // Smooth out visual offset from network corrections (15x per second = smooth but responsive)
+    const offsetSmoothSpeed = Math.min(1, delta * 15);
+    this.localVisualOffset.lerp(new THREE.Vector3(0, 0, 0), offsetSmoothSpeed);
+
     this.updateCamera(delta);
     this.updateVrms(delta);
     this.updateFocusHud();
@@ -329,7 +335,13 @@ export class GameApp {
     this.updateAnimHud();
     this.tickNetwork(delta);
     this.updateRemoteInterpolation(now / 1000);
+
+    // Apply visual offset for rendering (hides network corrections)
+    this.localPlayer.position.add(this.localVisualOffset);
     this.renderer.render(this.scene, this.camera);
+    // Restore physics position
+    this.localPlayer.position.sub(this.localVisualOffset);
+
     this.updatePerfHud(delta);
     this.animationId = requestAnimationFrame(this.tick);
   };
@@ -1121,11 +1133,11 @@ export class GameApp {
   }
 
   private updateCamera(delta: number) {
-    // Desired target position (player position)
+    // Desired target position (player position + visual offset for smooth corrections)
     const target = this.cameraTarget.set(
-      this.localPlayer.position.x,
-      this.localPlayer.position.y + 1.4,
-      this.localPlayer.position.z,
+      this.localPlayer.position.x + this.localVisualOffset.x,
+      this.localPlayer.position.y + this.localVisualOffset.y + 1.4,
+      this.localPlayer.position.z + this.localVisualOffset.z,
     );
 
     // Smooth the target to decouple from sharp player movements
@@ -1352,34 +1364,41 @@ export class GameApp {
   }
 
   private reconcileLocal(snapshot: PlayerSnapshot) {
-    // Visual smoothing approach: accept server position but don't fight prediction
+    // Visual smoothing layer: physics position can snap instantly for server authority,
+    // but rendered position smoothly interpolates via localVisualOffset
+
     const dx = snapshot.position.x - this.localPlayer.position.x;
+    const dy = snapshot.position.y - this.localPlayer.position.y;
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    // Very lenient - only correct on major desyncs (>1m)
-    if (distSq > 1.0 * 1.0) {
-      // Major desync (collision, teleport) - snap immediately
+    // Use tighter threshold (20cm) now that visual smoothing hides corrections
+    const correctionThreshold = 0.2 * 0.2;
+
+    if (distSq > correctionThreshold || Math.abs(dy) > 0.1) {
+      // Store old position before correction
+      const oldX = this.localPlayer.position.x;
+      const oldY = this.localPlayer.position.y;
+      const oldZ = this.localPlayer.position.z;
+
+      // Apply server correction to physics position (instant for gameplay)
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+
+      // Add the correction delta to visual offset (will be smoothed out in render)
+      this.localVisualOffset.x += oldX - snapshot.position.x;
+      this.localVisualOffset.y += oldY - snapshot.position.y;
+      this.localVisualOffset.z += oldZ - snapshot.position.z;
+
+      // Sync velocity to server
       this.localVelocityX = snapshot.velocity.x;
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
     } else {
-      // Trust client prediction for normal movement
-      // Only sync velocity to stay roughly aligned
+      // Small drift - just sync velocity gently
       const velocityMatch = 0.3;
       this.localVelocityX += (snapshot.velocity.x - this.localVelocityX) * velocityMatch;
+      this.localVelocityY += (snapshot.velocity.y - this.localVelocityY) * velocityMatch;
       this.localVelocityZ += (snapshot.velocity.z - this.localVelocityZ) * velocityMatch;
-
-      // Gentle position correction only on Y axis (jumping/falling more critical)
-      if (Math.abs(snapshot.position.y - this.localPlayer.position.y) > 0.1) {
-        this.localPlayer.position.y = THREE.MathUtils.lerp(
-          this.localPlayer.position.y,
-          snapshot.position.y,
-          0.5
-        );
-        this.localVelocityY = snapshot.velocity.y;
-      }
     }
   }
 
