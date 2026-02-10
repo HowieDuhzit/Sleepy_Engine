@@ -226,7 +226,13 @@ export class GameApp {
     this.input = new InputState();
     const host =
       window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
-    this.roomClient = new RoomClient(`http://${host}:2567`);
+    const env = (import.meta as any).env || {};
+    const runtimeWs = (window as any).__PUBLIC_WS_URL as string | undefined;
+    const wsUrl =
+      runtimeWs ||
+      env.VITE_PUBLIC_WS_URL ||
+      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${host}:2567`;
+    this.roomClient = new RoomClient(wsUrl);
     this.localPlayer = this.createPlayer();
 
     this.container.appendChild(this.renderer.domElement);
