@@ -38,7 +38,6 @@ export type WorldSnapshot = {
   players: Record<string, PlayerSnapshot>;
   heat: number;
   phase: number;
-  lastProcessedInput?: Record<string, number>; // sessionId -> last seq processed
 };
 
 export type CrowdAgentSnapshot = {

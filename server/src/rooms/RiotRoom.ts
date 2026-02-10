@@ -159,7 +159,6 @@ class NavGrid {
 export class RiotRoom extends Room {
   declare state: RiotState;
   private inputBuffer = new Map<string, PlayerInput>();
-  private lastProcessedSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
   private crowdUpdateCounter = 0; // For reducing crowd update rate
@@ -235,9 +234,6 @@ export class RiotRoom extends Room {
     for (const [id, player] of this.state.players.entries()) {
       const input = this.inputBuffer.get(id);
       if (!input) continue;
-
-      // Track last processed sequence for client reconciliation
-      this.lastProcessedSeq.set(id, input.seq);
 
       player.lookYaw = input.lookYaw;
       player.lookPitch = input.lookPitch;
@@ -521,17 +517,10 @@ export class RiotRoom extends Room {
         yaw: player.yaw,
       };
     }
-    // Build last processed input map for client reconciliation
-    const lastProcessedInput: Record<string, number> = {};
-    for (const [id, seq] of this.lastProcessedSeq.entries()) {
-      lastProcessedInput[id] = seq;
-    }
-
     this.broadcast(PROTOCOL.snapshot, {
       players: snapshot,
       heat: this.state.heat,
       phase: this.state.phase,
-      lastProcessedInput,
     });
     // Spatial culling: only send crowd agents near players
     this.crowdUpdateCounter++;
