@@ -228,10 +228,15 @@ export class GameApp {
       window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
     const env = (import.meta as any).env || {};
     const runtimeWs = (window as any).__PUBLIC_WS_URL as string | undefined;
-    const wsUrl =
+    const rawUrl =
       runtimeWs ||
       env.VITE_PUBLIC_WS_URL ||
       `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${host}:2567`;
+    const wsUrl = rawUrl.startsWith('http://')
+      ? rawUrl.replace(/^http:\/\//, 'ws://')
+      : rawUrl.startsWith('https://')
+        ? rawUrl.replace(/^https:\/\//, 'wss://')
+        : rawUrl;
     this.roomClient = new RoomClient(wsUrl);
     this.localPlayer = this.createPlayer();
 
