@@ -317,8 +317,8 @@ export class GameApp {
     this.input.updateGamepad();
     this.animateLocalPlayer(delta);
 
-    // Smooth out visual offset from network corrections (15x per second = smooth but responsive)
-    const offsetSmoothSpeed = Math.min(1, delta * 15);
+    // Smooth out visual offset from network corrections (30x per second = fast and imperceptible)
+    const offsetSmoothSpeed = Math.min(1, delta * 30);
     this.localVisualOffset.lerp(new THREE.Vector3(0, 0, 0), offsetSmoothSpeed);
 
     this.updateCamera(delta);
@@ -933,12 +933,12 @@ export class GameApp {
     const movementLocked = this.localMovementLockTimer > 0;
 
     // Smooth velocity transition for better animation blending
-    // Fast acceleration (10x per second) makes it feel responsive while animations blend smoothly
+    // Very fast acceleration (25x per second) feels instant while animations still blend smoothly
     if (!movementLocked) {
       const speed = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
       const targetVx = moveX * speed;
       const targetVz = moveZ * speed;
-      const accelRate = 10; // 10x per second = very responsive but smooth
+      const accelRate = 25; // 25x per second = nearly instant but smooth
       const blend = Math.min(1, delta * accelRate);
       this.localVelocityX += (targetVx - this.localVelocityX) * blend;
       this.localVelocityZ += (targetVz - this.localVelocityZ) * blend;
@@ -1462,11 +1462,12 @@ export class GameApp {
         const dy = Math.atan2(Math.sin(newer.yaw - older.yaw), Math.cos(newer.yaw - older.yaw));
         mesh.rotation.y = older.yaw + dy * alpha;
       }
-      // Interpolate velocity for animation
+      // Use latest snapshot velocity for responsive animations (don't interpolate velocity)
+      const latest = snapshots[snapshots.length - 1]!;
       this.remoteLatestVel.set(id, {
-        x: THREE.MathUtils.lerp(older.velocity.x, newer.velocity.x, alpha),
-        y: THREE.MathUtils.lerp(older.velocity.y, newer.velocity.y, alpha),
-        z: THREE.MathUtils.lerp(older.velocity.z, newer.velocity.z, alpha),
+        x: latest.velocity.x,
+        y: latest.velocity.y,
+        z: latest.velocity.z,
       });
     }
   }
