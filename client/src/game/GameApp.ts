@@ -174,7 +174,8 @@ export class GameApp {
   private remoteBufferMin = 0.05; // Min 50ms
   private remoteBufferMax = 0.2; // Max 200ms
   private lastSnapshotTimes: number[] = []; // Track snapshot arrival times for adaptive buffer
-  private crowdAgents: CrowdSnapshot['agents'] = [];
+  private crowdAgents = new Map<number, { agent: CrowdSnapshot['agents'][0]; lastUpdate: number }>(); // Track by ID with timestamp
+  private readonly CROWD_TIMEOUT = 2; // Remove crowd agents not updated for 2 seconds
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
   private remoteLatestVel = new Map<string, Vec3>();
   private readonly disableProcedural = true;
@@ -656,10 +657,11 @@ export class GameApp {
       const node = this.hud.querySelector('[data-hud-crowd]');
       if (node) node.textContent = this.statusLines.crowd;
     }
-    if (this.crowdAgents.length > 0) {
-      const count = Math.min(this.crowdAvatars.length, this.crowdAgents.length);
+    if (this.crowdAgents.size > 0) {
+      const agents = Array.from(this.crowdAgents.values()).map((entry) => entry.agent);
+      const count = Math.min(this.crowdAvatars.length, agents.length);
       for (let i = 0; i < count; i += 1) {
-        const agent = this.crowdAgents[i]!;
+        const agent = agents[i]!;
         const avatar = this.crowdAvatars[i]!;
         avatar.root.position.set(agent.position.x, avatar.baseY, agent.position.z);
         if (Math.hypot(agent.velocity.x, agent.velocity.z) > 0.05) {
@@ -754,7 +756,17 @@ export class GameApp {
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
       this.roomClient.onCrowd((snapshot) => {
-        this.crowdAgents = snapshot.agents;
+        const now = performance.now() / 1000;
+        // Update received agents
+        for (const agent of snapshot.agents) {
+          this.crowdAgents.set(agent.id, { agent, lastUpdate: now });
+        }
+        // Remove stale agents (not updated recently)
+        for (const [id, entry] of this.crowdAgents.entries()) {
+          if (now - entry.lastUpdate > this.CROWD_TIMEOUT) {
+            this.crowdAgents.delete(id);
+          }
+        }
       });
     } catch (error) {
       this.setHud('connection', 'offline (server not running)');
@@ -924,7 +936,8 @@ export class GameApp {
     for (const obstacle of OBSTACLES) {
       resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
     }
-    for (const agent of this.crowdAgents) {
+    for (const entry of this.crowdAgents.values()) {
+      const agent = entry.agent;
       resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, agent.position, CROWD_RADIUS);
     }
     for (const [id, pos] of this.remoteLatest.entries()) {
