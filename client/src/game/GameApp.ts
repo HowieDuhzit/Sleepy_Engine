@@ -120,7 +120,7 @@ export class GameApp {
   private lastTime = performance.now();
   private animationId: number | null = null;
   private hud: HTMLDivElement;
-  private hudVisible = true;
+  private hudVisible = false;
   private perfHud: HTMLDivElement;
   private perfVisible = false;
   private perfFrames = 0;
@@ -238,6 +238,7 @@ export class GameApp {
     this.container.appendChild(this.renderer.domElement);
     this.container.appendChild(this.hud);
     this.container.appendChild(this.perfHud);
+    this.hud.style.display = this.hudVisible ? 'block' : 'none';
     this.container.focus();
     window.addEventListener('keydown', (event) => {
       const value = `raw: ${event.code || event.key}`;
