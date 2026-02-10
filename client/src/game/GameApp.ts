@@ -1196,22 +1196,23 @@ export class GameApp {
   }
 
   private reconcileLocal(snapshot: PlayerSnapshot) {
-    // Simple smooth reconciliation without prediction
+    // Reconciliation with faster correction to avoid collision jitter
     const dx = snapshot.position.x - this.localPlayer.position.x;
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    if (distSq > 0.04) {
-      // Large error, snap immediately
+    // Snap threshold reduced to avoid lerp during collisions
+    if (distSq > 0.01) {
+      // Snap immediately for any significant difference (collisions, etc)
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
       this.localVelocityX = snapshot.velocity.x;
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
     } else if (distSq > 0.0001) {
-      // Small error, smooth lerp
+      // Very small errors only: fast lerp
       this.localPlayer.position.lerp(
         new THREE.Vector3(snapshot.position.x, snapshot.position.y, snapshot.position.z),
-        0.35,
+        0.7,
       );
     }
   }

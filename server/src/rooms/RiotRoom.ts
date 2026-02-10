@@ -161,7 +161,6 @@ export class RiotRoom extends Room {
   private inputBuffer = new Map<string, PlayerInput>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
-  private crowdUpdateCounter = 0; // For reducing crowd update rate
   private readonly navCell = 2.5;
   private readonly navHalf = CROWD_BOUNDS;
   private navGrid!: NavGrid;
@@ -523,7 +522,6 @@ export class RiotRoom extends Room {
       phase: this.state.phase,
     });
     // Spatial culling: only send crowd agents near players
-    this.crowdUpdateCounter++;
     const nearAgents = this.crowd.filter((agent) => {
       // Check if agent is within radius of any player
       for (const player of this.state.players.values()) {
@@ -537,17 +535,15 @@ export class RiotRoom extends Room {
       return false;
     });
 
-    // Only send crowd update every 2 ticks to save bandwidth
-    if (this.crowdUpdateCounter % 2 === 0) {
-      this.broadcast(PROTOCOL.crowd, {
-        agents: nearAgents.map((agent) => ({
-          id: agent.id,
-          position: { x: agent.x, y: agent.y, z: agent.z },
-          velocity: { x: agent.vx, y: agent.vy, z: agent.vz },
-          state: agent.state,
-          stateTime: agent.stateTime,
-        })),
-      });
-    }
+    // Send crowd updates every tick (20Hz) for smooth motion
+    this.broadcast(PROTOCOL.crowd, {
+      agents: nearAgents.map((agent) => ({
+        id: agent.id,
+        position: { x: agent.x, y: agent.y, z: agent.z },
+        velocity: { x: agent.vx, y: agent.vy, z: agent.vz },
+        state: agent.state,
+        stateTime: agent.stateTime,
+      })),
+    });
   }
 }
