@@ -1429,10 +1429,11 @@ export class GameApp {
       // Apply server correction to physics position (instant for gameplay)
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
 
-      // Add the correction delta to visual offset (will be smoothed out in render)
-      this.localVisualOffset.x += oldX - snapshot.position.x;
-      this.localVisualOffset.y += oldY - snapshot.position.y;
-      this.localVisualOffset.z += oldZ - snapshot.position.z;
+      // Set visual offset to the correction delta (replaces previous offset)
+      // This prevents accumulation if corrections happen faster than decay
+      this.localVisualOffset.x = oldX - snapshot.position.x;
+      this.localVisualOffset.y = oldY - snapshot.position.y;
+      this.localVisualOffset.z = oldZ - snapshot.position.z;
 
       // Sync velocity to server
       this.localVelocityX = snapshot.velocity.x;
