@@ -335,7 +335,7 @@ export class EditorApp {
       '<button class="icon-btn" data-bones-toggle title="Toggle Bones">B</button>',
       '<label class="overlay-slider" data-bone-scale-wrap style="display:none;">',
       '<span>Size</span>',
-      '<input data-bone-scale type="range" min="0.02" max="0.2" step="0.01" />',
+      '<input data-bone-scale type="range" min="0.25" max="1.75" step="0.05" />',
       '</label>',
       '<button class="icon-btn" data-reset title="Reset Pose">R</button>',
       '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
@@ -568,8 +568,9 @@ export class EditorApp {
     this.resizeTimeline();
     this.drawTimeline();
     if (boneScaleInput) {
-      this.boneScale = this.computeBoneScale() * 0.5;
-      boneScaleInput.value = this.boneScale.toFixed(2);
+      const base = this.computeBoneScale() * 0.5;
+      this.boneScale = base;
+      boneScaleInput.value = '1';
     }
     if (boneScaleWrap) {
       boneScaleWrap.style.display = this.boneVisualsVisible ? 'flex' : 'none';
@@ -883,7 +884,8 @@ export class EditorApp {
     boneScaleInput?.addEventListener('input', () => {
       const value = parseFloat(boneScaleInput.value);
       if (!Number.isFinite(value)) return;
-      this.boneScale = value;
+      const base = this.computeBoneScale() * 0.5;
+      this.boneScale = base * value;
       this.ensureBoneMarkers();
       this.buildBoneGizmos();
       if (this.boneGizmoGroup) this.boneGizmoGroup.visible = this.boneVisualsVisible;
