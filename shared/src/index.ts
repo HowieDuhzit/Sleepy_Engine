@@ -79,7 +79,7 @@ export const ATTACK_RANGE = 2.2;
 export const ATTACK_COOLDOWN = 0.45;
 export const ATTACK_DAMAGE = 12;
 export const ATTACK_KNOCKBACK = 4.5;
-export const CROWD_COUNT = 48;
+export const CROWD_COUNT = 0; // Disabled for testing
 export const CROWD_RADIUS = 0.35;
 export const CROWD_SPEED = 1.4;
 export const CROWD_REPEL_RADIUS = 2.2;
@@ -92,25 +92,7 @@ export const CROWD_FLEE_TIME = 2.6;
 export const CROWD_FIGHT_TIME = 2.0;
 export const CROWD_HIT_KNOCKBACK = 2.8;
 
-export const OBSTACLES: Obstacle[] = [
-  { id: 'low-wall-a', position: { x: -8, y: 0, z: -6 }, size: { x: 6, y: 1, z: 1.2 } },
-  { id: 'low-wall-b', position: { x: 10, y: 0, z: -4 }, size: { x: 5, y: 1, z: 1.2 } },
-  { id: 'low-wall-c', position: { x: 4, y: 0, z: 10 }, size: { x: 6, y: 1, z: 1.2 } },
-  { id: 'platform-a', position: { x: -12, y: 0, z: 10 }, size: { x: 6, y: 1.4, z: 6 } },
-  { id: 'platform-b', position: { x: 14, y: 0, z: 12 }, size: { x: 6, y: 1.8, z: 6 } },
-  { id: 'block-tall', position: { x: 0, y: 0, z: -14 }, size: { x: 4, y: 2.6, z: 4 } },
-  { id: 'block-mid', position: { x: -2, y: 0, z: 2 }, size: { x: 3.5, y: 1.0, z: 3.5 } },
-  { id: 'block-mid-2', position: { x: 8, y: 0, z: 2 }, size: { x: 3.5, y: 1.0, z: 3.5 } },
-  { id: 'stair-1', position: { x: -2, y: 0, z: -2 }, size: { x: 2.8, y: 0.6, z: 2.8 } },
-  { id: 'stair-2', position: { x: -2, y: 0, z: -5 }, size: { x: 2.8, y: 1.2, z: 2.8 } },
-  { id: 'ramp-step-1', position: { x: 6, y: 0, z: -10 }, size: { x: 4, y: 0.4, z: 2 } },
-  { id: 'ramp-step-2', position: { x: 6, y: 0, z: -8 }, size: { x: 4, y: 0.8, z: 2 } },
-  { id: 'ramp-step-3', position: { x: 6, y: 0, z: -6 }, size: { x: 4, y: 1.2, z: 2 } },
-  { id: 'ramp-step-4', position: { x: 6, y: 0, z: -4 }, size: { x: 4, y: 1.6, z: 2 } },
-  { id: 'stair-test-1', position: { x: -10, y: 0, z: -10 }, size: { x: 3, y: 0.3, z: 2 } },
-  { id: 'stair-test-2', position: { x: -10, y: 0, z: -8 }, size: { x: 3, y: 0.6, z: 2 } },
-  { id: 'stair-test-3', position: { x: -10, y: 0, z: -6 }, size: { x: 3, y: 0.9, z: 2 } },
-];
+export const OBSTACLES: Obstacle[] = [];
 
 export function resolveCircleAabb(
   position: Vec3,
