@@ -9,6 +9,7 @@ import { buildAnimationClipFromData, isClipData, mirrorClipData, parseClipPayloa
 import { retargetMixamoClip } from './retarget';
 import {
   PlayerSnapshot,
+  PlayerInput,
   WorldSnapshot,
   OBSTACLES,
   PLAYER_RADIUS,
@@ -167,6 +168,8 @@ export class GameApp {
     }
   >();
   private localId: string | null = null;
+  private inputHistory: PlayerInput[] = []; // Store last 60 inputs (~3 seconds at 20Hz)
+  private readonly MAX_INPUT_HISTORY = 60;
   private readonly remoteBufferSeconds = 0.12;
   private crowdAgents: CrowdSnapshot['agents'] = [];
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
@@ -770,7 +773,7 @@ export class GameApp {
     this.updateInputHud(movement.x, movement.z);
     this.updateKeyHud();
 
-    this.roomClient.sendInput({
+    const input: PlayerInput = {
       seq: this.seq++,
       moveX,
       moveZ,
@@ -783,7 +786,15 @@ export class GameApp {
       interact: flags.interact,
       jump: movementLocked ? false : flags.jump,
       crouch: movementLocked ? false : flags.crouch,
-    });
+    };
+
+    // Store in history for reconciliation
+    this.inputHistory.push(input);
+    if (this.inputHistory.length > this.MAX_INPUT_HISTORY) {
+      this.inputHistory.shift();
+    }
+
+    this.roomClient.sendInput(input);
   }
 
   private animateLocalPlayer(delta: number) {
@@ -1103,7 +1114,8 @@ export class GameApp {
     if (phaseNode) phaseNode.textContent = this.statusLines.phase;
     for (const [id, playerSnap] of Object.entries(snapshot.players)) {
       if (this.localId && id === this.localId) {
-        this.reconcileLocal(playerSnap);
+        const lastProcessedSeq = snapshot.lastProcessedInput?.[id];
+        this.reconcileLocal(playerSnap, lastProcessedSeq);
         continue;
       }
       let entry = this.remotePlayers.get(id);
@@ -1149,21 +1161,121 @@ export class GameApp {
     }
   }
 
-  private reconcileLocal(snapshot: PlayerSnapshot) {
-    const dx = snapshot.position.x - this.localPlayer.position.x;
-    const dz = snapshot.position.z - this.localPlayer.position.z;
-    const distSq = dx * dx + dz * dz;
-    if (distSq > 0.04) {
-      this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
-      this.localVelocityX = snapshot.velocity.x;
-      this.localVelocityY = snapshot.velocity.y;
-      this.localVelocityZ = snapshot.velocity.z;
-    } else if (distSq > 0.0001) {
-      this.localPlayer.position.lerp(
-        new THREE.Vector3(snapshot.position.x, snapshot.position.y, snapshot.position.z),
-        0.35,
-      );
+  private applyInput(
+    input: PlayerInput,
+    position: Vec3,
+    velocity: Vec3,
+    delta: number = 1 / 20, // Server tick rate
+  ): { position: Vec3; velocity: Vec3 } {
+    // Copy so we don't mutate
+    const pos = { ...position };
+    const vel = { ...velocity };
+
+    // Apply movement (same logic as server)
+    const speed =
+      MOVE_SPEED * (input.sprint ? SPRINT_MULTIPLIER : input.crouch ? CROUCH_MULTIPLIER : 1);
+    const slideMode = input.sprint || input.crouch;
+    const accel = Math.min(1, SLIDE_ACCEL * delta);
+    const targetVx = input.moveX * speed;
+    const targetVz = input.moveZ * speed;
+
+    if (slideMode) {
+      vel.x += (targetVx - vel.x) * accel;
+      vel.z += (targetVz - vel.z) * accel;
+      if (Math.abs(input.moveX) < 0.05 && Math.abs(input.moveZ) < 0.05) {
+        const damping = Math.max(0, 1 - SLIDE_FRICTION * delta);
+        vel.x *= damping;
+        vel.z *= damping;
+      }
+    } else {
+      vel.x = targetVx;
+      vel.z = targetVz;
     }
+
+    // Apply jump
+    const groundHeight = this.sampleGroundHeight(pos.x, pos.z);
+    if (input.jump && pos.y <= groundHeight + 0.001) {
+      vel.y = JUMP_SPEED;
+    }
+
+    // Apply gravity
+    vel.y += GRAVITY * delta;
+    pos.y += vel.y * delta;
+
+    if (pos.y <= groundHeight) {
+      pos.y = groundHeight;
+      vel.y = 0;
+    }
+
+    // Apply velocity
+    pos.x += vel.x * delta;
+    pos.z += vel.z * delta;
+
+    // Collision resolution (simplified - just obstacles, no other players)
+    for (const obstacle of OBSTACLES) {
+      const resolved = resolveCircleAabb(pos, PLAYER_RADIUS, obstacle);
+      pos.x = resolved.x;
+      pos.z = resolved.z;
+    }
+
+    const floorY = this.sampleGroundHeight(pos.x, pos.z);
+    if (pos.y < floorY) {
+      pos.y = floorY;
+      vel.y = 0;
+    }
+
+    return { position: pos, velocity: vel };
+  }
+
+  private reconcileLocal(snapshot: PlayerSnapshot, lastProcessedSeq?: number) {
+    if (lastProcessedSeq === undefined) {
+      // Fallback to old behavior if server doesn't send seq
+      const dx = snapshot.position.x - this.localPlayer.position.x;
+      const dz = snapshot.position.z - this.localPlayer.position.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq > 0.04) {
+        this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+        this.localVelocityX = snapshot.velocity.x;
+        this.localVelocityY = snapshot.velocity.y;
+        this.localVelocityZ = snapshot.velocity.z;
+      } else if (distSq > 0.0001) {
+        this.localPlayer.position.lerp(
+          new THREE.Vector3(snapshot.position.x, snapshot.position.y, snapshot.position.z),
+          0.35,
+        );
+      }
+      return;
+    }
+
+    // Find inputs that came after the server's last processed input
+    const pendingInputs = this.inputHistory.filter((input) => input.seq > lastProcessedSeq);
+
+    // Start from server's authoritative position
+    let pos = { ...snapshot.position };
+    let vel = { ...snapshot.velocity };
+
+    // Replay all pending inputs
+    for (const input of pendingInputs) {
+      const result = this.applyInput(input, pos, vel);
+      pos = result.position;
+      vel = result.velocity;
+    }
+
+    // Check if we need to correct
+    const dx = pos.x - this.localPlayer.position.x;
+    const dz = pos.z - this.localPlayer.position.z;
+    const distSq = dx * dx + dz * dz;
+
+    if (distSq > 0.01) {
+      // Significant mismatch, snap to reconciled position
+      this.localPlayer.position.set(pos.x, pos.y, pos.z);
+      this.localVelocityX = vel.x;
+      this.localVelocityY = vel.y;
+      this.localVelocityZ = vel.z;
+    }
+
+    // Clean up old inputs
+    this.inputHistory = this.inputHistory.filter((input) => input.seq > lastProcessedSeq - 10);
   }
 
   private updateRemoteInterpolation(nowSeconds: number) {
