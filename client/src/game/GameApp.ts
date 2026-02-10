@@ -462,6 +462,7 @@ export class GameApp {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.y = radius + length / 2;
+    mesh.visible = false; // Hide collider
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     group.position.set(0, GROUND_Y, 0);
@@ -641,6 +642,7 @@ export class GameApp {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.y = radius + length / 2;
+    mesh.visible = false; // Hide collider
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     void this.loadVrmInto(group, id);
