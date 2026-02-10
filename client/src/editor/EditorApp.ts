@@ -151,6 +151,24 @@ export class EditorApp {
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
     capsuleYOffset: 0,
+    moveSpeed: 6,
+    sprintMultiplier: 1.6,
+    crouchMultiplier: 0.55,
+    slideAccel: 10,
+    slideFriction: 6,
+    gravity: -22,
+    jumpSpeed: 8,
+    walkThreshold: 0.15,
+    runThreshold: 3.9,
+    cameraDistance: 6,
+    cameraHeight: 1.4,
+    cameraShoulder: 1.2,
+    cameraShoulderHeight: 0.4,
+    cameraSensitivity: 1.0,
+    cameraSmoothing: 0,
+    cameraMinPitch: 0.2,
+    cameraMaxPitch: Math.PI - 0.2,
+    targetSmoothSpeed: 15,
     ragdollRig: {} as Record<
       string,
       { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
@@ -297,10 +315,28 @@ export class EditorApp {
       '<div class="editor-left" data-tab-panel="player" style="display:none;">',
       '<div class="panel">',
       '<div class="panel-title">Player Controller</div>',
+      '<label class="field"><span>Move Speed</span><input data-move-speed type="number" step="0.1" /></label>',
+      '<label class="field"><span>Sprint Mult</span><input data-sprint-mult type="number" step="0.05" /></label>',
+      '<label class="field"><span>Crouch Mult</span><input data-crouch-mult type="number" step="0.05" /></label>',
+      '<label class="field"><span>Slide Accel</span><input data-slide-accel type="number" step="0.5" /></label>',
+      '<label class="field"><span>Slide Friction</span><input data-slide-friction type="number" step="0.5" /></label>',
+      '<label class="field"><span>Jump Speed</span><input data-jump-speed type="number" step="0.1" /></label>',
+      '<label class="field"><span>Gravity</span><input data-gravity type="number" step="0.5" /></label>',
+      '<label class="field"><span>Walk Threshold</span><input data-walk-threshold type="number" step="0.05" /></label>',
+      '<label class="field"><span>Run Threshold</span><input data-run-threshold type="number" step="0.1" /></label>',
       '<label class="field"><span>IK Offset</span><input data-ik-offset type="number" step="0.01" /></label>',
       '<label class="field"><span>Capsule Radius Scale</span><input data-cap-radius type="number" step="0.05" /></label>',
       '<label class="field"><span>Capsule Height Scale</span><input data-cap-height type="number" step="0.05" /></label>',
       '<label class="field"><span>Capsule Y Offset</span><input data-cap-y type="number" step="0.01" /></label>',
+      '<label class="field"><span>Camera Distance</span><input data-cam-distance type="number" step="0.1" /></label>',
+      '<label class="field"><span>Camera Height</span><input data-cam-height type="number" step="0.1" /></label>',
+      '<label class="field"><span>Shoulder Offset</span><input data-cam-shoulder type="number" step="0.1" /></label>',
+      '<label class="field"><span>Shoulder Height</span><input data-cam-shoulder-y type="number" step="0.1" /></label>',
+      '<label class="field"><span>Cam Sensitivity</span><input data-cam-sense type="number" step="0.05" /></label>',
+      '<label class="field"><span>Cam Smoothing</span><input data-cam-smooth type="number" step="0.05" min="0" max="1" /></label>',
+      '<label class="field"><span>Min Pitch</span><input data-cam-min-pitch type="number" step="0.05" /></label>',
+      '<label class="field"><span>Max Pitch</span><input data-cam-max-pitch type="number" step="0.05" /></label>',
+      '<label class="field"><span>Target Smooth</span><input data-cam-target-smooth type="number" step="1" /></label>',
       '<div class="panel-actions">',
       '<button data-player-load>Load</button>',
       '<button data-player-save>Save</button>',
@@ -422,6 +458,18 @@ export class EditorApp {
       '</div>',
       '</div>',
       '</div>',
+      '<div class="editor-bottom player-bottom" data-tab-panel="player" style="display:none;">',
+      '<div class="player-bottom-grid">',
+      '<div class="panel">',
+      '<div class="panel-title">Config Preview</div>',
+      '<textarea data-player-json rows="10"></textarea>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Notes</div>',
+      '<div class="clip-status">Edit values above, then Save to write /config/player.json for the game.</div>',
+      '</div>',
+      '</div>',
+      '</div>',
     ].join('');
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
@@ -528,10 +576,29 @@ export class EditorApp {
     const stepForward = hud.querySelector('[data-step-forward]') as HTMLButtonElement;
     const overrideBtn = hud.querySelector('[data-override]') as HTMLButtonElement;
     const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
+    const playerJson = hud.querySelector('[data-player-json]') as HTMLTextAreaElement;
+    const moveSpeedInput = hud.querySelector('[data-move-speed]') as HTMLInputElement;
+    const sprintMultInput = hud.querySelector('[data-sprint-mult]') as HTMLInputElement;
+    const crouchMultInput = hud.querySelector('[data-crouch-mult]') as HTMLInputElement;
+    const slideAccelInput = hud.querySelector('[data-slide-accel]') as HTMLInputElement;
+    const slideFrictionInput = hud.querySelector('[data-slide-friction]') as HTMLInputElement;
+    const jumpSpeedInput = hud.querySelector('[data-jump-speed]') as HTMLInputElement;
+    const gravityInput = hud.querySelector('[data-gravity]') as HTMLInputElement;
+    const walkThresholdInput = hud.querySelector('[data-walk-threshold]') as HTMLInputElement;
+    const runThresholdInput = hud.querySelector('[data-run-threshold]') as HTMLInputElement;
     const ikOffsetInput = hud.querySelector('[data-ik-offset]') as HTMLInputElement;
     const capRadiusInput = hud.querySelector('[data-cap-radius]') as HTMLInputElement;
     const capHeightInput = hud.querySelector('[data-cap-height]') as HTMLInputElement;
     const capYOffsetInput = hud.querySelector('[data-cap-y]') as HTMLInputElement;
+    const camDistanceInput = hud.querySelector('[data-cam-distance]') as HTMLInputElement;
+    const camHeightInput = hud.querySelector('[data-cam-height]') as HTMLInputElement;
+    const camShoulderInput = hud.querySelector('[data-cam-shoulder]') as HTMLInputElement;
+    const camShoulderYInput = hud.querySelector('[data-cam-shoulder-y]') as HTMLInputElement;
+    const camSenseInput = hud.querySelector('[data-cam-sense]') as HTMLInputElement;
+    const camSmoothInput = hud.querySelector('[data-cam-smooth]') as HTMLInputElement;
+    const camMinPitchInput = hud.querySelector('[data-cam-min-pitch]') as HTMLInputElement;
+    const camMaxPitchInput = hud.querySelector('[data-cam-max-pitch]') as HTMLInputElement;
+    const camTargetSmoothInput = hud.querySelector('[data-cam-target-smooth]') as HTMLInputElement;
     const rigShowInput = hud.querySelector('[data-rig-show]') as HTMLInputElement;
     const rigBoneSelect = hud.querySelector('[data-rig-bone]') as HTMLSelectElement;
     const rigModeSelect = hud.querySelector('[data-rig-mode]') as HTMLSelectElement;
@@ -576,12 +643,35 @@ export class EditorApp {
       boneScaleWrap.style.display = this.boneVisualsVisible ? 'flex' : 'none';
     }
 
+    const syncPlayerJson = () => {
+      if (!playerJson) return;
+      playerJson.value = JSON.stringify(this.playerConfig, null, 2);
+    };
+
     const setPlayerInputs = () => {
       if (!ikOffsetInput) return;
+      moveSpeedInput.value = this.playerConfig.moveSpeed.toFixed(2);
+      sprintMultInput.value = this.playerConfig.sprintMultiplier.toFixed(2);
+      crouchMultInput.value = this.playerConfig.crouchMultiplier.toFixed(2);
+      slideAccelInput.value = this.playerConfig.slideAccel.toFixed(2);
+      slideFrictionInput.value = this.playerConfig.slideFriction.toFixed(2);
+      jumpSpeedInput.value = this.playerConfig.jumpSpeed.toFixed(2);
+      gravityInput.value = this.playerConfig.gravity.toFixed(2);
+      walkThresholdInput.value = this.playerConfig.walkThreshold.toFixed(2);
+      runThresholdInput.value = this.playerConfig.runThreshold.toFixed(2);
       ikOffsetInput.value = this.playerConfig.ikOffset.toFixed(2);
       capRadiusInput.value = this.playerConfig.capsuleRadiusScale.toFixed(2);
       capHeightInput.value = this.playerConfig.capsuleHeightScale.toFixed(2);
       capYOffsetInput.value = this.playerConfig.capsuleYOffset.toFixed(2);
+      camDistanceInput.value = this.playerConfig.cameraDistance.toFixed(2);
+      camHeightInput.value = this.playerConfig.cameraHeight.toFixed(2);
+      camShoulderInput.value = this.playerConfig.cameraShoulder.toFixed(2);
+      camShoulderYInput.value = this.playerConfig.cameraShoulderHeight.toFixed(2);
+      camSenseInput.value = this.playerConfig.cameraSensitivity.toFixed(2);
+      camSmoothInput.value = this.playerConfig.cameraSmoothing.toFixed(2);
+      camMinPitchInput.value = this.playerConfig.cameraMinPitch.toFixed(2);
+      camMaxPitchInput.value = this.playerConfig.cameraMaxPitch.toFixed(2);
+      camTargetSmoothInput.value = this.playerConfig.targetSmoothSpeed.toFixed(0);
       if (rigBoneSelect && rigBoneSelect.options.length === 0) {
         for (const def of this.ragdollDefs) {
           const opt = document.createElement('option');
@@ -614,13 +704,32 @@ export class EditorApp {
         rigSwing.value = String(cfg.swingLimit ?? 45);
         rigTwist.value = String(cfg.twistLimit ?? 35);
       }
+      syncPlayerJson();
     };
 
     const readPlayerInputs = () => {
+      this.playerConfig.moveSpeed = Number(moveSpeedInput.value) || 0;
+      this.playerConfig.sprintMultiplier = Number(sprintMultInput.value) || 0;
+      this.playerConfig.crouchMultiplier = Number(crouchMultInput.value) || 0;
+      this.playerConfig.slideAccel = Number(slideAccelInput.value) || 0;
+      this.playerConfig.slideFriction = Number(slideFrictionInput.value) || 0;
+      this.playerConfig.jumpSpeed = Number(jumpSpeedInput.value) || 0;
+      this.playerConfig.gravity = Number(gravityInput.value) || 0;
+      this.playerConfig.walkThreshold = Number(walkThresholdInput.value) || 0;
+      this.playerConfig.runThreshold = Number(runThresholdInput.value) || 0;
       this.playerConfig.ikOffset = Number(ikOffsetInput.value) || 0;
       this.playerConfig.capsuleRadiusScale = Number(capRadiusInput.value) || 1;
       this.playerConfig.capsuleHeightScale = Number(capHeightInput.value) || 1;
       this.playerConfig.capsuleYOffset = Number(capYOffsetInput.value) || 0;
+      this.playerConfig.cameraDistance = Number(camDistanceInput.value) || 0;
+      this.playerConfig.cameraHeight = Number(camHeightInput.value) || 0;
+      this.playerConfig.cameraShoulder = Number(camShoulderInput.value) || 0;
+      this.playerConfig.cameraShoulderHeight = Number(camShoulderYInput.value) || 0;
+      this.playerConfig.cameraSensitivity = Number(camSenseInput.value) || 0;
+      this.playerConfig.cameraSmoothing = Number(camSmoothInput.value) || 0;
+      this.playerConfig.cameraMinPitch = Number(camMinPitchInput.value) || 0;
+      this.playerConfig.cameraMaxPitch = Number(camMaxPitchInput.value) || 0;
+      this.playerConfig.targetSmoothSpeed = Number(camTargetSmoothInput.value) || 0;
       if (rigBoneSelect) {
         const name = rigBoneSelect.value;
         if (name) {
@@ -642,6 +751,7 @@ export class EditorApp {
           };
         }
       }
+      syncPlayerJson();
     };
 
     playerLoadButton?.addEventListener('click', async () => {
@@ -673,6 +783,32 @@ export class EditorApp {
     });
 
     setPlayerInputs();
+    [
+      moveSpeedInput,
+      sprintMultInput,
+      crouchMultInput,
+      slideAccelInput,
+      slideFrictionInput,
+      jumpSpeedInput,
+      gravityInput,
+      walkThresholdInput,
+      runThresholdInput,
+      ikOffsetInput,
+      capRadiusInput,
+      capHeightInput,
+      capYOffsetInput,
+      camDistanceInput,
+      camHeightInput,
+      camShoulderInput,
+      camShoulderYInput,
+      camSenseInput,
+      camSmoothInput,
+      camMinPitchInput,
+      camMaxPitchInput,
+      camTargetSmoothInput,
+    ].forEach((input) => {
+      input?.addEventListener('change', readPlayerInputs);
+    });
     rigBoneSelect?.addEventListener('change', () => {
       const name = rigBoneSelect.value;
       const cfg = this.playerConfig.ragdollRig[name] ?? {
