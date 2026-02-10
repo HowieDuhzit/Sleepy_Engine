@@ -813,6 +813,14 @@ export class GameApp {
     const groundHeight = this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z);
     const onGround = this.localPlayer.position.y <= groundHeight + 0.001;
     const movementLocked = this.localMovementLockTimer > 0;
+
+    // Simple client-side prediction: apply input velocity immediately
+    // This makes start/stop feel instant without complex physics simulation
+    if (!movementLocked) {
+      const speed = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
+      this.localVelocityX = moveX * speed;
+      this.localVelocityZ = moveZ * speed;
+    }
     const moveDir = new THREE.Vector3(moveX, 0, moveZ);
     if (moveDir.lengthSq() > 1e-6) moveDir.normalize();
     this.lastMoveInput = { x: movement.x, z: movement.z };
@@ -1197,25 +1205,26 @@ export class GameApp {
   }
 
   private reconcileLocal(snapshot: PlayerSnapshot) {
-    // Reconciliation with faster correction to avoid collision jitter
+    // Reconciliation with deadband to allow client prediction
     const dx = snapshot.position.x - this.localPlayer.position.x;
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    // Snap threshold reduced to avoid lerp during collisions
-    if (distSq > 0.01) {
-      // Snap immediately for any significant difference (collisions, etc)
+    // Large deadband (25cm) allows client prediction without constant corrections
+    if (distSq > 0.25 * 0.25) {
+      // Large mismatch (collision, desync) - snap immediately
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
       this.localVelocityX = snapshot.velocity.x;
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
-    } else if (distSq > 0.0001) {
-      // Very small errors only: fast lerp
+    } else if (distSq > 0.05 * 0.05) {
+      // Medium error - gentle correction
       this.localPlayer.position.lerp(
         new THREE.Vector3(snapshot.position.x, snapshot.position.y, snapshot.position.z),
-        0.7,
+        0.1,
       );
     }
+    // Small errors (<5cm) ignored - allows smooth client prediction
   }
 
   private updateRemoteInterpolation(nowSeconds: number) {
