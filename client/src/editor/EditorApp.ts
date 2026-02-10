@@ -1541,7 +1541,7 @@ export class EditorApp {
       this.resizeRenderer();
       this.fitCameraToVrm(true);
     });
-    this.boneScale = this.computeBoneScale();
+    this.boneScale = this.computeBoneScale() * 0.5;
     this.collectBones();
     this.buildBoneGizmos();
     this.populateBoneList();
