@@ -4,17 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sleepy Engine Prototype</title>
-    <script>
-      try {
-        var req = new XMLHttpRequest();
-        req.open('GET', '/config/runtime.json', false);
-        req.send(null);
-        if (req.status === 200) {
-          var data = JSON.parse(req.responseText || '{}');
-          window.__PUBLIC_WS_URL = data.wsUrl || data.PUBLIC_WS_URL || window.__PUBLIC_WS_URL;
-        }
-      } catch (e) {}
-    </script>
   </head>
   <body>
     <div id="app"></div>

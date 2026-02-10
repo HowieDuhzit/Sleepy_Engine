@@ -224,19 +224,18 @@ export class GameApp {
     this.perfHud = this.createPerfHud();
     this.crowd = this.createCrowd();
     this.input = new InputState();
-    const host =
-      window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
     const env = (import.meta as any).env || {};
-    const runtimeWs = (window as any).__PUBLIC_WS_URL as string | undefined;
-    const rawUrl =
-      runtimeWs ||
-      env.VITE_PUBLIC_WS_URL ||
-      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${host}:2567`;
-    const wsUrl = rawUrl.startsWith('http://')
-      ? rawUrl.replace(/^http:\/\//, 'ws://')
-      : rawUrl.startsWith('https://')
-        ? rawUrl.replace(/^https:\/\//, 'wss://')
-        : rawUrl;
+    const envUrl = env.VITE_PUBLIC_WS_URL;
+
+    // Default: use same host/protocol as the page (works for Coolify deployments)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host; // includes port if present
+    const defaultUrl = `${protocol}//${host}`;
+
+    // For localhost dev, use explicit port
+    const wsUrl = envUrl || (window.location.hostname === 'localhost'
+      ? 'ws://127.0.0.1:2567'
+      : defaultUrl);
     this.roomClient = new RoomClient(wsUrl);
     this.localPlayer = this.createPlayer();
 
