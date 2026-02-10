@@ -4,12 +4,18 @@ services:
       context: .
       dockerfile: Dockerfile
       target: allinone
-    ports:
-      - "80"
     environment:
-      NODE_ENV: production
-      ANIMATIONS_DIR: /app/animations
-      CONFIG_DIR: /app/config
+      - NODE_ENV=production
+      - GAME_PORT=2567
+      - PORT=80
+      - SERVICE_FQDN_APP
+      - SERVICE_URL_APP_80
+      - SERVICE_FQDN_SERVER
+      - SERVICE_URL_SERVER_2567
+      - PUBLIC_HTTP_URL=${SERVICE_URL_APP_80}
+      - PUBLIC_WS_URL=${SERVICE_URL_SERVER_2567}
+      - ANIMATIONS_DIR=/app/animations
+      - CONFIG_DIR=/app/config
     volumes:
       - game-animations:/app/animations
       - game-config:/app/config
