@@ -1035,8 +1035,9 @@ export class GameApp {
       this.cameraGoal.y = minCamY;
     }
 
-    const smooth = 1 - Math.exp(-delta * 6);
-    this.camera.position.lerp(this.cameraGoal, smooth);
+    // Follow player directly without lerp to avoid camera jitter
+    // (lerping camera + lerping player position = double lerp = jitter)
+    this.camera.position.copy(this.cameraGoal);
     this.camera.lookAt(target);
 
     const forward = this.camera.getWorldDirection(this.cameraForward).normalize();
