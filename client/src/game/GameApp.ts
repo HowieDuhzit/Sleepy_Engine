@@ -35,6 +35,24 @@ export class GameApp {
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
     capsuleYOffset: 0,
+    moveSpeed: MOVE_SPEED,
+    sprintMultiplier: SPRINT_MULTIPLIER,
+    crouchMultiplier: CROUCH_MULTIPLIER,
+    slideAccel: SLIDE_ACCEL,
+    slideFriction: SLIDE_FRICTION,
+    gravity: GRAVITY,
+    jumpSpeed: JUMP_SPEED,
+    walkThreshold: 0.15,
+    runThreshold: MOVE_SPEED * 0.65,
+    cameraDistance: 6,
+    cameraHeight: 1.4,
+    cameraShoulder: 1.2,
+    cameraShoulderHeight: 0.4,
+    cameraSensitivity: 1,
+    cameraSmoothing: 0,
+    cameraMinPitch: 0.2,
+    cameraMaxPitch: Math.PI - 0.2,
+    targetSmoothSpeed: 15,
   };
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
@@ -223,6 +241,9 @@ export class GameApp {
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 300);
     this.camera.position.set(0, 4, 6);
     this.camera.lookAt(0, 0, 0);
+    this.orbitRadius = this.playerConfig.cameraDistance ?? this.orbitRadius;
+    this.cameraSensitivity = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
+    this.cameraSmoothing = this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
     this.orbitOffset.copy(this.camera.position);
     this.orbitSpherical.setFromVector3(this.orbitOffset);
     this.orbitYaw = this.orbitSpherical.theta;
@@ -315,6 +336,14 @@ export class GameApp {
     const elapsed = this.clock.getElapsedTime();
     this.animateCrowd(elapsed, delta);
     this.input.updateGamepad();
+
+    // Check for Select button press to toggle first person mode
+    if (this.input.wasSelectJustPressed()) {
+      this.firstPersonMode = !this.firstPersonMode;
+      const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement;
+      if (toggle) toggle.checked = this.firstPersonMode;
+    }
+
     this.animateLocalPlayer(delta);
 
     // Smooth out visual offset from network corrections (30x per second = fast and imperceptible)
@@ -934,8 +963,18 @@ export class GameApp {
 
     // Smooth velocity transition for better animation blending
     // Very fast acceleration (25x per second) feels instant while animations still blend smoothly
+    const moveSpeed = this.playerConfig.moveSpeed ?? MOVE_SPEED;
+    const sprintMult = this.playerConfig.sprintMultiplier ?? SPRINT_MULTIPLIER;
+    const crouchMult = this.playerConfig.crouchMultiplier ?? CROUCH_MULTIPLIER;
+    const slideAccel = this.playerConfig.slideAccel ?? SLIDE_ACCEL;
+    const slideFriction = this.playerConfig.slideFriction ?? SLIDE_FRICTION;
+    const jumpSpeed = this.playerConfig.jumpSpeed ?? JUMP_SPEED;
+    const gravity = this.playerConfig.gravity ?? GRAVITY;
+    const walkThreshold = this.playerConfig.walkThreshold ?? 0.15;
+    const runThreshold = this.playerConfig.runThreshold ?? moveSpeed * 0.65;
+
     if (!movementLocked) {
-      const speed = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
+      const speed = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
       const targetVx = moveX * speed;
       const targetVz = moveZ * speed;
       const accelRate = 25; // 25x per second = nearly instant but smooth
@@ -963,8 +1002,8 @@ export class GameApp {
     this.rollCooldown = Math.max(0, this.rollCooldown - delta);
     this.slideCooldown = Math.max(0, this.slideCooldown - delta);
 
-    const speedBase = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
-    const accel = Math.min(1, SLIDE_ACCEL * delta);
+    const speedBase = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
+    const accel = Math.min(1, slideAccel * delta);
 
     const startSlide = !movementLocked && onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
     const startVault = !movementLocked && onGround && flags.jump && this.vaultCooldown <= 0 && this.checkVault(moveDir);
@@ -975,14 +1014,14 @@ export class GameApp {
       this.parkourState = 'vault';
       this.parkourTimer = 0.35;
       this.vaultCooldown = 0.4;
-      this.localVelocityY = JUMP_SPEED * 0.6;
+      this.localVelocityY = jumpSpeed * 0.6;
       this.localVelocityX = moveDir.x * speedBase * 1.2;
       this.localVelocityZ = moveDir.z * speedBase * 1.2;
     } else if (startClimb) {
       this.parkourState = 'climb';
       this.parkourTimer = 0.45;
       this.vaultCooldown = 0.5;
-      this.localVelocityY = JUMP_SPEED * 0.9;
+      this.localVelocityY = jumpSpeed * 0.9;
       this.localVelocityX = moveDir.x * speedBase * 0.4;
       this.localVelocityZ = moveDir.z * speedBase * 0.4;
     } else if (startSlide) {
@@ -995,7 +1034,7 @@ export class GameApp {
       this.parkourState = 'roll';
       this.parkourTimer = 0.35;
       this.rollCooldown = 0.4;
-      this.localVelocityY = JUMP_SPEED * 1.15;
+      this.localVelocityY = jumpSpeed * 1.15;
       this.localVelocityX = moveDir.x * speedBase * 1.1;
       this.localVelocityZ = moveDir.z * speedBase * 1.1;
     } else if (this.parkourTimer <= 0) {
@@ -1009,7 +1048,7 @@ export class GameApp {
         this.localVelocityX += (targetVx - this.localVelocityX) * accel;
         this.localVelocityZ += (targetVz - this.localVelocityZ) * accel;
         if (Math.abs(moveX) < 0.05 && Math.abs(moveZ) < 0.05) {
-          const damping = Math.max(0, 1 - SLIDE_FRICTION * delta);
+          const damping = Math.max(0, 1 - slideFriction * delta);
           this.localVelocityX *= damping;
           this.localVelocityZ *= damping;
         }
@@ -1018,7 +1057,7 @@ export class GameApp {
         this.localVelocityZ = targetVz;
       }
     } else if (this.parkourState === 'slide') {
-      const damping = Math.max(0, 1 - (SLIDE_FRICTION * 1.4) * delta);
+      const damping = Math.max(0, 1 - (slideFriction * 1.4) * delta);
       this.localVelocityX *= damping;
       this.localVelocityZ *= damping;
     } else if (movementLocked) {
@@ -1027,16 +1066,14 @@ export class GameApp {
     }
 
     if (!movementLocked && flags.jump && onGround && this.parkourState === 'normal') {
-      const walkThreshold = 0.15;
-      const runThreshold = MOVE_SPEED * 0.65;
       const speed = Math.hypot(this.localVelocityX, this.localVelocityZ);
       if (speed <= walkThreshold) this.localJumpMode = 'jump_up';
       else if (speed > runThreshold) this.localJumpMode = 'run_jump';
       else this.localJumpMode = 'jump';
-      this.localVelocityY = JUMP_SPEED;
+      this.localVelocityY = jumpSpeed;
     }
 
-    this.localVelocityY += GRAVITY * delta;
+    this.localVelocityY += gravity * delta;
 
     const next = {
       x: this.localPlayer.position.x + this.localVelocityX * delta,
@@ -1133,27 +1170,34 @@ export class GameApp {
   }
 
   private updateCamera(delta: number) {
+    const camHeight = this.playerConfig.cameraHeight ?? 1.4;
+    const camShoulder = this.playerConfig.cameraShoulder ?? 1.2;
+    const camShoulderHeight = this.playerConfig.cameraShoulderHeight ?? 0.4;
+    const camSmooth = this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
+    const camSense = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
+    const minPolar = this.playerConfig.cameraMinPitch ?? 0.2;
+    const maxPolar = this.playerConfig.cameraMaxPitch ?? Math.PI - 0.2;
+    const targetSmoothSpeed = this.playerConfig.targetSmoothSpeed ?? 15;
+
     // Desired target position (player position + visual offset for smooth corrections)
     const target = this.cameraTarget.set(
       this.localPlayer.position.x + this.localVisualOffset.x,
-      this.localPlayer.position.y + this.localVisualOffset.y + 1.4,
+      this.localPlayer.position.y + this.localVisualOffset.y + camHeight,
       this.localPlayer.position.z + this.localVisualOffset.z,
     );
 
     // Smooth the target to decouple from sharp player movements
     // This prevents camera shake when player suddenly changes direction
-    const targetSmoothSpeed = Math.min(1, delta * 15); // Fast but not instant
-    this.cameraTargetSmooth.lerp(target, targetSmoothSpeed);
+    const smoothStep = Math.min(1, delta * targetSmoothSpeed);
+    this.cameraTargetSmooth.lerp(target, smoothStep);
 
     const look = this.input.getLook();
-    const rotateSpeed = 0.05 * this.cameraSensitivity;
+    const rotateSpeed = 0.05 * camSense;
     if (Math.abs(look.x) > 0.01 || Math.abs(look.y) > 0.01) {
       this.orbitYaw -= look.x * rotateSpeed;
       this.orbitPitch -= look.y * rotateSpeed;
     }
 
-    const minPolar = 0.2;
-    const maxPolar = Math.PI - 0.2;
     this.orbitPitch = Math.max(minPolar, Math.min(maxPolar, this.orbitPitch));
 
     // Use smoothed target for all camera calculations
@@ -1161,19 +1205,20 @@ export class GameApp {
 
     // First-person mode
     if (this.firstPersonMode) {
+      // Camera at eye level (smoothTarget already has proper height from camHeight)
       this.cameraGoal.copy(smoothTarget);
-      this.cameraGoal.y += 0.2; // Eye height
 
-      // Look direction based on orbit angles
-      const dir = new THREE.Vector3();
-      dir.x = Math.sin(this.orbitPitch) * Math.sin(this.orbitYaw);
-      dir.y = Math.cos(this.orbitPitch);
-      dir.z = Math.sin(this.orbitPitch) * Math.cos(this.orbitYaw);
-
+      // Look direction from orbit angles (spherical to cartesian)
+      const dir = new THREE.Vector3(
+        Math.sin(this.orbitPitch) * Math.sin(this.orbitYaw),
+        -Math.cos(this.orbitPitch),
+        Math.sin(this.orbitPitch) * Math.cos(this.orbitYaw),
+      );
       const lookTarget = this.cameraGoal.clone().add(dir);
 
-      if (this.cameraSmoothing > 0) {
-        const smooth = 1 - Math.exp(-delta * (10 - this.cameraSmoothing * 9));
+      // Position camera (with optional smoothing)
+      if (camSmooth > 0) {
+        const smooth = 1 - Math.exp(-delta * (10 - camSmooth * 9));
         this.camera.position.lerp(this.cameraGoal, smooth);
       } else {
         this.camera.position.copy(this.cameraGoal);
@@ -1188,8 +1233,8 @@ export class GameApp {
       // Cinematic right-shoulder offset
       this.cameraForward.subVectors(smoothTarget, this.cameraGoal).normalize();
       this.cameraRight.crossVectors(this.cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
-      this.cameraGoal.addScaledVector(this.cameraRight, 1.2);
-      this.cameraGoal.y += 0.4;
+      this.cameraGoal.addScaledVector(this.cameraRight, camShoulder);
+      this.cameraGoal.y += camShoulderHeight;
 
       // Prevent camera from dipping below floor (no physics, just Y clamp)
       const minCamY = GROUND_Y + 0.9;
@@ -1198,8 +1243,8 @@ export class GameApp {
       }
 
       // Apply smoothing setting (camera position smoothing only, target already smoothed)
-      if (this.cameraSmoothing > 0) {
-        const smooth = 1 - Math.exp(-delta * (10 - this.cameraSmoothing * 9));
+      if (camSmooth > 0) {
+        const smooth = 1 - Math.exp(-delta * (10 - camSmooth * 9));
         this.camera.position.lerp(this.cameraGoal, smooth);
       } else {
         this.camera.position.copy(this.cameraGoal);
@@ -1550,6 +1595,15 @@ export class GameApp {
       if (!res.ok) return;
       const data = (await res.json()) as Partial<typeof this.playerConfig>;
       this.playerConfig = { ...this.playerConfig, ...data };
+      if (typeof this.playerConfig.cameraDistance === 'number') {
+        this.orbitRadius = this.playerConfig.cameraDistance;
+      }
+      if (typeof this.playerConfig.cameraSensitivity === 'number') {
+        this.cameraSensitivity = this.playerConfig.cameraSensitivity;
+      }
+      if (typeof this.playerConfig.cameraSmoothing === 'number') {
+        this.cameraSmoothing = this.playerConfig.cameraSmoothing;
+      }
       for (const vrm of this.vrms) {
         const group = vrm.scene.parent as THREE.Group | null;
         if (group) this.updateCapsuleToVrm(group, vrm);
@@ -1833,8 +1887,8 @@ export class GameApp {
     } else if (!grounded) {
       state.mode = vy > 0.5 ? (local ? this.localJumpMode : (state.lastJumpMode ?? 'jump')) : 'fall';
     } else if (state.timer === 0) {
-      const walkThreshold = 0.15;
-      const runThreshold = MOVE_SPEED * 0.65;
+      const walkThreshold = this.playerConfig.walkThreshold ?? 0.15;
+      const runThreshold = this.playerConfig.runThreshold ?? MOVE_SPEED * 0.65;
       let desired = 'idle';
       if (speed > runThreshold) desired = 'run';
       else if (speed > walkThreshold) desired = 'walk';
@@ -2328,7 +2382,7 @@ export class GameApp {
     }
 
     // Procedural locomotion: stride + arm swing
-    const stride = THREE.MathUtils.clamp(speed / MOVE_SPEED, 0, 1);
+    const stride = THREE.MathUtils.clamp(speed / (this.playerConfig.moveSpeed ?? MOVE_SPEED), 0, 1);
     const stepRate = 2.2 + stride * 1.6;
     const phase = this.clock.getElapsedTime() * stepRate;
     const swing = Math.sin(phase) * stride;

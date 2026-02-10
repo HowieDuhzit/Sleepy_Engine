@@ -29,6 +29,8 @@ export class InputState {
   private padVector = { x: 0, z: 0 };
   private padLook = { x: 0, y: 0 };
   private padFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
+  private padSelectPressed = false;
+  private padSelectJustPressed = false;
 
   constructor() {
     document.addEventListener('keydown', this.keyDownHandler, { capture: true });
@@ -78,6 +80,12 @@ export class InputState {
     return { ...this.keys };
   }
 
+  wasSelectJustPressed() {
+    const result = this.padSelectJustPressed;
+    this.padSelectJustPressed = false; // Clear after reading
+    return result;
+  }
+
   updateGamepad() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const pad = pads && pads.length ? pads[0] : null;
@@ -113,6 +121,13 @@ export class InputState {
       jump: !!pad.buttons[3]?.pressed,
       crouch: !!pad.buttons[6]?.pressed,
     };
+
+    // Detect Select button press (button 8 on most gamepads)
+    const selectPressed = !!pad.buttons[8]?.pressed;
+    if (selectPressed && !this.padSelectPressed) {
+      this.padSelectJustPressed = true;
+    }
+    this.padSelectPressed = selectPressed;
 
     this.lastPad = `pad: ${pad.id}`;
   }
