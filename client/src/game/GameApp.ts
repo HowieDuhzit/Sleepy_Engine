@@ -43,6 +43,9 @@ export class GameApp {
   private orbitYaw = 0;
   private orbitPitch = Math.PI / 4;
   private orbitRadius = 6;
+  private firstPersonMode = false;
+  private cameraSmoothing = 0; // 0 = no smoothing (instant), 1 = full smoothing
+  private cameraSensitivity = 1.0;
   private orbitOffset = new THREE.Vector3();
   private orbitSpherical = new THREE.Spherical();
   private cameraTarget = new THREE.Vector3();
@@ -227,6 +230,7 @@ export class GameApp {
     this.clock = new THREE.Clock();
     this.hud = this.createHud();
     this.perfHud = this.createPerfHud();
+    this.createSettingsMenu();
     this.crowd = this.createCrowd();
     this.input = new InputState();
     const env = (import.meta as any).env || {};
@@ -261,6 +265,11 @@ export class GameApp {
       if (event.code === 'KeyP') {
         this.perfVisible = !this.perfVisible;
         this.perfHud.style.display = this.perfVisible ? 'block' : 'none';
+      }
+      if (event.code === 'KeyV') {
+        this.firstPersonMode = !this.firstPersonMode;
+        const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement;
+        if (toggle) toggle.checked = this.firstPersonMode;
       }
     });
     this.scene.add(
@@ -749,6 +758,102 @@ export class GameApp {
     return hud;
   }
 
+  private createSettingsMenu() {
+    const menu = document.createElement('div');
+    menu.id = 'settings-menu';
+    menu.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 30px;
+      border-radius: 10px;
+      display: none;
+      z-index: 1000;
+      min-width: 400px;
+      font-family: monospace;
+    `;
+    menu.innerHTML = `
+      <h2 style="margin-top: 0;">Settings (ESC to close)</h2>
+
+      <h3>Camera</h3>
+      <label style="display: block; margin: 10px 0;">
+        Camera Distance: <span id="camera-distance-value">6.0</span>m
+        <input type="range" id="camera-distance" min="1" max="15" step="0.5" value="6" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Camera Smoothing: <span id="camera-smoothing-value">0%</span>
+        <input type="range" id="camera-smoothing" min="0" max="100" step="5" value="0" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Camera Sensitivity: <span id="camera-sensitivity-value">1.0x</span>
+        <input type="range" id="camera-sensitivity" min="0.1" max="3" step="0.1" value="1.0" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        <input type="checkbox" id="first-person-toggle">
+        First Person Mode (or press Select)
+      </label>
+
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #666;">
+        <small>Tips: If movement feels jittery, try:</small>
+        <ul style="font-size: 12px; margin: 5px 0;">
+          <li>Set smoothing to 0% (instant camera)</li>
+          <li>Increase camera distance</li>
+          <li>Try first-person mode</li>
+        </ul>
+      </div>
+    `;
+
+    document.body.appendChild(menu);
+
+    // Wire up settings
+    const distanceSlider = menu.querySelector('#camera-distance') as HTMLInputElement;
+    const distanceValue = menu.querySelector('#camera-distance-value') as HTMLElement;
+    const smoothingSlider = menu.querySelector('#camera-smoothing') as HTMLInputElement;
+    const smoothingValue = menu.querySelector('#camera-smoothing-value') as HTMLElement;
+    const sensitivitySlider = menu.querySelector('#camera-sensitivity') as HTMLInputElement;
+    const sensitivityValue = menu.querySelector('#camera-sensitivity-value') as HTMLElement;
+    const firstPersonToggle = menu.querySelector('#first-person-toggle') as HTMLInputElement;
+
+    distanceSlider.addEventListener('input', () => {
+      this.orbitRadius = parseFloat(distanceSlider.value);
+      distanceValue.textContent = distanceSlider.value;
+    });
+
+    smoothingSlider.addEventListener('input', () => {
+      this.cameraSmoothing = parseFloat(smoothingSlider.value) / 100;
+      smoothingValue.textContent = smoothingSlider.value + '%';
+    });
+
+    sensitivitySlider.addEventListener('input', () => {
+      this.cameraSensitivity = parseFloat(sensitivitySlider.value);
+      sensitivityValue.textContent = sensitivitySlider.value + 'x';
+    });
+
+    firstPersonToggle.addEventListener('change', () => {
+      this.firstPersonMode = firstPersonToggle.checked;
+    });
+
+    // ESC to toggle menu
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const isVisible = menu.style.display !== 'none';
+        menu.style.display = isVisible ? 'none' : 'block';
+        if (!isVisible) {
+          // Pause gameplay when menu open
+          this.container.style.pointerEvents = 'none';
+        } else {
+          this.container.style.pointerEvents = 'auto';
+        }
+      }
+    });
+  }
+
   private async connect() {
     try {
       await this.roomClient.connect();
@@ -1017,7 +1122,7 @@ export class GameApp {
       this.localPlayer.position.z,
     );
     const look = this.input.getLook();
-    const rotateSpeed = 0.05;
+    const rotateSpeed = 0.05 * this.cameraSensitivity;
     if (Math.abs(look.x) > 0.01 || Math.abs(look.y) > 0.01) {
       this.orbitYaw -= look.x * rotateSpeed;
       this.orbitPitch -= look.y * rotateSpeed;
@@ -1027,26 +1132,53 @@ export class GameApp {
     const maxPolar = Math.PI - 0.2;
     this.orbitPitch = Math.max(minPolar, Math.min(maxPolar, this.orbitPitch));
 
-    this.orbitSpherical.set(this.orbitRadius, this.orbitPitch, this.orbitYaw);
-    this.orbitOffset.setFromSpherical(this.orbitSpherical);
-    this.cameraGoal.copy(target).add(this.orbitOffset);
+    // First-person mode
+    if (this.firstPersonMode) {
+      this.cameraGoal.copy(target);
+      this.cameraGoal.y += 0.2; // Eye height
 
-    // Cinematic right-shoulder offset.
-    this.cameraForward.subVectors(target, this.cameraGoal).normalize();
-    this.cameraRight.crossVectors(this.cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
-    this.cameraGoal.addScaledVector(this.cameraRight, 1.2);
-    this.cameraGoal.y += 0.4;
+      // Look direction based on orbit angles
+      const dir = new THREE.Vector3();
+      dir.x = Math.sin(this.orbitPitch) * Math.sin(this.orbitYaw);
+      dir.y = Math.cos(this.orbitPitch);
+      dir.z = Math.sin(this.orbitPitch) * Math.cos(this.orbitYaw);
 
-    // Prevent camera from dipping below the floor.
-    const minCamY = GROUND_Y + 0.9;
-    if (this.cameraGoal.y < minCamY) {
-      this.cameraGoal.y = minCamY;
+      const lookTarget = this.cameraGoal.clone().add(dir);
+
+      if (this.cameraSmoothing > 0) {
+        const smooth = 1 - Math.exp(-delta * (10 - this.cameraSmoothing * 9));
+        this.camera.position.lerp(this.cameraGoal, smooth);
+      } else {
+        this.camera.position.copy(this.cameraGoal);
+      }
+      this.camera.lookAt(lookTarget);
+    } else {
+      // Third-person mode
+      this.orbitSpherical.set(this.orbitRadius, this.orbitPitch, this.orbitYaw);
+      this.orbitOffset.setFromSpherical(this.orbitSpherical);
+      this.cameraGoal.copy(target).add(this.orbitOffset);
+
+      // Cinematic right-shoulder offset
+      this.cameraForward.subVectors(target, this.cameraGoal).normalize();
+      this.cameraRight.crossVectors(this.cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
+      this.cameraGoal.addScaledVector(this.cameraRight, 1.2);
+      this.cameraGoal.y += 0.4;
+
+      // Prevent camera from dipping below floor
+      const minCamY = GROUND_Y + 0.9;
+      if (this.cameraGoal.y < minCamY) {
+        this.cameraGoal.y = minCamY;
+      }
+
+      // Apply smoothing setting
+      if (this.cameraSmoothing > 0) {
+        const smooth = 1 - Math.exp(-delta * (10 - this.cameraSmoothing * 9));
+        this.camera.position.lerp(this.cameraGoal, smooth);
+      } else {
+        this.camera.position.copy(this.cameraGoal);
+      }
+      this.camera.lookAt(target);
     }
-
-    // Follow player directly without lerp to avoid camera jitter
-    // (lerping camera + lerping player position = double lerp = jitter)
-    this.camera.position.copy(this.cameraGoal);
-    this.camera.lookAt(target);
 
     const forward = this.camera.getWorldDirection(this.cameraForward).normalize();
     const inv = this.cameraQuat.copy(this.localPlayer.getWorldQuaternion(this.cameraQuat)).invert();

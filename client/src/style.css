@@ -149,6 +149,22 @@ body,
   width: fit-content;
 }
 
+.overlay-slider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(12, 14, 18, 0.85);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.overlay-slider input[type='range'] {
+  width: 120px;
+}
+
 .icon-btn {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(20, 24, 34, 0.7);

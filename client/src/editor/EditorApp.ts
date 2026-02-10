@@ -333,6 +333,10 @@ export class EditorApp {
       '<div class="overlay-stack">',
       '<div class="overlay-group">',
       '<button class="icon-btn" data-bones-toggle title="Toggle Bones">B</button>',
+      '<label class="overlay-slider" data-bone-scale-wrap style="display:none;">',
+      '<span>Size</span>',
+      '<input data-bone-scale type="range" min="0.02" max="0.2" step="0.01" />',
+      '</label>',
       '<button class="icon-btn" data-reset title="Reset Pose">R</button>',
       '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
       '</div>',
@@ -491,6 +495,8 @@ export class EditorApp {
     const playButtons = Array.from(hud.querySelectorAll('[data-play]')) as HTMLButtonElement[];
     const stopButtons = Array.from(hud.querySelectorAll('[data-stop]')) as HTMLButtonElement[];
     const bonesToggleBtn = hud.querySelector('[data-bones-toggle]') as HTMLButtonElement;
+    const boneScaleWrap = hud.querySelector('[data-bone-scale-wrap]') as HTMLLabelElement;
+    const boneScaleInput = hud.querySelector('[data-bone-scale]') as HTMLInputElement;
     const resetBtn = hud.querySelector('[data-reset]') as HTMLButtonElement;
     const clearBtn = hud.querySelector('[data-clear]') as HTMLButtonElement;
     const clipPanel = hud.querySelector('[data-clip-panel]') as HTMLDivElement;
@@ -561,6 +567,12 @@ export class EditorApp {
     timeInput.value = '0';
     this.resizeTimeline();
     this.drawTimeline();
+    if (boneScaleInput) {
+      boneScaleInput.value = this.boneScale.toFixed(2);
+    }
+    if (boneScaleWrap) {
+      boneScaleWrap.style.display = this.boneVisualsVisible ? 'flex' : 'none';
+    }
 
     const setPlayerInputs = () => {
       if (!ikOffsetInput) return;
@@ -858,6 +870,21 @@ export class EditorApp {
       bonesToggleBtn.textContent = this.boneVisualsVisible ? 'Hide Bones' : 'Show Bones';
       if (!this.boneGizmoGroup) this.buildBoneGizmos();
       if (this.boneMarkers.size === 0) this.ensureBoneMarkers();
+      if (this.boneGizmoGroup) this.boneGizmoGroup.visible = this.boneVisualsVisible;
+      for (const marker of this.boneMarkers.values()) {
+        marker.visible = this.boneVisualsVisible;
+      }
+      if (boneScaleWrap) {
+        boneScaleWrap.style.display = this.boneVisualsVisible ? 'flex' : 'none';
+      }
+    });
+
+    boneScaleInput?.addEventListener('input', () => {
+      const value = parseFloat(boneScaleInput.value);
+      if (!Number.isFinite(value)) return;
+      this.boneScale = value;
+      this.ensureBoneMarkers();
+      this.buildBoneGizmos();
       if (this.boneGizmoGroup) this.boneGizmoGroup.visible = this.boneVisualsVisible;
       for (const marker of this.boneMarkers.values()) {
         marker.visible = this.boneVisualsVisible;
