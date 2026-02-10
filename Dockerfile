@@ -41,7 +41,7 @@ EXPOSE 80
 FROM base AS allinone
 ENV NODE_ENV=production
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends nginx \
+  && apt-get install -y --no-install-recommends nginx curl \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
 COPY --from=deps /app/node_modules ./node_modules
@@ -57,5 +57,6 @@ COPY shared/package.json shared/package.json
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/nginx.main.conf /etc/nginx/nginx.conf
 COPY docker/start.sh /start.sh
-EXPOSE 2567 80
+RUN chmod +x /start.sh
+EXPOSE 8080
 CMD ["/start.sh"]

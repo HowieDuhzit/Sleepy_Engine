@@ -1,15 +1,28 @@
 version: '3.9'
+
 services:
   app:
     build:
       context: .
       target: allinone
     ports:
-      - "5175:8080"
-      - "2567:2567"
+      - "80:8080"
     environment:
       - ANIMATIONS_DIR=/app/animations
       - CONFIG_DIR=/app/config
+      - PUBLIC_WS_URL=${SERVICE_FQDN_APP_80}
     volumes:
-      - ./client/public/animations:/app/animations
-      - ./client/public/config:/app/config
+      - animations-data:/app/animations
+      - config-data:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "coolify.managed=true"
+
+volumes:
+  animations-data:
+  config-data:
