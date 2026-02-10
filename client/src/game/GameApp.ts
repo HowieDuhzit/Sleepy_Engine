@@ -49,6 +49,7 @@ export class GameApp {
   private orbitOffset = new THREE.Vector3();
   private orbitSpherical = new THREE.Spherical();
   private cameraTarget = new THREE.Vector3();
+  private cameraTargetSmooth = new THREE.Vector3(); // Smoothed follow target
   private cameraGoal = new THREE.Vector3();
   private cameraForward = new THREE.Vector3();
   private cameraRight = new THREE.Vector3();
@@ -1116,11 +1117,18 @@ export class GameApp {
   }
 
   private updateCamera(delta: number) {
+    // Desired target position (player position)
     const target = this.cameraTarget.set(
       this.localPlayer.position.x,
       this.localPlayer.position.y + 1.4,
       this.localPlayer.position.z,
     );
+
+    // Smooth the target to decouple from sharp player movements
+    // This prevents camera shake when player suddenly changes direction
+    const targetSmoothSpeed = Math.min(1, delta * 15); // Fast but not instant
+    this.cameraTargetSmooth.lerp(target, targetSmoothSpeed);
+
     const look = this.input.getLook();
     const rotateSpeed = 0.05 * this.cameraSensitivity;
     if (Math.abs(look.x) > 0.01 || Math.abs(look.y) > 0.01) {
@@ -1132,9 +1140,12 @@ export class GameApp {
     const maxPolar = Math.PI - 0.2;
     this.orbitPitch = Math.max(minPolar, Math.min(maxPolar, this.orbitPitch));
 
+    // Use smoothed target for all camera calculations
+    const smoothTarget = this.cameraTargetSmooth;
+
     // First-person mode
     if (this.firstPersonMode) {
-      this.cameraGoal.copy(target);
+      this.cameraGoal.copy(smoothTarget);
       this.cameraGoal.y += 0.2; // Eye height
 
       // Look direction based on orbit angles
@@ -1156,28 +1167,28 @@ export class GameApp {
       // Third-person mode
       this.orbitSpherical.set(this.orbitRadius, this.orbitPitch, this.orbitYaw);
       this.orbitOffset.setFromSpherical(this.orbitSpherical);
-      this.cameraGoal.copy(target).add(this.orbitOffset);
+      this.cameraGoal.copy(smoothTarget).add(this.orbitOffset);
 
       // Cinematic right-shoulder offset
-      this.cameraForward.subVectors(target, this.cameraGoal).normalize();
+      this.cameraForward.subVectors(smoothTarget, this.cameraGoal).normalize();
       this.cameraRight.crossVectors(this.cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
       this.cameraGoal.addScaledVector(this.cameraRight, 1.2);
       this.cameraGoal.y += 0.4;
 
-      // Prevent camera from dipping below floor
+      // Prevent camera from dipping below floor (no physics, just Y clamp)
       const minCamY = GROUND_Y + 0.9;
       if (this.cameraGoal.y < minCamY) {
         this.cameraGoal.y = minCamY;
       }
 
-      // Apply smoothing setting
+      // Apply smoothing setting (camera position smoothing only, target already smoothed)
       if (this.cameraSmoothing > 0) {
         const smooth = 1 - Math.exp(-delta * (10 - this.cameraSmoothing * 9));
         this.camera.position.lerp(this.cameraGoal, smooth);
       } else {
         this.camera.position.copy(this.cameraGoal);
       }
-      this.camera.lookAt(target);
+      this.camera.lookAt(smoothTarget);
     }
 
     const forward = this.camera.getWorldDirection(this.cameraForward).normalize();

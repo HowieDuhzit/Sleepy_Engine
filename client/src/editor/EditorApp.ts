@@ -568,6 +568,7 @@ export class EditorApp {
     this.resizeTimeline();
     this.drawTimeline();
     if (boneScaleInput) {
+      this.boneScale = this.computeBoneScale() * 0.5;
       boneScaleInput.value = this.boneScale.toFixed(2);
     }
     if (boneScaleWrap) {
