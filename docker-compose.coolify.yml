@@ -4,13 +4,13 @@ services:
       context: .
       target: allinone
     environment:
-      - PORT=8080
+      - PORT=2567
       - SERVICE_FQDN_APP_8080
       - SERVICE_URL_APP_8080
       - SERVICE_FQDN_APP_2567
       - SERVICE_URL_APP_2567
       - PUBLIC_HTTP_URL=${SERVICE_URL_APP_8080}
-      - PUBLIC_WS_URL=${SERVICE_URL_APP_2567}
+      - PUBLIC_WS_URL=wss://${SERVICE_FQDN_APP_2567}
       - ANIMATIONS_DIR=/app/animations
       - CONFIG_DIR=/app/config
     volumes:
