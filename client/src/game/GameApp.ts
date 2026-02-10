@@ -1348,26 +1348,35 @@ export class GameApp {
   }
 
   private reconcileLocal(snapshot: PlayerSnapshot) {
-    // Reconciliation with deadband to allow client prediction
+    // Visual smoothing approach: accept server position but don't fight prediction
     const dx = snapshot.position.x - this.localPlayer.position.x;
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    // Large deadband (25cm) allows client prediction without constant corrections
-    if (distSq > 0.25 * 0.25) {
-      // Large mismatch (collision, desync) - snap immediately
+    // Very lenient - only correct on major desyncs (>1m)
+    if (distSq > 1.0 * 1.0) {
+      // Major desync (collision, teleport) - snap immediately
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
       this.localVelocityX = snapshot.velocity.x;
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
-    } else if (distSq > 0.05 * 0.05) {
-      // Medium error - gentle correction
-      this.localPlayer.position.lerp(
-        new THREE.Vector3(snapshot.position.x, snapshot.position.y, snapshot.position.z),
-        0.1,
-      );
+    } else {
+      // Trust client prediction for normal movement
+      // Only sync velocity to stay roughly aligned
+      const velocityMatch = 0.3;
+      this.localVelocityX += (snapshot.velocity.x - this.localVelocityX) * velocityMatch;
+      this.localVelocityZ += (snapshot.velocity.z - this.localVelocityZ) * velocityMatch;
+
+      // Gentle position correction only on Y axis (jumping/falling more critical)
+      if (Math.abs(snapshot.position.y - this.localPlayer.position.y) > 0.1) {
+        this.localPlayer.position.y = THREE.MathUtils.lerp(
+          this.localPlayer.position.y,
+          snapshot.position.y,
+          0.5
+        );
+        this.localVelocityY = snapshot.velocity.y;
+      }
     }
-    // Small errors (<5cm) ignored - allows smooth client prediction
   }
 
   private updateRemoteInterpolation(nowSeconds: number) {
