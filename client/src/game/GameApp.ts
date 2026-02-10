@@ -2101,20 +2101,79 @@ export class GameApp {
         head.rotation.x += state.lookPitch * 0.45;
       }
 
+      // 2-bone IK for legs (proper knee bending)
+      const leftUpperLeg = actor.vrm.humanoid.getRawBoneNode('leftUpperLeg');
+      const leftLowerLeg = actor.vrm.humanoid.getRawBoneNode('leftLowerLeg');
       const leftFoot = actor.vrm.humanoid.getRawBoneNode('leftFoot');
+      const rightUpperLeg = actor.vrm.humanoid.getRawBoneNode('rightUpperLeg');
+      const rightLowerLeg = actor.vrm.humanoid.getRawBoneNode('rightLowerLeg');
       const rightFoot = actor.vrm.humanoid.getRawBoneNode('rightFoot');
-      if (leftFoot && rightFoot) {
-        if (state.leftFootY === undefined) state.leftFootY = leftFoot.position.y;
-        if (state.rightFootY === undefined) state.rightFootY = rightFoot.position.y;
-        const applyFoot = (foot: THREE.Object3D, baseY: number) => {
-          foot.getWorldPosition(this.tempVec);
-          const targetY = this.sampleGroundHeight(this.tempVec.x, this.tempVec.z) + this.playerConfig.ikOffset;
-          const deltaY = THREE.MathUtils.clamp(targetY - this.tempVec.y, -0.12, 0.25);
-          foot.position.y = baseY + deltaY;
-        };
-        applyFoot(leftFoot, state.leftFootY);
-        applyFoot(rightFoot, state.rightFootY);
+
+      if (leftUpperLeg && leftLowerLeg && leftFoot) {
+        this.applyLegIK(leftUpperLeg, leftLowerLeg, leftFoot);
       }
+      if (rightUpperLeg && rightLowerLeg && rightFoot) {
+        this.applyLegIK(rightUpperLeg, rightLowerLeg, rightFoot);
+      }
+    }
+  }
+
+  private applyLegIK(upperLeg: THREE.Object3D, lowerLeg: THREE.Object3D, foot: THREE.Object3D) {
+    // Get world positions
+    const hipPos = new THREE.Vector3();
+    const kneePos = new THREE.Vector3();
+    const footPos = new THREE.Vector3();
+    upperLeg.getWorldPosition(hipPos);
+    lowerLeg.getWorldPosition(kneePos);
+    foot.getWorldPosition(footPos);
+
+    // Calculate target foot position (ground height)
+    const targetY = this.sampleGroundHeight(footPos.x, footPos.z) + this.playerConfig.ikOffset;
+    const targetPos = footPos.clone();
+
+    // Clamp foot adjustment to prevent extreme poses
+    const deltaY = THREE.MathUtils.clamp(targetY - footPos.y, -0.15, 0.3);
+    targetPos.y += deltaY;
+
+    // Calculate bone lengths
+    const upperLength = hipPos.distanceTo(kneePos);
+    const lowerLength = kneePos.distanceTo(footPos);
+    const totalLength = upperLength + lowerLength;
+
+    // Vector from hip to target
+    const toTarget = targetPos.clone().sub(hipPos);
+    const targetDist = toTarget.length();
+
+    // Clamp target to reachable distance
+    const reachDist = Math.min(targetDist, totalLength * 0.99);
+    toTarget.normalize().multiplyScalar(reachDist);
+    const clampedTarget = hipPos.clone().add(toTarget);
+
+    // Law of cosines for knee angle
+    const upperAngle = Math.acos(
+      THREE.MathUtils.clamp(
+        (upperLength * upperLength + reachDist * reachDist - lowerLength * lowerLength) /
+          (2 * upperLength * reachDist),
+        -1,
+        1,
+      ),
+    );
+
+    // Calculate rotations
+    const targetDir = clampedTarget.clone().sub(hipPos).normalize();
+    const currentDir = kneePos.clone().sub(hipPos).normalize();
+
+    // Apply upper leg rotation toward target
+    const upperRotQuat = new THREE.Quaternion().setFromUnitVectors(currentDir, targetDir);
+    upperLeg.quaternion.premultiply(upperRotQuat);
+
+    // Apply knee bend
+    if (lowerLeg.parent) {
+      const kneeAxis = new THREE.Vector3(1, 0, 0); // X-axis for knee bend
+      lowerLeg.parent.updateMatrixWorld(true);
+      const localKneeAxis = kneeAxis.clone().applyQuaternion(lowerLeg.parent.quaternion.clone().invert());
+      const kneeBendQuat = new THREE.Quaternion().setFromAxisAngle(localKneeAxis, -upperAngle);
+      lowerLeg.quaternion.premultiply(kneeBendQuat);
     }
   }
 
