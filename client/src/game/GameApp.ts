@@ -962,7 +962,7 @@ export class GameApp {
     const movementLocked = this.localMovementLockTimer > 0;
 
     // Smooth velocity transition for better animation blending
-    // Very fast acceleration (25x per second) feels instant while animations still blend smoothly
+    // Fast acceleration (18x per second) balances responsiveness with server sync
     const moveSpeed = this.playerConfig.moveSpeed ?? MOVE_SPEED;
     const sprintMult = this.playerConfig.sprintMultiplier ?? SPRINT_MULTIPLIER;
     const crouchMult = this.playerConfig.crouchMultiplier ?? CROUCH_MULTIPLIER;
@@ -977,7 +977,7 @@ export class GameApp {
       const speed = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
       const targetVx = moveX * speed;
       const targetVz = moveZ * speed;
-      const accelRate = 25; // 25x per second = nearly instant but smooth
+      const accelRate = 18; // 18x per second = responsive but stays closer to server
       const blend = Math.min(1, delta * accelRate);
       this.localVelocityX += (targetVx - this.localVelocityX) * blend;
       this.localVelocityZ += (targetVz - this.localVelocityZ) * blend;
@@ -1417,10 +1417,10 @@ export class GameApp {
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    // Use tighter threshold (20cm) now that visual smoothing hides corrections
-    const correctionThreshold = 0.2 * 0.2;
+    // Moderate threshold (50cm) - balance between responsiveness and correction frequency
+    const correctionThreshold = 0.5 * 0.5;
 
-    if (distSq > correctionThreshold || Math.abs(dy) > 0.1) {
+    if (distSq > correctionThreshold || Math.abs(dy) > 0.15) {
       // Store old position before correction
       const oldX = this.localPlayer.position.x;
       const oldY = this.localPlayer.position.y;
@@ -1439,8 +1439,8 @@ export class GameApp {
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
     } else {
-      // Small drift - just sync velocity gently
-      const velocityMatch = 0.3;
+      // Small drift - sync velocity more aggressively to prevent accumulation
+      const velocityMatch = 0.5;
       this.localVelocityX += (snapshot.velocity.x - this.localVelocityX) * velocityMatch;
       this.localVelocityY += (snapshot.velocity.y - this.localVelocityY) * velocityMatch;
       this.localVelocityZ += (snapshot.velocity.z - this.localVelocityZ) * velocityMatch;
