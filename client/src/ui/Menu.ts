@@ -3,7 +3,7 @@ export function createMenu(onSelect: (choice: 'game' | 'editor') => void) {
   menu.className = 'menu';
   menu.innerHTML = [
     '<div class="menu-card">',
-    '<h1>Trashy Engine</h1>',
+    '<h1>Sleepy Engine</h1>',
     '<p>Choose a scene</p>',
     '<button data-game>Play Prototype</button>',
     '<button data-editor>Animation Editor</button>',

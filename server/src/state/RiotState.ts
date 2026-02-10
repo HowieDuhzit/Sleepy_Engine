@@ -10,6 +10,11 @@ export class PlayerState extends Schema {
   @type('number') vz = 0;
   @type('number') health = 100;
   @type('number') stamina = 100;
+  @type('number') lookYaw = 0;
+  @type('number') lookPitch = 0;
+  @type('string') animState = 'idle';
+  @type('number') animTime = 0;
+  @type('number') yaw = 0;
 }
 
 export class RiotState extends Schema {

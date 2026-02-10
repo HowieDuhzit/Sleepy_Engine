@@ -36,10 +36,50 @@ body,
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-rows: 1fr 200px;
+  grid-template-rows: 52px minmax(0, 1fr) 220px;
   grid-template-columns: 1fr;
   color: #e6ebf2;
   font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 10, 16, 0.85);
+  backdrop-filter: blur(10px);
+}
+
+.editor-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.editor-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.editor-tab {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.6);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.editor-tab.active {
+  background: rgba(90, 136, 255, 0.2);
+  border-color: rgba(90, 136, 255, 0.6);
+  color: #e9f0ff;
 }
 
 
@@ -49,6 +89,11 @@ body,
   gap: 12px;
   padding: 12px 16px;
   min-height: 0;
+  overflow: hidden;
+}
+
+.editor-ui.mode-animation .editor-shell {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .editor-left,
@@ -56,6 +101,13 @@ body,
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.editor-left {
+  max-height: 100%;
 }
 
 .editor-view {
@@ -66,6 +118,104 @@ body,
   overflow: hidden;
   background: rgba(6, 8, 12, 0.7);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  height: 100%;
+}
+
+.viewport-overlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.overlay-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.overlay-group {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(10, 12, 18, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  width: fit-content;
+}
+
+.icon-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.7);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  min-width: 30px;
+}
+
+.overlay-bottom-left {
+  position: relative;
+  width: 280px;
+  pointer-events: auto;
+}
+
+.overlay-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.overlay-tab {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.7);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.overlay-tab.active {
+  background: rgba(90, 136, 255, 0.2);
+  border-color: rgba(90, 136, 255, 0.6);
+  color: #e9f0ff;
+}
+
+.overlay-panel {
+  background: rgba(10, 12, 18, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.35);
+}
+
+.overlay-panel .field {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.overlay-panel .field span {
+  min-width: auto;
+  font-size: 11px;
+}
+
+.overlay-panel input[type='file'],
+.overlay-panel select,
+.overlay-panel input[type='text'],
+.overlay-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .editor-view canvas {
@@ -158,12 +308,49 @@ body,
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.6);
+  color: rgba(255, 255, 255, 0.75);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.panel.collapsed .panel-body {
+  display: none;
 }
 
 .panel-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.panel-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.clip-status {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.clip-status[data-tone='warn'] {
+  color: #fca5a5;
 }
 
 .field {
@@ -194,6 +381,21 @@ body,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-bottom .timeline-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-bottom .timeline-canvas-wrap {
+  min-height: 0;
+}
+
+.editor-bottom .timeline-header {
+  min-height: 0;
 }
 
 .timeline-grid {
@@ -202,6 +404,14 @@ body,
   gap: 10px;
   min-height: 0;
   align-items: stretch;
+}
+
+.timeline-grid.timeline-midi {
+  grid-template-columns: 1fr;
+}
+
+.timeline-grid.timeline-midi .timeline-header {
+  display: none;
 }
 
 .timeline-canvas-wrap {
@@ -303,7 +513,7 @@ body,
 }
 
 .editor-ui canvas[data-timeline] {
-  height: 160px;
+  height: 80px;
   display: block;
 }
 

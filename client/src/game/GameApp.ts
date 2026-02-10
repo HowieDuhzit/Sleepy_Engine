@@ -5,6 +5,7 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
+import { buildAnimationClipFromData, isClipData, mirrorClipData, parseClipPayload, type ClipData } from './clip';
 import { retargetMixamoClip } from './retarget';
 import {
   PlayerSnapshot,
@@ -25,18 +26,56 @@ import {
   resolveCircleCircle,
   type CrowdSnapshot,
   type Vec3,
-} from '@trashy/shared';
+} from '@sleepy/shared';
 
 export class GameApp {
+  private playerConfig = {
+    ikOffset: 0.02,
+    capsuleRadiusScale: 1,
+    capsuleHeightScale: 1,
+    capsuleYOffset: 0,
+  };
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private orbitYaw = 0;
   private orbitPitch = Math.PI / 4;
-  private orbitRadius = 18;
+  private orbitRadius = 6;
   private orbitOffset = new THREE.Vector3();
   private orbitSpherical = new THREE.Spherical();
+  private cameraTarget = new THREE.Vector3();
+  private cameraGoal = new THREE.Vector3();
+  private cameraForward = new THREE.Vector3();
+  private cameraRight = new THREE.Vector3();
+  private cameraQuat = new THREE.Quaternion();
+  private localLookYaw = 0;
+  private localLookPitch = 0;
+  private remoteLatestLook = new Map<string, { yaw: number; pitch: number }>();
+  private localAnimState = 'idle';
+  private localAnimTime = 0;
+  private remoteLatestAnim = new Map<string, { state: string; time: number }>();
+  private localJumpMode: 'jump' | 'jump_up' | 'run_jump' = 'jump';
+  private localMovementLock: 'land' | 'attack' | null = null;
+  private localMovementLockTimer = 0;
+  private lastMoveDir = new THREE.Vector3();
+  private lastMoveInput = { x: 0, z: 0 };
+  private lastYawDelta = 0;
+  private animStates = new Map<
+    string,
+    {
+      mode: string;
+      timer: number;
+      lastGrounded: boolean;
+      lookYaw: number;
+      lookPitch: number;
+      leftFootY?: number;
+      rightFootY?: number;
+      lastJumpMode?: string;
+    }
+  >();
+  private tempVec = new THREE.Vector3();
+  private tempVec2 = new THREE.Vector3();
   private isDragging = false;
   private lastMouse = { x: 0, y: 0 };
   private pointerLocked = false;
@@ -45,6 +84,7 @@ export class GameApp {
   private vrms: VRM[] = [];
   private readonly vrmUrl = '/avatars/default.vrm';
   private mixamoClips: Record<string, { clip: THREE.AnimationClip; rig: THREE.Object3D }> = {};
+  private jsonClips: Record<string, ClipData> = {};
   private mixamoReady: Promise<void>;
   private lastRetargetTracks = 0;
   private lastMixamoTrack = 'none';
@@ -93,6 +133,7 @@ export class GameApp {
     baseY: number;
     mixer: THREE.AnimationMixer;
     actions: { idle?: THREE.AnimationAction; walk?: THREE.AnimationAction };
+    debug?: { idleTracks: number; walkTracks: number; idleName?: string; walkName?: string };
   }> = [];
   private crowdTemplate: VRM | null = null;
   private readonly crowdVrmUrl = '/avatars/crowd.vrm';
@@ -100,10 +141,8 @@ export class GameApp {
   private localVelocityY = 0;
   private localVelocityX = 0;
   private localVelocityZ = 0;
-  private parkourState: 'normal' | 'slide' | 'vault' | 'climb' | 'wallrun' | 'roll' = 'normal';
+  private parkourState: 'normal' | 'slide' | 'vault' | 'climb' | 'roll' = 'normal';
   private parkourTimer = 0;
-  private wallrunTimer = 0;
-  private wallrunCooldown = 0;
   private vaultCooldown = 0;
   private rollCooldown = 0;
   private slideCooldown = 0;
@@ -119,6 +158,11 @@ export class GameApp {
         t: number;
         position: { x: number; y: number; z: number };
         velocity: { x: number; y: number; z: number };
+        lookYaw: number;
+        lookPitch: number;
+        animState: string;
+        animTime: number;
+        yaw: number;
       }>;
     }
   >();
@@ -127,6 +171,7 @@ export class GameApp {
   private crowdAgents: CrowdSnapshot['agents'] = [];
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
   private remoteLatestVel = new Map<string, Vec3>();
+  private readonly disableProcedural = true;
   private statusLines = {
     connection: 'connecting...',
     players: 'players: 0',
@@ -143,6 +188,7 @@ export class GameApp {
     heat: 'Heat: 0.00 (low)',
     phase: 'Phase: 0',
     anim: 'anim: mixamo 0, vrm 0, tracks 0',
+    crowd: 'crowd: none',
   };
   private inputDebugTimer = 0;
 
@@ -155,6 +201,7 @@ export class GameApp {
     this.container.addEventListener('click', () => this.container.focus());
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
     this.mixamoReady = this.loadMixamoClips();
+    void this.loadPlayerConfig();
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -164,7 +211,7 @@ export class GameApp {
     this.scene.fog = new THREE.Fog(0x0b0c12, 20, 120);
 
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 300);
-    this.camera.position.set(0, 12, 18);
+    this.camera.position.set(0, 4, 6);
     this.camera.lookAt(0, 0, 0);
     this.orbitOffset.copy(this.camera.position);
     this.orbitSpherical.setFromVector3(this.orbitOffset);
@@ -239,7 +286,7 @@ export class GameApp {
     const delta = Math.max(0, Math.min(0.1, (now - this.lastTime) / 1000));
     this.lastTime = now;
     const elapsed = this.clock.getElapsedTime();
-    this.animateCrowd(elapsed);
+    this.animateCrowd(elapsed, delta);
     this.input.updateGamepad();
     this.animateLocalPlayer(delta);
     this.updateCamera(delta);
@@ -372,6 +419,18 @@ export class GameApp {
     return group;
   }
 
+  private sampleGroundHeight(x: number, z: number) {
+    let height = GROUND_Y;
+    for (const obstacle of OBSTACLES) {
+      const halfX = obstacle.size.x / 2;
+      const halfZ = obstacle.size.z / 2;
+      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+        height = Math.max(height, obstacle.size.y + obstacle.position.y);
+      }
+    }
+    return height;
+  }
+
   private createPlayer() {
     const group = new THREE.Group();
     const radius = 0.6;
@@ -386,6 +445,7 @@ export class GameApp {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.y = radius + length / 2;
     group.add(mesh);
+    group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     group.position.set(0, GROUND_Y, 0);
     void this.loadVrmInto(group, 'local');
     return group;
@@ -401,10 +461,10 @@ export class GameApp {
   private computeVrmGroundOffset(vrm: VRM) {
     vrm.scene.updateMatrixWorld(true);
     const footBones = [
-      vrm.humanoid.getRawBoneNode('leftFoot'),
-      vrm.humanoid.getRawBoneNode('rightFoot'),
-      vrm.humanoid.getRawBoneNode('leftToes'),
-      vrm.humanoid.getRawBoneNode('rightToes'),
+      vrm.humanoid.getRawBoneNode('leftFoot') ?? undefined,
+      vrm.humanoid.getRawBoneNode('rightFoot') ?? undefined,
+      vrm.humanoid.getRawBoneNode('leftToes') ?? undefined,
+      vrm.humanoid.getRawBoneNode('rightToes') ?? undefined,
     ].filter(Boolean) as THREE.Object3D[];
     let offsetY = 0;
     if (footBones.length > 0) {
@@ -437,11 +497,25 @@ export class GameApp {
         vrm.humanoid.autoUpdateHumanBones = true;
         this.crowdTemplate = vrm;
         await this.mixamoReady;
-        const idleClip = this.mixamoClips.idle
-          ? retargetMixamoClip(this.mixamoClips.idle, vrm, 'crowd', { includePosition: false })
+        const crowdPrefix = 'crowd_';
+        const normalized = (vrm.humanoid.normalizedHumanBones ?? {}) as Record<
+          string,
+          { node?: THREE.Object3D }
+        >;
+        const normalizedMap = Object.entries(normalized)
+          .filter(([, bone]) => bone?.node)
+          .map(([key, bone]) => ({ key, name: bone!.node!.name }));
+        const rawKeys = Object.keys(normalized);
+        const rawMap = rawKeys
+          .map((key) => ({ key, node: vrm.humanoid.getRawBoneNode(key as any) }))
+          .filter((entry) => entry.node)
+          .map((entry) => ({ key: entry.key, name: entry.node!.name }));
+        const normalizedRootName = vrm.humanoid.normalizedHumanBonesRoot?.name ?? null;
+        const idleClip = this.jsonClips.idle
+          ? buildAnimationClipFromData('idle', this.jsonClips.idle, { prefix: crowdPrefix, rootKey: 'hips' })
           : null;
-        const walkClip = this.mixamoClips.walk
-          ? retargetMixamoClip(this.mixamoClips.walk, vrm, 'crowd', { includePosition: false })
+        const walkClip = this.jsonClips.walk
+          ? buildAnimationClipFromData('walk', this.jsonClips.walk, { prefix: crowdPrefix, rootKey: 'hips' })
           : idleClip;
         const baseY = this.computeVrmGroundOffset(vrm);
         const count = CROWD_COUNT;
@@ -451,6 +525,24 @@ export class GameApp {
           clone.traverse((obj) => {
             obj.frustumCulled = false;
           });
+          for (const mapping of rawMap) {
+            const target = clone.getObjectByName(mapping.name);
+            if (target) {
+              target.name = `${crowdPrefix}${mapping.key}`;
+            }
+          }
+          for (const mapping of normalizedMap) {
+            const target = clone.getObjectByName(mapping.name);
+            if (target) {
+              target.name = `${crowdPrefix}${mapping.key}`;
+            }
+          }
+          if (normalizedRootName) {
+            const rootNode = clone.getObjectByName(normalizedRootName);
+            if (rootNode && !rootNode.parent) {
+              clone.add(rootNode);
+            }
+          }
           const scale = 0.92 + Math.random() * 0.12;
           clone.scale.set(scale, scale, scale);
           const radius = 18 + Math.random() * 26;
@@ -458,23 +550,57 @@ export class GameApp {
           clone.position.set(Math.cos(angle) * radius, baseY, Math.sin(angle) * radius);
           clone.rotation.y = Math.random() * Math.PI * 2 + Math.PI;
           const mixer = new THREE.AnimationMixer(clone);
-          const actions: { idle?: THREE.AnimationAction; walk?: THREE.AnimationAction } = {};
-          if (idleClip) {
-            const action = mixer.clipAction(idleClip);
-            action.play();
+          const actions: Record<string, THREE.AnimationAction> = {};
+          const applyActionSettings = (name: string, action: THREE.AnimationAction) => {
             action.enabled = true;
-            action.setEffectiveWeight(1);
+            action.clampWhenFinished = true;
+            action.loop = name === 'jump' ||
+              name === 'jump_up' ||
+              name === 'run_jump' ||
+              name === 'land' ||
+              name === 'hang_wall' ||
+              name === 'climb_up' ||
+              name === 'slide' ||
+              name === 'attack' ||
+              name === 'hit' ||
+              name === 'knockdown'
+              ? THREE.LoopOnce
+              : THREE.LoopRepeat;
+            action.play();
+            action.weight = name === 'idle' ? 1 : 0;
+          };
+          for (const [name, clipData] of Object.entries(this.jsonClips)) {
+            const clip = buildAnimationClipFromData(name, clipData, { prefix: crowdPrefix, rootKey: 'hips' });
+            const action = mixer.clipAction(clip);
+            applyActionSettings(name, action);
+            actions[name] = action;
+          }
+          if (!actions.idle && idleClip) {
+            const action = mixer.clipAction(idleClip);
+            applyActionSettings('idle', action);
             actions.idle = action;
           }
-          if (walkClip) {
+          if (!actions.walk && walkClip) {
             const action = mixer.clipAction(walkClip);
-            action.play();
-            action.enabled = true;
-            action.setEffectiveWeight(0);
+            applyActionSettings('walk', action);
             actions.walk = action;
           }
           group.add(clone);
-          this.crowdAvatars.push({ root: clone, baseY, mixer, actions });
+          const debug = !this.crowdAvatars.length
+            ? {
+                idleTracks: idleClip?.tracks.length ?? 0,
+                walkTracks: walkClip?.tracks.length ?? 0,
+                idleName: actions.idle?.getClip().name,
+                walkName: actions.walk?.getClip().name,
+              }
+            : undefined;
+          this.crowdAvatars.push({
+            root: clone,
+            baseY,
+            mixer,
+            actions: actions as { idle?: THREE.AnimationAction; walk?: THREE.AnimationAction },
+            debug,
+          });
         }
       },
       undefined,
@@ -498,25 +624,48 @@ export class GameApp {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.y = radius + length / 2;
     group.add(mesh);
+    group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     void this.loadVrmInto(group, id);
     return group;
   }
 
-  private animateCrowd(time: number) {
+  private animateCrowd(time: number, delta: number) {
     if (this.crowdAvatars.length === 0) return;
+    if (this.crowdAvatars[0]?.debug) {
+      const dbg = this.crowdAvatars[0].debug!;
+      const idleW = this.crowdAvatars[0].actions.idle?.weight ?? 0;
+      const walkW = this.crowdAvatars[0].actions.walk?.weight ?? 0;
+      this.statusLines.crowd = `crowd: idleTracks ${dbg.idleTracks}, walkTracks ${dbg.walkTracks}, idleW ${idleW.toFixed(2)}, walkW ${walkW.toFixed(2)}`;
+      const node = this.hud.querySelector('[data-hud-crowd]');
+      if (node) node.textContent = this.statusLines.crowd;
+    }
     if (this.crowdAgents.length > 0) {
       const count = Math.min(this.crowdAvatars.length, this.crowdAgents.length);
       for (let i = 0; i < count; i += 1) {
         const agent = this.crowdAgents[i]!;
         const avatar = this.crowdAvatars[i]!;
         avatar.root.position.set(agent.position.x, avatar.baseY, agent.position.z);
-        avatar.root.rotation.y = Math.atan2(agent.velocity.x, agent.velocity.z) + Math.PI;
-        const speed = Math.hypot(agent.velocity.x, agent.velocity.z);
-        if (avatar.actions.walk && avatar.actions.idle) {
-          const walkWeight = THREE.MathUtils.clamp(speed / 1.2, 0, 1);
-          avatar.actions.walk.weight = THREE.MathUtils.lerp(avatar.actions.walk.weight, walkWeight, 0.2);
-          avatar.actions.idle.weight = THREE.MathUtils.lerp(avatar.actions.idle.weight, 1 - walkWeight, 0.2);
+        if (Math.hypot(agent.velocity.x, agent.velocity.z) > 0.05) {
+          avatar.root.rotation.y = Math.atan2(agent.velocity.x, agent.velocity.z) + Math.PI;
         }
+        const crowdId = `crowd_${i}`;
+        if (agent.state === 'attack' || agent.state === 'hit') {
+          this.remoteLatestAnim.set(crowdId, {
+            state: agent.state,
+            time: agent.stateTime ?? 0,
+          });
+        } else {
+          this.remoteLatestAnim.delete(crowdId);
+        }
+        const crowdActor = {
+          vrm: this.crowdTemplate!,
+          mixer: avatar.mixer,
+          actions: avatar.actions,
+          base: 'idle' as const,
+          id: crowdId,
+          velocityOverride: agent.velocity,
+        };
+        this.updateActorAnimation(crowdActor, delta);
       }
       return;
     }
@@ -537,7 +686,7 @@ export class GameApp {
     const hud = document.createElement('div');
     hud.className = 'hud';
     hud.innerHTML = [
-      '<strong>Trashy Game Prototype</strong>',
+      '<strong>Sleepy Engine Prototype</strong>',
       `<div data-hud-connection>${this.statusLines.connection}</div>`,
       `<div data-hud-players>${this.statusLines.players}</div>`,
       `<div data-hud-input>${this.statusLines.input}</div>`,
@@ -551,6 +700,7 @@ export class GameApp {
       `<div data-hud-move>${this.statusLines.move}</div>`,
       `<div data-hud-dt>${this.statusLines.dt}</div>`,
       `<div data-hud-anim>${this.statusLines.anim}</div>`,
+      `<div data-hud-crowd>${this.statusLines.crowd}</div>`,
       `<div data-hud-heat>${this.statusLines.heat}</div>`,
       `<div data-hud-phase>${this.statusLines.phase}</div>`,
       '<div>Objective: ignite 3 hotspots</div>',
@@ -603,19 +753,25 @@ export class GameApp {
     const movement = this.input.getVector();
     const rotated = this.rotateMovementByCamera(movement.x, movement.z);
     const flags = this.input.getFlags();
+    const movementLocked = this.localMovementLockTimer > 0;
+    const moveX = movementLocked ? 0 : rotated.x;
+    const moveZ = movementLocked ? 0 : rotated.z;
     this.updateInputHud(movement.x, movement.z);
     this.updateKeyHud();
 
     this.roomClient.sendInput({
       seq: this.seq++,
-      moveX: rotated.x,
-      moveZ: rotated.z,
-      lookYaw: 0,
-      sprint: flags.sprint,
+      moveX,
+      moveZ,
+      lookYaw: this.localLookYaw,
+      lookPitch: this.localLookPitch,
+      animState: this.localAnimState,
+      animTime: this.localAnimTime,
+      sprint: movementLocked ? false : flags.sprint,
       attack: flags.attack,
       interact: flags.interact,
-      jump: flags.jump,
-      crouch: flags.crouch,
+      jump: movementLocked ? false : flags.jump,
+      crouch: movementLocked ? false : flags.crouch,
     });
   }
 
@@ -625,13 +781,25 @@ export class GameApp {
     const rotated = this.rotateMovementByCamera(movement.x, movement.z);
     const moveX = rotated.x;
     const moveZ = rotated.z;
-    const onGround = this.localPlayer.position.y <= GROUND_Y + 0.001;
+    const groundHeight = this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z);
+    const onGround = this.localPlayer.position.y <= groundHeight + 0.001;
+    const movementLocked = this.localMovementLockTimer > 0;
     const moveDir = new THREE.Vector3(moveX, 0, moveZ);
     if (moveDir.lengthSq() > 1e-6) moveDir.normalize();
+    this.lastMoveInput = { x: movement.x, z: movement.z };
+    this.lastMoveDir.copy(moveDir);
+    if (!movementLocked && moveDir.lengthSq() > 1e-6) {
+      const desiredYaw = Math.atan2(moveDir.x, moveDir.z) + Math.PI;
+      const currentYaw = this.localPlayer.rotation.y;
+      let deltaYaw = desiredYaw - currentYaw;
+      deltaYaw = Math.atan2(Math.sin(deltaYaw), Math.cos(deltaYaw));
+      this.lastYawDelta = deltaYaw;
+      this.localPlayer.rotation.y = desiredYaw;
+    } else {
+      this.lastYawDelta = 0;
+    }
 
     this.parkourTimer = Math.max(0, this.parkourTimer - delta);
-    this.wallrunTimer = Math.max(0, this.wallrunTimer - delta);
-    this.wallrunCooldown = Math.max(0, this.wallrunCooldown - delta);
     this.vaultCooldown = Math.max(0, this.vaultCooldown - delta);
     this.rollCooldown = Math.max(0, this.rollCooldown - delta);
     this.slideCooldown = Math.max(0, this.slideCooldown - delta);
@@ -639,11 +807,10 @@ export class GameApp {
     const speedBase = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
     const accel = Math.min(1, SLIDE_ACCEL * delta);
 
-    const startSlide = onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
-    const startVault = onGround && flags.jump && this.vaultCooldown <= 0 && this.checkVault(moveDir);
-    const startClimb = !onGround && flags.jump && this.vaultCooldown <= 0 && this.checkClimb(moveDir);
-    const startWallrun = !onGround && this.wallrunCooldown <= 0 && this.checkWallrun(moveDir);
-    const startFlip = onGround && flags.jump && flags.sprint && this.vaultCooldown <= 0 && !startVault;
+    const startSlide = !movementLocked && onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
+    const startVault = !movementLocked && onGround && flags.jump && this.vaultCooldown <= 0 && this.checkVault(moveDir);
+    const startClimb = !movementLocked && !onGround && flags.jump && this.vaultCooldown <= 0 && this.checkClimb(moveDir);
+    const startFlip = !movementLocked && onGround && flags.jump && flags.sprint && this.vaultCooldown <= 0 && !startVault;
 
     if (startVault) {
       this.parkourState = 'vault';
@@ -659,19 +826,6 @@ export class GameApp {
       this.localVelocityY = JUMP_SPEED * 0.9;
       this.localVelocityX = moveDir.x * speedBase * 0.4;
       this.localVelocityZ = moveDir.z * speedBase * 0.4;
-    } else if (startWallrun) {
-      this.parkourState = 'wallrun';
-      this.wallrunTimer = 0.6;
-      this.wallrunCooldown = 0.8;
-      const wall = this.getWallNormal();
-      if (wall) {
-        const along = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), wall).normalize();
-        const dot = along.dot(moveDir) < 0 ? -1 : 1;
-        along.multiplyScalar(dot);
-        this.localVelocityX = along.x * speedBase * 1.1;
-        this.localVelocityZ = along.z * speedBase * 1.1;
-        this.localVelocityY = Math.max(this.localVelocityY, 3.5);
-      }
     } else if (startSlide) {
       this.parkourState = 'slide';
       this.parkourTimer = 0.5;
@@ -685,11 +839,11 @@ export class GameApp {
       this.localVelocityY = JUMP_SPEED * 1.15;
       this.localVelocityX = moveDir.x * speedBase * 1.1;
       this.localVelocityZ = moveDir.z * speedBase * 1.1;
-    } else if (this.parkourTimer <= 0 && this.wallrunTimer <= 0) {
+    } else if (this.parkourTimer <= 0) {
       this.parkourState = 'normal';
     }
 
-    if (this.parkourState === 'normal') {
+    if (this.parkourState === 'normal' && !movementLocked) {
       const targetVx = moveX * speedBase;
       const targetVz = moveZ * speedBase;
       if (flags.sprint || flags.crouch) {
@@ -708,25 +862,31 @@ export class GameApp {
       const damping = Math.max(0, 1 - (SLIDE_FRICTION * 1.4) * delta);
       this.localVelocityX *= damping;
       this.localVelocityZ *= damping;
+    } else if (movementLocked) {
+      this.localVelocityX = 0;
+      this.localVelocityZ = 0;
     }
 
-    if (flags.jump && onGround && this.parkourState === 'normal') {
+    if (!movementLocked && flags.jump && onGround && this.parkourState === 'normal') {
+      const walkThreshold = 0.15;
+      const runThreshold = MOVE_SPEED * 0.65;
+      const speed = Math.hypot(this.localVelocityX, this.localVelocityZ);
+      if (speed <= walkThreshold) this.localJumpMode = 'jump_up';
+      else if (speed > runThreshold) this.localJumpMode = 'run_jump';
+      else this.localJumpMode = 'jump';
       this.localVelocityY = JUMP_SPEED;
     }
 
-    if (this.parkourState === 'wallrun' && this.wallrunTimer > 0) {
-      this.localVelocityY = Math.max(this.localVelocityY, 1.5);
-    } else {
-      this.localVelocityY += GRAVITY * delta;
-    }
+    this.localVelocityY += GRAVITY * delta;
 
     const next = {
       x: this.localPlayer.position.x + this.localVelocityX * delta,
       y: this.localPlayer.position.y + this.localVelocityY * delta,
       z: this.localPlayer.position.z + this.localVelocityZ * delta,
     };
-    if (next.y <= GROUND_Y) {
-      next.y = GROUND_Y;
+    const nextGround = this.sampleGroundHeight(next.x, next.z);
+    if (next.y <= nextGround) {
+      next.y = nextGround;
       if (this.localVelocityY < -8 && this.rollCooldown <= 0) {
         this.parkourState = 'roll';
         this.parkourTimer = 0.3;
@@ -736,12 +896,7 @@ export class GameApp {
     }
 
     let resolved = next;
-    const stepHeight = this.getStepUpHeight(moveDir);
-    if (onGround && stepHeight > 0) {
-      resolved = { ...resolved, y: Math.max(resolved.y, stepHeight) };
-    }
     for (const obstacle of OBSTACLES) {
-      if (resolved.y > obstacle.size.y * 0.6) continue;
       resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
     }
     for (const agent of this.crowdAgents) {
@@ -753,7 +908,10 @@ export class GameApp {
     }
 
     this.localPlayer.position.x = resolved.x;
-    this.localPlayer.position.y = resolved.y;
+    this.localPlayer.position.y = Math.max(
+      resolved.y,
+      this.sampleGroundHeight(resolved.x, resolved.z),
+    );
     this.localPlayer.position.z = resolved.z;
   }
 
@@ -793,30 +951,7 @@ export class GameApp {
     return false;
   }
 
-  private checkWallrun(dir: THREE.Vector3) {
-    if (dir.lengthSq() < 0.2) return false;
-    return this.getWallNormal() !== null;
-  }
-
-  private getWallNormal() {
-    const pos = this.localPlayer.position;
-    const reach = PLAYER_RADIUS + 0.25;
-    for (const obstacle of OBSTACLES) {
-      const halfX = obstacle.size.x / 2;
-      const halfZ = obstacle.size.z / 2;
-      const dx = pos.x - obstacle.position.x;
-      const dz = pos.z - obstacle.position.z;
-      const ox = halfX - Math.abs(dx);
-      const oz = halfZ - Math.abs(dz);
-      if (ox > -reach && oz > -reach) {
-        if (ox < oz) {
-          return new THREE.Vector3(Math.sign(dx), 0, 0);
-        }
-        return new THREE.Vector3(0, 0, Math.sign(dz));
-      }
-    }
-    return null;
-  }
+  
 
   private getStepUpHeight(dir: THREE.Vector3) {
     if (dir.lengthSq() < 0.2) return 0;
@@ -838,9 +973,9 @@ export class GameApp {
   }
 
   private updateCamera(delta: number) {
-    const target = new THREE.Vector3(
+    const target = this.cameraTarget.set(
       this.localPlayer.position.x,
-      this.localPlayer.position.y,
+      this.localPlayer.position.y + 1.4,
       this.localPlayer.position.z,
     );
     const look = this.input.getLook();
@@ -856,16 +991,33 @@ export class GameApp {
 
     this.orbitSpherical.set(this.orbitRadius, this.orbitPitch, this.orbitYaw);
     this.orbitOffset.setFromSpherical(this.orbitSpherical);
-    this.camera.position.copy(target).add(this.orbitOffset);
+    this.cameraGoal.copy(target).add(this.orbitOffset);
+
+    // Cinematic right-shoulder offset.
+    this.cameraForward.subVectors(target, this.cameraGoal).normalize();
+    this.cameraRight.crossVectors(this.cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
+    this.cameraGoal.addScaledVector(this.cameraRight, 1.2);
+    this.cameraGoal.y += 0.4;
+
+    // Prevent camera from dipping below the floor.
+    const minCamY = GROUND_Y + 0.9;
+    if (this.cameraGoal.y < minCamY) {
+      this.cameraGoal.y = minCamY;
+    }
+
+    const smooth = 1 - Math.exp(-delta * 6);
+    this.camera.position.lerp(this.cameraGoal, smooth);
     this.camera.lookAt(target);
 
-    // Face the player toward the camera-forward direction.
-    const forward = new THREE.Vector3().subVectors(target, this.camera.position);
-    forward.y = 0;
-    if (forward.lengthSq() > 1e-6) {
-      forward.normalize();
-      this.localPlayer.rotation.y = Math.atan2(forward.x, forward.z) + Math.PI;
-    }
+    const forward = this.camera.getWorldDirection(this.cameraForward).normalize();
+    const inv = this.cameraQuat.copy(this.localPlayer.getWorldQuaternion(this.cameraQuat)).invert();
+    const localDir = forward.applyQuaternion(inv);
+    const yaw = Math.atan2(localDir.x, localDir.z);
+    const pitch = Math.asin(THREE.MathUtils.clamp(-localDir.y, -0.7, 0.7));
+    this.localLookYaw = THREE.MathUtils.clamp(yaw, -0.8, 0.8);
+    this.localLookPitch = THREE.MathUtils.clamp(pitch, -0.6, 0.6);
+
+    // Camera no longer rotates the player directly.
   }
 
   private rotateMovementByCamera(x: number, z: number) {
@@ -955,9 +1107,22 @@ export class GameApp {
         t: now,
         position: { ...playerSnap.position },
         velocity: { ...playerSnap.velocity },
+        lookYaw: playerSnap.lookYaw ?? 0,
+        lookPitch: playerSnap.lookPitch ?? 0,
+        animState: playerSnap.animState ?? 'idle',
+        animTime: playerSnap.animTime ?? 0,
+        yaw: playerSnap.yaw ?? 0,
       });
       this.remoteLatest.set(id, { ...playerSnap.position });
       this.remoteLatestVel.set(id, { ...playerSnap.velocity });
+      this.remoteLatestLook.set(id, {
+        yaw: playerSnap.lookYaw ?? 0,
+        pitch: playerSnap.lookPitch ?? 0,
+      });
+      this.remoteLatestAnim.set(id, {
+        state: playerSnap.animState ?? 'idle',
+        time: playerSnap.animTime ?? 0,
+      });
       if (entry.snapshots.length > 5) {
         entry.snapshots.splice(0, entry.snapshots.length - 5);
       }
@@ -969,6 +1134,7 @@ export class GameApp {
       this.remotePlayers.delete(id);
       this.remoteLatest.delete(id);
       this.remoteLatestVel.delete(id);
+      this.remoteLatestAnim.delete(id);
     }
   }
 
@@ -997,6 +1163,9 @@ export class GameApp {
       if (snapshots.length === 1) {
         const snap = snapshots[0]!;
         mesh.position.set(snap.position.x, snap.position.y, snap.position.z);
+        if (Number.isFinite(snap.yaw)) {
+          mesh.rotation.y = snap.yaw;
+        }
         continue;
       }
 
@@ -1018,6 +1187,9 @@ export class GameApp {
           older.position.y + older.velocity.y * dt,
           older.position.z + older.velocity.z * dt,
         );
+        if (Number.isFinite(older.yaw)) {
+          mesh.rotation.y = older.yaw;
+        }
         continue;
       }
 
@@ -1028,6 +1200,10 @@ export class GameApp {
         THREE.MathUtils.lerp(older.position.y, newer.position.y, alpha),
         THREE.MathUtils.lerp(older.position.z, newer.position.z, alpha),
       );
+      if (Number.isFinite(older.yaw) && Number.isFinite(newer.yaw)) {
+        const dy = Math.atan2(Math.sin(newer.yaw - older.yaw), Math.cos(newer.yaw - older.yaw));
+        mesh.rotation.y = older.yaw + dy * alpha;
+      }
     }
   }
 
@@ -1056,6 +1232,7 @@ export class GameApp {
           obj.frustumCulled = false;
         });
         group.add(vrm.scene);
+        this.updateCapsuleToVrm(group, vrm);
         this.vrms.push(vrm);
         await this.mixamoReady;
         this.setupVrmActor(vrm, actorId);
@@ -1067,14 +1244,64 @@ export class GameApp {
     );
   }
 
+  private updateCapsuleToVrm(group: THREE.Group, vrm: VRM) {
+    const capsule = group.userData.capsule as
+      | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
+      | undefined;
+    if (!capsule) return;
+    const box = new THREE.Box3().setFromObject(vrm.scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const height = Math.max(1, size.y);
+    const width = Math.max(size.x, size.z);
+    const desiredRadius = Math.max(0.25, width * 0.2) * this.playerConfig.capsuleRadiusScale;
+    const desiredHeight = height * 0.92 * this.playerConfig.capsuleHeightScale;
+    const baseHeight = capsule.baseLength + capsule.baseRadius * 2;
+    const scaleY = desiredHeight / baseHeight;
+    const scaleXZ = desiredRadius / capsule.baseRadius;
+    capsule.mesh.scale.set(scaleXZ, scaleY, scaleXZ);
+    capsule.mesh.position.y = (baseHeight * scaleY) / 2 + this.playerConfig.capsuleYOffset;
+    capsule.hip = vrm.humanoid.getRawBoneNode('hips');
+  }
+
+  private syncCapsuleToHips(vrm: VRM) {
+    const group = vrm.scene.parent as THREE.Group | null;
+    if (!group) return;
+    const capsule = group.userData.capsule as
+      | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
+      | undefined;
+    if (!capsule?.hip) return;
+    this.tempVec.set(0, 0, 0);
+    capsule.hip.getWorldPosition(this.tempVec);
+    group.worldToLocal(this.tempVec);
+    capsule.mesh.position.x = this.tempVec.x;
+    capsule.mesh.position.z = this.tempVec.z;
+    capsule.mesh.rotation.y = capsule.hip.rotation.y;
+  }
+
+  private async loadPlayerConfig() {
+    try {
+      const res = await fetch('/config/player.json', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as Partial<typeof this.playerConfig>;
+      this.playerConfig = { ...this.playerConfig, ...data };
+      for (const vrm of this.vrms) {
+        const group = vrm.scene.parent as THREE.Group | null;
+        if (group) this.updateCapsuleToVrm(group, vrm);
+      }
+    } catch (error) {
+      console.warn('Player config load failed', error);
+    }
+  }
+
   private updateVrms(delta: number) {
     for (const vrm of this.vrms) {
       vrm.update(delta);
     }
     for (const actor of this.vrmActors.values()) {
       actor.mixer.update(delta);
-      this.updateActorAnimation(actor);
-      this.applyProcedural(actor, delta);
+      this.updateActorAnimation(actor, delta);
+      this.syncCapsuleToHips(actor.vrm);
     }
     for (const avatar of this.crowdAvatars) {
       avatar.mixer.update(delta);
@@ -1087,9 +1314,15 @@ export class GameApp {
       const lower = base.toLowerCase().replace(/[_-]+/g, ' ');
       if (lower.includes('idle')) return 'idle';
       if (lower.includes('walk')) return 'walk';
+      if (lower.includes('run') && lower.includes('jump')) return 'run_jump';
       if (lower.includes('run')) return 'run';
+      if (lower.includes('jump up') || lower.includes('jump_up')) return 'jump_up';
       if (lower.includes('jump')) return 'jump';
+      if (lower.includes('hang') && lower.includes('wall')) return 'hang_wall';
+      if (lower.includes('climb up') || lower.includes('climb_up')) return 'climb_up';
+      if (lower.includes('slide')) return 'slide';
       if (lower.includes('fall')) return 'fall';
+      if (lower.includes('land')) return 'land';
       if (lower.includes('attack') || lower.includes('punch') || lower.includes('kick')) {
         return 'attack';
       }
@@ -1097,8 +1330,10 @@ export class GameApp {
       if (lower.includes('knock') || lower.includes('down')) return 'knockdown';
       if (lower.includes('strafe') && lower.includes('left')) return 'strafeLeft';
       if (lower.includes('strafe') && lower.includes('right')) return 'strafeRight';
+      if (lower.includes('strafe')) return 'strafeLeft';
       if (lower.includes('turn') && lower.includes('left')) return 'turnLeft';
       if (lower.includes('turn') && lower.includes('right')) return 'turnRight';
+      if (lower.includes('turn')) return 'turnLeft';
       return base;
     };
 
@@ -1115,63 +1350,40 @@ export class GameApp {
       console.warn('Failed to load animations manifest:', error);
     }
 
-    const entries: Array<[string, string]> = (manifest ?? [])
-      .filter((name) => name.toLowerCase().endsWith('.fbx'))
-      .map((name) => [resolveKey(name), `/animations/${encodeURIComponent(name)}`]);
-    if (entries.length === 0) {
-      const files: Record<string, string> = {
-        idle: '/animations/idle.fbx',
-        walk: '/animations/walk.fbx',
-        run: '/animations/run.fbx',
-        jump: '/animations/jump.fbx',
-        fall: '/animations/fall.fbx',
-        attack: '/animations/attack.fbx',
-        hit: '/animations/hit.fbx',
-        knockdown: '/animations/knockdown.fbx',
-      };
-      entries.push(...Object.entries(files));
-    }
+    const jsonEntries = (manifest ?? []).filter(
+      (name) => name.toLowerCase().endsWith('.json') && !name.toLowerCase().startsWith('none'),
+    );
 
-    const usedKeys = new Set<string>();
     await Promise.all(
-      entries.map(async ([rawKey, url]) => {
-        const key = usedKeys.has(rawKey) ? `${rawKey}_${Math.random().toString(36).slice(2, 6)}` : rawKey;
-        usedKeys.add(key);
-        const fbx = await this.fbxLoader.loadAsync(url);
-        const clip = fbx.animations[0];
-        if (!clip) {
-          console.warn('Missing animation clip for', key);
-          return;
+      jsonEntries.map(async (name) => {
+        try {
+          const res = await fetch(`/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
+          if (!res.ok) return;
+          const payload = (await res.json()) as unknown;
+          const data = parseClipPayload(payload);
+          if (!data) return;
+          const key = resolveKey(name);
+          this.jsonClips[key] = data;
+        } catch (err) {
+          console.warn('Failed to load clip json', name, err);
         }
-        this.lastMixamoTrackCount = clip.tracks.length;
-        if (clip.tracks[0]) {
-          this.lastMixamoTrack = clip.tracks[0].name;
-        }
-        clip.name = key;
-        this.mixamoClips[key] = { clip, rig: fbx };
       }),
     );
 
-    const ensureClip = (key: string, fallbacks: string[]) => {
-      if (this.mixamoClips[key]) return;
-      for (const fallback of fallbacks) {
-        const entry = this.mixamoClips[fallback];
-        if (entry) {
-          this.mixamoClips[key] = entry;
-          return;
-        }
+    if (Object.keys(this.jsonClips).length === 0) {
+      console.warn('JSON clips failed to load.');
+    }
+
+    const maybeMirror = (leftKey: string, rightKey: string) => {
+      if (!this.jsonClips[rightKey] && this.jsonClips[leftKey]) {
+        this.jsonClips[rightKey] = mirrorClipData(this.jsonClips[leftKey]);
+      }
+      if (!this.jsonClips[leftKey] && this.jsonClips[rightKey]) {
+        this.jsonClips[leftKey] = mirrorClipData(this.jsonClips[rightKey]);
       }
     };
-    ensureClip('walk', ['walking', 'walk', 'idle']);
-    ensureClip('run', ['run', 'walk', 'idle']);
-    ensureClip('fall', ['fall', 'jump', 'idle']);
-    ensureClip('jump', ['jump', 'fall', 'idle']);
-    ensureClip('attack', ['attack', 'hit', 'idle']);
-    ensureClip('hit', ['hit', 'attack', 'idle']);
-    ensureClip('knockdown', ['knockdown', 'hit', 'fall', 'idle']);
-    if (Object.keys(this.mixamoClips).length === 0) {
-      console.warn('Mixamo clips failed to load.');
-    }
+    maybeMirror('strafeLeft', 'strafeRight');
+    maybeMirror('turnLeft', 'turnRight');
   }
 
   private setupVrmActor(vrm: VRM, actorId: string) {
@@ -1194,20 +1406,33 @@ export class GameApp {
     const applyActionSettings = (name: string, action: THREE.AnimationAction) => {
       action.enabled = true;
       action.clampWhenFinished = true;
-      action.loop = name === 'jump' || name === 'attack' || name === 'hit' || name === 'knockdown'
+      action.loop = name === 'jump' ||
+        name === 'jump_up' ||
+        name === 'run_jump' ||
+        name === 'land' ||
+        name === 'hang_wall' ||
+        name === 'climb_up' ||
+        name === 'slide' ||
+        name === 'attack' ||
+        name === 'hit' ||
+        name === 'knockdown'
         ? THREE.LoopOnce
         : THREE.LoopRepeat;
       action.play();
       action.weight = name === 'idle' ? 1 : 0;
     };
-    for (const [name, entry] of Object.entries(this.mixamoClips)) {
-      if (actions[name]) continue;
-      const retargeted = retargetMixamoClip(entry, vrm, actorId, { includePosition: false });
-      this.lastRetargetTracks = retargeted.tracks.length;
-      this.lastRetargetSample = retargeted.tracks[0]?.name ?? 'none';
-      const action = mixer.clipAction(retargeted);
+    for (const [name, clipData] of Object.entries(this.jsonClips)) {
+      const clip = buildAnimationClipFromData(name, clipData, { prefix: `${actorId}_`, rootKey: 'hips' });
+      const action = mixer.clipAction(clip);
       applyActionSettings(name, action);
       actions[name] = action;
+    }
+    if (!actions.idle) {
+      const fallback = Object.values(actions)[0];
+      if (fallback) {
+        actions.idle = fallback;
+        actions.idle.weight = 1;
+      }
     }
     const ensureAction = (key: string, fallbacks: string[]) => {
       if (actions[key]) return;
@@ -1218,13 +1443,22 @@ export class GameApp {
         }
       }
     };
-    ensureAction('walk', ['walking', 'walk', 'idle']);
+    ensureAction('walk', ['walk', 'idle']);
     ensureAction('run', ['run', 'walk', 'idle']);
-    ensureAction('fall', ['fall', 'jump', 'idle']);
-    ensureAction('jump', ['jump', 'fall', 'idle']);
+    ensureAction('strafeLeft', ['strafeLeft', 'walk', 'idle']);
+    ensureAction('strafeRight', ['strafeRight', 'strafeLeft', 'walk', 'idle']);
+    ensureAction('turnLeft', ['turnLeft', 'turnRight', 'idle']);
+    ensureAction('turnRight', ['turnRight', 'turnLeft', 'idle']);
+    ensureAction('jump_up', ['jump_up', 'jump', 'fall', 'idle']);
+    ensureAction('jump', ['jump', 'jump_up', 'fall', 'idle']);
+    ensureAction('run_jump', ['run_jump', 'jump', 'jump_up', 'fall', 'idle']);
+    ensureAction('fall', ['fall', 'jump', 'jump_up', 'idle']);
+    ensureAction('land', ['land', 'idle']);
+    ensureAction('hang_wall', ['hang_wall', 'idle']);
+    ensureAction('climb_up', ['climb_up', 'hang_wall', 'idle']);
+    ensureAction('slide', ['slide', 'run', 'walk', 'idle']);
     ensureAction('attack', ['attack', 'hit', 'idle']);
     ensureAction('hit', ['hit', 'attack', 'idle']);
-    ensureAction('knockdown', ['knockdown', 'hit', 'fall', 'idle']);
     this.vrmActors.set(actorId, {
       vrm,
       mixer,
@@ -1240,12 +1474,16 @@ export class GameApp {
     actions: Record<string, THREE.AnimationAction>;
     base: 'idle' | 'walk' | 'run';
     id: string;
-  }) {
+    velocityOverride?: { x: number; y: number; z: number };
+  }, delta: number) {
     const actorId = actor.id;
     const local = actorId === 'local';
     let speed = 0;
     let vy = 0;
-    if (local) {
+    if (actor.velocityOverride) {
+      speed = Math.hypot(actor.velocityOverride.x, actor.velocityOverride.z);
+      vy = actor.velocityOverride.y;
+    } else if (local) {
       speed = Math.hypot(this.localVelocityX, this.localVelocityZ);
       vy = this.localVelocityY;
     } else if (actorId) {
@@ -1256,33 +1494,308 @@ export class GameApp {
       }
     }
 
-    const idle = actor.actions.idle;
-    const walk = actor.actions.walk ?? idle;
-    const run = actor.actions.run ?? walk;
-    const jump = actor.actions.jump ?? idle;
-    const fall = actor.actions.fall ?? idle;
-    if (!idle || !walk || !run || !jump || !fall) return;
+    const actions = actor.actions;
+    const idle = actions.idle;
+    const walk = actions.walk ?? idle;
+    const run = actions.run ?? walk;
+    const strafeLeft = actions.strafeLeft ?? walk;
+    const strafeRight = actions.strafeRight ?? walk;
+    const turnLeft = actions.turnLeft ?? idle;
+    const turnRight = actions.turnRight ?? idle;
+    const jumpUp = actions.jump_up ?? actions.jump ?? idle;
+    const jump = actions.jump ?? jumpUp ?? idle;
+    const runJump = actions.run_jump ?? jump ?? jumpUp ?? idle;
+    const fall = actions.fall ?? jump ?? idle;
+    const land = actions.land ?? idle;
+    const hangWall = actions.hang_wall ?? idle;
+    const climbUp = actions.climb_up ?? hangWall ?? idle;
+    const slide = actions.slide ?? run ?? walk ?? idle;
+    const attack = actions.attack ?? idle;
+    const hit = actions.hit ?? idle;
+    if (!idle || !walk || !run) return;
 
-    const walkThreshold = 0.15;
-    const runThreshold = MOVE_SPEED * 0.65;
-    // Freeze locomotion clips on first frame so we get a base pose.
-    for (const action of [idle, walk, run]) {
-      if (!action) continue;
-      action.enabled = true;
-      action.paused = true;
-      action.time = 0;
-      action.weight = 1;
+    const state =
+      this.animStates.get(actorId) ??
+      { mode: 'idle', timer: 0, lastGrounded: true, lookYaw: 0, lookPitch: 0, lastJumpMode: 'jump' };
+    const prevMode = state.mode;
+
+    const grounded = actorId === 'local'
+      ? this.localPlayer.position.y <=
+        this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z) + 0.001
+      : (() => {
+          const pos = this.remoteLatest.get(actorId);
+          if (!pos) return true;
+          const floor = this.sampleGroundHeight(pos.x, pos.z);
+          return pos.y <= floor + 0.001;
+        })();
+
+    if (!state.lastGrounded && grounded) {
+      state.mode = 'land';
+      state.timer = land?.getClip().duration ?? 0.2;
+    }
+    state.lastGrounded = grounded;
+
+    if (actorId === 'local' && this.input.getFlags().attack) {
+      state.mode = 'attack';
+      state.timer = attack?.getClip().duration ?? 0.35;
+    }
+    if (actorId === 'local') {
+      const flags = this.input.getFlags();
+      if (flags.sprint && flags.crouch && grounded && state.mode !== 'slide' && state.timer === 0) {
+        state.mode = 'slide';
+        state.timer = slide?.getClip().duration ?? 0.4;
+      }
     }
 
-    if (vy > 0.5) {
-      jump.weight = THREE.MathUtils.lerp(jump.weight, 1, 0.2);
-      fall.weight = THREE.MathUtils.lerp(fall.weight, 0, 0.2);
-    } else if (vy < -0.5) {
-      fall.weight = THREE.MathUtils.lerp(fall.weight, 1, 0.2);
-      jump.weight = THREE.MathUtils.lerp(jump.weight, 0, 0.2);
-    } else {
-      jump.weight = THREE.MathUtils.lerp(jump.weight, 0, 0.2);
-      fall.weight = THREE.MathUtils.lerp(fall.weight, 0, 0.2);
+    if (state.timer > 0) {
+      state.timer = Math.max(0, state.timer - delta);
+      if (state.timer === 0 && ['attack', 'land', 'hit'].includes(state.mode)) {
+        state.mode = 'idle';
+      }
+    }
+
+    if (local && this.parkourState === 'climb' && state.timer === 0) {
+      const pick = vy > 0.2 ? 'climb_up' : 'hang_wall';
+      state.mode = pick;
+      state.timer = (pick === 'climb_up' ? climbUp : hangWall)?.getClip().duration ?? 0.35;
+    }
+
+    const forcedRemote = !local && this.remoteLatestAnim.get(actorId);
+    if (forcedRemote) {
+      const remote = this.remoteLatestAnim.get(actorId)!;
+      state.mode = remote.state;
+      state.timer = 0;
+    } else if (!grounded) {
+      state.mode = vy > 0.5 ? (local ? this.localJumpMode : (state.lastJumpMode ?? 'jump')) : 'fall';
+    } else if (state.timer === 0) {
+      const walkThreshold = 0.15;
+      const runThreshold = MOVE_SPEED * 0.65;
+      let desired = 'idle';
+      if (speed > runThreshold) desired = 'run';
+      else if (speed > walkThreshold) desired = 'walk';
+
+      if (actorId === 'local') {
+        const yawDelta = this.lastYawDelta;
+        if (speed < 0.15 && Math.abs(yawDelta) > 0.35) {
+          desired = yawDelta > 0 ? 'turnLeft' : 'turnRight';
+        } else if (speed > walkThreshold) {
+          const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            this.localPlayer.rotation.y,
+          );
+          const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
+          const side = right.dot(this.lastMoveDir);
+          const fwd = forward.dot(this.lastMoveDir);
+          if (Math.abs(side) > 0.6 && Math.abs(fwd) < 0.4) {
+            desired = side > 0 ? 'strafeRight' : 'strafeLeft';
+          }
+        }
+      }
+      state.mode = desired;
+    }
+
+    if (grounded && ['fall', 'jump', 'jump_up', 'run_jump'].includes(prevMode)) {
+      state.mode = 'land';
+      state.timer = land?.getClip().duration ?? 0.2;
+    }
+
+    if (state.mode === 'land' && prevMode !== 'land') {
+      for (const key of ['fall', 'jump', 'jump_up', 'run_jump']) {
+        const action = actions[key];
+        if (action) {
+          action.stop();
+          action.reset();
+          action.weight = 0;
+        }
+      }
+    }
+
+    const weights: {
+      idle: number;
+      walk: number;
+      run: number;
+      strafeLeft: number;
+      strafeRight: number;
+      turnLeft: number;
+      turnRight: number;
+      jump: number;
+      jump_up: number;
+      run_jump: number;
+      fall: number;
+      land: number;
+      hang_wall: number;
+      climb_up: number;
+      slide: number;
+      attack: number;
+      hit: number;
+    } = {
+      idle: 0,
+      walk: 0,
+      run: 0,
+      strafeLeft: 0,
+      strafeRight: 0,
+      turnLeft: 0,
+      turnRight: 0,
+      jump: 0,
+      jump_up: 0,
+      run_jump: 0,
+      fall: 0,
+      land: 0,
+      hang_wall: 0,
+      climb_up: 0,
+      slide: 0,
+      attack: 0,
+      hit: 0,
+    };
+
+    switch (state.mode) {
+      case 'run':
+        weights.run = 1;
+        break;
+      case 'walk':
+        weights.walk = 1;
+        break;
+      case 'strafeLeft':
+        weights.strafeLeft = 1;
+        break;
+      case 'strafeRight':
+        weights.strafeRight = 1;
+        break;
+      case 'turnLeft':
+        weights.turnLeft = 1;
+        break;
+      case 'turnRight':
+        weights.turnRight = 1;
+        break;
+      case 'jump_up':
+        weights.jump_up = 1;
+        break;
+      case 'run_jump':
+        weights.run_jump = 1;
+        break;
+      case 'jump':
+        weights.jump = 1;
+        break;
+      case 'fall':
+        weights.fall = 1;
+        break;
+      case 'land':
+        weights.land = 1;
+        break;
+      case 'hang_wall':
+        weights.hang_wall = 1;
+        break;
+      case 'climb_up':
+        weights.climb_up = 1;
+        break;
+      case 'slide':
+        weights.slide = 1;
+        break;
+      case 'attack':
+        weights.attack = 1;
+        break;
+      case 'hit':
+        weights.hit = 1;
+        break;
+      default:
+        weights.idle = 1;
+    }
+
+    const apply = (
+      action: THREE.AnimationAction | undefined,
+      weight: number,
+      oneShot = false,
+      name?: string,
+    ) => {
+      if (!action) return;
+      action.enabled = true;
+      action.paused = false;
+      if (!action.isRunning()) action.play();
+      if (forcedRemote && name && name === state.mode) {
+        const remote = this.remoteLatestAnim.get(actorId)!;
+        const duration = action.getClip().duration || 1;
+        const time = ((remote.time % duration) + duration) % duration;
+        action.time = time;
+      }
+      const target = weight;
+      action.weight = THREE.MathUtils.lerp(action.weight, target, 0.25);
+      if (oneShot && weight > 0.8 && name && name !== prevMode) {
+        action.reset().play();
+      }
+    };
+
+    apply(idle, weights.idle, false, 'idle');
+    apply(walk, weights.walk, false, 'walk');
+    apply(run, weights.run, false, 'run');
+    apply(strafeLeft, weights.strafeLeft, false, 'strafeLeft');
+    apply(strafeRight, weights.strafeRight, false, 'strafeRight');
+    apply(turnLeft, weights.turnLeft, true, 'turnLeft');
+    apply(turnRight, weights.turnRight, true, 'turnRight');
+    apply(jumpUp, weights.jump_up, true, 'jump_up');
+    apply(runJump, weights.run_jump, true, 'run_jump');
+    apply(jump, weights.jump, true, 'jump');
+    apply(fall, weights.fall, false, 'fall');
+    apply(land, weights.land, true, 'land');
+    apply(hangWall, weights.hang_wall, true, 'hang_wall');
+    apply(climbUp, weights.climb_up, true, 'climb_up');
+    apply(slide, weights.slide, true, 'slide');
+    apply(attack, weights.attack, true, 'attack');
+    apply(hit, weights.hit, true, 'hit');
+
+    this.animStates.set(actorId, state);
+    if (local) {
+      if (['land', 'attack'].includes(state.mode) && state.timer > 0) {
+        this.localMovementLock = state.mode as 'land' | 'attack';
+        this.localMovementLockTimer = state.timer;
+      } else {
+        this.localMovementLock = null;
+        this.localMovementLockTimer = 0;
+      }
+      this.localAnimState = state.mode;
+      const active = actions[state.mode] ?? actions.idle;
+      if (active) {
+        this.localAnimTime = active.time ?? 0;
+      }
+    }
+
+    if (!actorId.startsWith('crowd_')) {
+      const neck = actor.vrm.humanoid.getRawBoneNode('neck');
+      const head = actor.vrm.humanoid.getRawBoneNode('head');
+      const targetLook = local
+        ? { yaw: -this.localLookYaw, pitch: -this.localLookPitch }
+        : this.remoteLatestLook.get(actorId)
+          ? {
+              yaw: -(this.remoteLatestLook.get(actorId)!.yaw),
+              pitch: -(this.remoteLatestLook.get(actorId)!.pitch),
+            }
+          : { yaw: 0, pitch: 0 };
+      const smooth = 1 - Math.exp(-delta * 8);
+      state.lookYaw = THREE.MathUtils.lerp(state.lookYaw, targetLook.yaw, smooth);
+      state.lookPitch = THREE.MathUtils.lerp(state.lookPitch, targetLook.pitch, smooth);
+      this.animStates.set(actorId, state);
+      if (neck) {
+        neck.rotation.y += state.lookYaw * 0.25;
+        neck.rotation.x += state.lookPitch * 0.25;
+      }
+      if (head) {
+        head.rotation.y += state.lookYaw * 0.45;
+        head.rotation.x += state.lookPitch * 0.45;
+      }
+
+      const leftFoot = actor.vrm.humanoid.getRawBoneNode('leftFoot');
+      const rightFoot = actor.vrm.humanoid.getRawBoneNode('rightFoot');
+      if (leftFoot && rightFoot) {
+        if (state.leftFootY === undefined) state.leftFootY = leftFoot.position.y;
+        if (state.rightFootY === undefined) state.rightFootY = rightFoot.position.y;
+        const applyFoot = (foot: THREE.Object3D, baseY: number) => {
+          foot.getWorldPosition(this.tempVec);
+          const targetY = this.sampleGroundHeight(this.tempVec.x, this.tempVec.z) + this.playerConfig.ikOffset;
+          const deltaY = THREE.MathUtils.clamp(targetY - this.tempVec.y, -0.12, 0.25);
+          foot.position.y = baseY + deltaY;
+        };
+        applyFoot(leftFoot, state.leftFootY);
+        applyFoot(rightFoot, state.rightFootY);
+      }
     }
   }
 
@@ -1492,7 +2005,7 @@ export class GameApp {
     const rightHand = vrm.humanoid.getRawBoneNode('rightHand');
 
     if (!state.baseRot && Object.keys(actor.actions).length > 0) {
-      const capture = (bone: THREE.Object3D | null, key: string) => {
+      const capture = (bone: THREE.Object3D | null | undefined, key: string) => {
         if (!bone) return;
         state.baseRot![key] = { x: bone.rotation.x, y: bone.rotation.y, z: bone.rotation.z };
       };

@@ -7,3 +7,9 @@ services:
     ports:
       - "5175:8080"
       - "2567:2567"
+    environment:
+      - ANIMATIONS_DIR=/app/animations
+      - CONFIG_DIR=/app/config
+    volumes:
+      - ./client/public/animations:/app/animations
+      - ./client/public/config:/app/config

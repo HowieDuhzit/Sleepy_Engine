@@ -1,11 +1,20 @@
 {
   "files": [
-    "idle.fbx",
-    "jump.fbx",
-    "left strafe walking.fbx",
-    "left turn 90.fbx",
-    "right strafe walking.fbx",
-    "right turn 90.fbx",
-    "walking.fbx"
+    "attack.json",
+    "climb_up.json",
+    "fall.json",
+    "hang_wall.json",
+    "hit.json",
+    "idle.json",
+    "jump.json",
+    "jump_up.json",
+    "land.json",
+    "none.json",
+    "run.json",
+    "run_jump.json",
+    "slide.json",
+    "strafe.json",
+    "turn.json",
+    "walk.json"
   ]
 }

@@ -3,10 +3,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { retargetMixamoClip } from '../game/retarget';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
-import { buildAnimationClipFromData, type BoneFrame, type ClipData } from '../game/clip';
+import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
 
 const MAX_DURATION = 10;
 const SAMPLE_RATE = 30;
@@ -23,11 +24,18 @@ type RestPose = {
   quat: THREE.Quaternion;
 };
 
+type Vec3 = { x: number; y: number; z: number };
+
 type RagdollBone = {
   name: string;
   bone: THREE.Object3D;
   body: RAPIER.RigidBody;
   parent?: RagdollBone;
+  baseLength?: number;
+  axis?: THREE.Vector3;
+  basePos?: THREE.Vector3;
+  baseRot?: THREE.Quaternion;
+  boneWorldQuat?: THREE.Quaternion;
 };
 
 export class EditorApp {
@@ -39,6 +47,7 @@ export class EditorApp {
   private viewport: HTMLDivElement | null = null;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
+  private viewportObserver: ResizeObserver | null = null;
   private boneMarkers: Map<string, THREE.Mesh> = new Map();
   private boneScale = 0.08;
   private clipKeyMap: Map<string, THREE.Object3D> = new Map();
@@ -84,8 +93,69 @@ export class EditorApp {
   private boneGizmoGroup: THREE.Group | null = null;
   private boneGizmos: Map<string, { joint: THREE.Mesh; stick: THREE.Mesh; parent?: THREE.Object3D }> =
     new Map();
+  private ragdollTransform: TransformControls | null = null;
+  private selectedRagdoll: string | null = null;
+  private ragdollHandles: THREE.Group | null = null;
+  private ragdollHandleActive: 'start' | 'end' | null = null;
+  private ragdollHandleRay = new THREE.Ray();
+  private ragdollHandleLine = new THREE.Line3();
+  private ragdollHandleTemp = new THREE.Vector3();
+  private ragdollHandleTemp2 = new THREE.Vector3();
+
+  private closestPointOnLineToRay(line: THREE.Line3, ray: THREE.Ray, target: THREE.Vector3) {
+    const p1 = line.start;
+    const p2 = line.end;
+    const p3 = ray.origin;
+    const p4 = this.ragdollHandleTemp2.copy(ray.origin).add(ray.direction);
+    const p13 = this.ragdollHandleTemp.copy(p1).sub(p3);
+    const p43 = this.ragdollHandleTemp2.copy(p4).sub(p3);
+    const p21 = new THREE.Vector3().copy(p2).sub(p1);
+    const d1343 = p13.dot(p43);
+    const d4321 = p43.dot(p21);
+    const d1321 = p13.dot(p21);
+    const d4343 = p43.dot(p43);
+    const d2121 = p21.dot(p21);
+    const denom = d2121 * d4343 - d4321 * d4321;
+    let mua = 0;
+    if (Math.abs(denom) > 1e-6) {
+      mua = (d1343 * d4321 - d1321 * d4343) / denom;
+    }
+    target.copy(p1).addScaledVector(p21, mua);
+    return target;
+  }
   private boneVisualsVisible = true;
   private overrideMode = false;
+  private currentTab: 'animation' | 'player' = 'animation';
+  private readonly ragdollDefs: { name: string; parent?: string }[] = [
+    { name: 'hips' },
+    { name: 'spine', parent: 'hips' },
+    { name: 'chest', parent: 'spine' },
+    { name: 'upperChest', parent: 'chest' },
+    { name: 'neck', parent: 'upperChest' },
+    { name: 'head', parent: 'neck' },
+    { name: 'leftUpperArm', parent: 'upperChest' },
+    { name: 'leftLowerArm', parent: 'leftUpperArm' },
+    { name: 'leftHand', parent: 'leftLowerArm' },
+    { name: 'rightUpperArm', parent: 'upperChest' },
+    { name: 'rightLowerArm', parent: 'rightUpperArm' },
+    { name: 'rightHand', parent: 'rightLowerArm' },
+    { name: 'leftUpperLeg', parent: 'hips' },
+    { name: 'leftLowerLeg', parent: 'leftUpperLeg' },
+    { name: 'leftFoot', parent: 'leftLowerLeg' },
+    { name: 'rightUpperLeg', parent: 'hips' },
+    { name: 'rightLowerLeg', parent: 'rightUpperLeg' },
+    { name: 'rightFoot', parent: 'rightLowerLeg' },
+  ];
+  private playerConfig = {
+    ikOffset: 0.02,
+    capsuleRadiusScale: 1,
+    capsuleHeightScale: 1,
+    capsuleYOffset: 0,
+    ragdollRig: {} as Record<
+      string,
+      { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
+    >,
+  };
 
   constructor(container: HTMLElement | null) {
     if (!container) throw new Error('Missing #app container');
@@ -112,16 +182,36 @@ export class EditorApp {
     this.controls.minDistance = 1.4;
     this.controls.maxDistance = 20;
 
+    this.ragdollTransform = new TransformControls(this.camera, this.renderer.domElement);
+    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+    this.ragdollTransform.setMode('translate');
+    this.ragdollTransform.addEventListener('dragging-changed', (event) => {
+      if (this.controls) this.controls.enabled = !event.value;
+    });
+    this.scene.add(this.ragdollTransform as unknown as THREE.Object3D);
+
     this.hud = this.createHud();
     this.viewport?.appendChild(this.renderer.domElement);
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.display = 'block';
     this.container.appendChild(this.hud);
     this.resizeRenderer();
     this.renderer.domElement.addEventListener('pointerdown', this.handleViewportPick);
+    window.addEventListener('pointermove', this.handleRagdollDrag);
+    window.addEventListener('pointerup', this.handleRagdollDragEnd);
     this.viewport?.addEventListener('dragover', this.handleDragOver);
     this.viewport?.addEventListener('drop', this.handleDrop);
     this.viewport?.addEventListener('dragleave', this.handleDragLeave);
 
     window.addEventListener('resize', this.handleResize);
+    if (this.viewport) {
+      this.viewportObserver = new ResizeObserver(() => {
+        this.resizeRenderer();
+        this.fitCameraToVrm();
+      });
+      this.viewportObserver.observe(this.viewport);
+    }
     this.loadVrm();
   }
 
@@ -138,6 +228,13 @@ export class EditorApp {
     }
     window.removeEventListener('resize', this.handleResize);
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
+    window.removeEventListener('pointermove', this.handleRagdollDrag);
+    window.removeEventListener('pointerup', this.handleRagdollDragEnd);
+    if (this.viewportObserver && this.viewport) {
+      this.viewportObserver.unobserve(this.viewport);
+      this.viewportObserver.disconnect();
+      this.viewportObserver = null;
+    }
     this.viewport?.removeEventListener('dragover', this.handleDragOver);
     this.viewport?.removeEventListener('drop', this.handleDrop);
     this.viewport?.removeEventListener('dragleave', this.handleDragLeave);
@@ -150,6 +247,7 @@ export class EditorApp {
     this.renderer.setPixelRatio(this.dpr);
     this.resizeRenderer();
     this.resizeTimeline();
+    this.fitCameraToVrm();
   };
 
   private tick = () => {
@@ -187,44 +285,97 @@ export class EditorApp {
     const hud = document.createElement('div');
     hud.className = 'editor-ui';
     hud.innerHTML = [
+      '<div class="editor-header">',
+      '<div class="editor-title">Sleepy Engine Editor</div>',
+      '<div class="editor-tabs">',
+      '<button class="editor-tab active" data-tab="animation">Animation</button>',
+      '<button class="editor-tab" data-tab="player">Player</button>',
+      '</div>',
+      '</div>',
       '<div class="editor-shell">',
-      '<div class="editor-left">',
+      '<div class="editor-left" data-tab-panel="animation" style="display:none;"></div>',
+      '<div class="editor-left" data-tab-panel="player" style="display:none;">',
       '<div class="panel">',
-      '<div class="panel-title">Rig</div>',
+      '<div class="panel-title">Player Controller</div>',
+      '<label class="field"><span>IK Offset</span><input data-ik-offset type="number" step="0.01" /></label>',
+      '<label class="field"><span>Capsule Radius Scale</span><input data-cap-radius type="number" step="0.05" /></label>',
+      '<label class="field"><span>Capsule Height Scale</span><input data-cap-height type="number" step="0.05" /></label>',
+      '<label class="field"><span>Capsule Y Offset</span><input data-cap-y type="number" step="0.01" /></label>',
       '<div class="panel-actions">',
-      '<button data-bones-toggle>Hide Bones</button>',
-      '<button data-reset>Reset Pose</button>',
-      '<button data-clear>Clear Clip</button>',
+      '<button data-player-load>Load</button>',
+      '<button data-player-save>Save</button>',
       '</div>',
+      '<div class="clip-status" data-player-status></div>',
       '</div>',
       '<div class="panel">',
-      '<div class="panel-title">Mixamo</div>',
-      '<label class="field"><span>FBX</span><input data-mixamo-file type="file" accept=".fbx" /></label>',
+      '<div class="panel-title">Ragdoll Rig</div>',
+      '<label class="field"><span>Show Ragdoll</span><input data-rig-show type="checkbox" /></label>',
+      '<label class="field"><span>Bone</span><select data-rig-bone></select></label>',
+      '<label class="field"><span>Gizmo Mode</span><select data-rig-mode><option value="translate">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option></select></label>',
+      '<label class="field"><span>Radius Scale</span><input data-rig-radius type="range" min="0.3" max="2.0" step="0.05" value="1" /></label>',
+      '<label class="field"><span>Length Scale</span><input data-rig-length type="range" min="0.3" max="2.0" step="0.05" value="1" /></label>',
+      '<label class="field"><span>Offset X</span><input data-rig-offx type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Offset Y</span><input data-rig-offy type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Offset Z</span><input data-rig-offz type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Rot X</span><input data-rig-rotx type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Rot Y</span><input data-rig-roty type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Rot Z</span><input data-rig-rotz type="number" step="0.01" value="0" /></label>',
+      '<label class="field"><span>Swing Limit</span><input data-rig-swing type="number" step="1" value="45" /></label>',
+      '<label class="field"><span>Twist Limit</span><input data-rig-twist type="number" step="1" value="35" /></label>',
+      '<div class="panel-actions">',
+      '<button data-rig-apply>Apply Rig</button>',
+      '<button data-rig-reset>Reset Rig</button>',
+      '</div>',
+      '</div>',
+      '</div>',
+      '<div class="editor-view" data-viewport>',
+      '<div class="viewport-overlay">',
+      '<div class="overlay-stack">',
+      '<div class="overlay-group">',
+      '<button class="icon-btn" data-bones-toggle title="Toggle Bones">B</button>',
+      '<button class="icon-btn" data-reset title="Reset Pose">R</button>',
+      '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
+      '</div>',
+      '<div class="overlay-group">',
+      '<button class="icon-btn" data-ragdoll title="Ragdoll">RG</button>',
+      '<button class="icon-btn" data-ragdoll-visual title="Ragdoll Visual">RV</button>',
+      '<button class="icon-btn" data-ragdoll-reset title="Ragdoll Reset">RR</button>',
+      '<button class="icon-btn" data-ragdoll-record title="Ragdoll Record">REC</button>',
+      '<button class="icon-btn" data-ragdoll-stop title="Ragdoll Stop">STP</button>',
+      '</div>',
+      '</div>',
+      '<div class="overlay-bottom-left">',
+      '<div class="overlay-tabs">',
+      '<button class="overlay-tab active" data-overlay-tab="mixamo">Mixamo</button>',
+      '<button class="overlay-tab" data-overlay-tab="clips">Clips</button>',
+      '</div>',
+      '<div class="overlay-panel" data-overlay-panel="mixamo">',
+      '<label class="field"><span>FBX</span><input data-mixamo-file type="file" accept=".fbx" multiple /></label>',
       '<label class="field"><span>Clip</span><select data-mixamo-clip></select></label>',
       '<div class="panel-actions">',
       '<button data-mixamo-preview>Preview</button>',
       '<button data-mixamo-bake>Bake</button>',
       '<button data-mixamo-stop>Stop</button>',
       '</div>',
+      '<div class="clip-status" data-mixamo-status>Mixamo: none</div>',
       '</div>',
-      '<div class="panel">',
-      '<div class="panel-title">Ragdoll</div>',
-      '<div class="panel-actions">',
-      '<button data-ragdoll>Enable</button>',
-      '<button data-ragdoll-visual>Visualize</button>',
-      '<button data-ragdoll-reset>Reset</button>',
-      '<button data-ragdoll-record>Record</button>',
-      '<button data-ragdoll-stop>Stop</button>',
-      '</div>',
-      '</div>',
-      '<div class="panel">',
+      '<div class="overlay-panel" data-overlay-panel="clips" style="display:none;">',
+      '<div class="panel" data-clip-panel>',
       '<div class="panel-title">Clip Data</div>',
+      '<label class="field"><span>Name</span><input data-clip-name type="text" placeholder="idle" /></label>',
+      '<label class="field"><span>File</span><select data-clip-files></select></label>',
+      '<div class="panel-actions">',
+      '<button data-save>Save</button>',
+      '<button data-load>Load</button>',
+      '<button data-refresh>Refresh</button>',
+      '</div>',
+      '<div class="clip-status" data-clip-status></div>',
       '<button data-download>Download JSON</button>',
-      '<textarea data-json rows="10"></textarea>',
+      '<textarea data-json rows="8"></textarea>',
       '</div>',
       '</div>',
-      '<div class="editor-view" data-viewport>',
-      '<div class="viewport-label">Viewport</div>',
+      '</div>',
+      '</div>',
       '<div class="axis-widget" aria-hidden="true">',
       '<canvas data-axis width="80" height="80"></canvas>',
       '</div>',
@@ -234,14 +385,14 @@ export class EditorApp {
       '<label class="field"><span>Rot Y</span><input data-rot-y type="range" min="-3.14" max="3.14" step="0.01" /></label>',
       '<label class="field"><span>Rot Z</span><input data-rot-z type="range" min="-3.14" max="3.14" step="0.01" /></label>',
       '<div class="bone-overlay-pos" data-pos-group>',
-      '<label class="field"><span>Pos X</span><input data-pos-x type="number" step="0.01" /></label>',
-      '<label class="field"><span>Pos Y</span><input data-pos-y type="number" step="0.01" /></label>',
-      '<label class="field"><span>Pos Z</span><input data-pos-z type="number" step="0.01" /></label>',
+      '<label class="field"><span>Pos X</span><input data-pos-x type="range" min="-2" max="2" step="0.01" /></label>',
+      '<label class="field"><span>Pos Y</span><input data-pos-y type="range" min="-2" max="2" step="0.01" /></label>',
+      '<label class="field"><span>Pos Z</span><input data-pos-z type="range" min="-2" max="2" step="0.01" /></label>',
       '</div>',
       '</div>',
       '</div>',
       '</div>',
-      '<div class="editor-bottom">',
+      '<div class="editor-bottom" data-tab-panel="animation">',
       '<div class="timeline-labels">',
       '<div class="timeline-slider">',
       '<input data-time type="range" min="0" max="10" step="0.01" />',
@@ -260,7 +411,7 @@ export class EditorApp {
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
       '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
       '</div>',
-      '<div class="timeline-grid">',
+      '<div class="timeline-grid timeline-midi">',
       '<div class="timeline-header" data-timeline-header></div>',
       '<div class="timeline-canvas-wrap" data-timeline-wrap>',
       '<canvas data-timeline height="64"></canvas>',
@@ -268,6 +419,70 @@ export class EditorApp {
       '</div>',
       '</div>',
     ].join('');
+
+    const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
+    const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
+    const overlayTabs = Array.from(hud.querySelectorAll('[data-overlay-tab]')) as HTMLButtonElement[];
+    const overlayPanels = Array.from(hud.querySelectorAll('[data-overlay-panel]')) as HTMLDivElement[];
+    const panels = Array.from(hud.querySelectorAll('.panel')) as HTMLDivElement[];
+    for (const panel of panels) {
+      const title = panel.querySelector('.panel-title') as HTMLDivElement | null;
+      if (!title) continue;
+      const body = document.createElement('div');
+      body.className = 'panel-body';
+      const nodes = Array.from(panel.childNodes);
+      const startIndex = nodes.indexOf(title);
+      for (let i = startIndex + 1; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        if (!node) continue;
+        body.appendChild(node);
+      }
+      panel.appendChild(body);
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'panel-toggle';
+      toggle.textContent = '–';
+      title.appendChild(toggle);
+      title.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).classList.contains('panel-toggle')) {
+          // allow button to trigger too
+        }
+        const collapsed = panel.classList.toggle('collapsed');
+        toggle.textContent = collapsed ? '+' : '–';
+      });
+    }
+    tabButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const tab = button.dataset.tab as 'animation' | 'player';
+        this.currentTab = tab;
+        hud.classList.toggle('mode-animation', tab === 'animation');
+        hud.classList.toggle('mode-player', tab === 'player');
+        for (const btn of tabButtons) {
+          btn.classList.toggle('active', btn.dataset.tab === tab);
+        }
+        for (const panel of tabPanels) {
+          const show = panel.dataset.tabPanel === tab;
+          panel.style.display = show ? '' : 'none';
+        }
+        this.resizeRenderer();
+        this.fitCameraToVrm();
+      });
+    });
+
+    overlayTabs.forEach((button) => {
+      button.addEventListener('click', () => {
+        const tab = button.dataset.overlayTab;
+        if (!tab) return;
+        for (const btn of overlayTabs) {
+          btn.classList.toggle('active', btn.dataset.overlayTab === tab);
+        }
+        for (const panel of overlayPanels) {
+          panel.style.display = panel.dataset.overlayPanel === tab ? '' : 'none';
+        }
+      });
+    });
+
+    hud.classList.add('mode-animation');
 
     const timeInput = hud.querySelector('[data-time]') as HTMLInputElement;
     const durationInput = hud.querySelector('[data-duration]') as HTMLInputElement;
@@ -278,6 +493,13 @@ export class EditorApp {
     const bonesToggleBtn = hud.querySelector('[data-bones-toggle]') as HTMLButtonElement;
     const resetBtn = hud.querySelector('[data-reset]') as HTMLButtonElement;
     const clearBtn = hud.querySelector('[data-clear]') as HTMLButtonElement;
+    const clipPanel = hud.querySelector('[data-clip-panel]') as HTMLDivElement;
+    const saveBtn = hud.querySelector('[data-save]') as HTMLButtonElement;
+    const loadBtn = hud.querySelector('[data-load]') as HTMLButtonElement;
+    const refreshBtn = hud.querySelector('[data-refresh]') as HTMLButtonElement;
+    const clipNameInput = hud.querySelector('[data-clip-name]') as HTMLInputElement;
+    const clipSelect = hud.querySelector('[data-clip-files]') as HTMLSelectElement;
+    const clipStatus = hud.querySelector('[data-clip-status]') as HTMLDivElement;
     const downloadBtn = hud.querySelector('[data-download]') as HTMLButtonElement;
     const exportBtn = hud.querySelector('[data-export]') as HTMLButtonElement | null;
     const jsonBox = hud.querySelector('[data-json]') as HTMLTextAreaElement;
@@ -299,6 +521,28 @@ export class EditorApp {
     const stepBack = hud.querySelector('[data-step-back]') as HTMLButtonElement;
     const stepForward = hud.querySelector('[data-step-forward]') as HTMLButtonElement;
     const overrideBtn = hud.querySelector('[data-override]') as HTMLButtonElement;
+    const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
+    const ikOffsetInput = hud.querySelector('[data-ik-offset]') as HTMLInputElement;
+    const capRadiusInput = hud.querySelector('[data-cap-radius]') as HTMLInputElement;
+    const capHeightInput = hud.querySelector('[data-cap-height]') as HTMLInputElement;
+    const capYOffsetInput = hud.querySelector('[data-cap-y]') as HTMLInputElement;
+    const rigShowInput = hud.querySelector('[data-rig-show]') as HTMLInputElement;
+    const rigBoneSelect = hud.querySelector('[data-rig-bone]') as HTMLSelectElement;
+    const rigModeSelect = hud.querySelector('[data-rig-mode]') as HTMLSelectElement;
+    const rigRadiusInput = hud.querySelector('[data-rig-radius]') as HTMLInputElement;
+    const rigLengthInput = hud.querySelector('[data-rig-length]') as HTMLInputElement;
+    const rigOffX = hud.querySelector('[data-rig-offx]') as HTMLInputElement;
+    const rigOffY = hud.querySelector('[data-rig-offy]') as HTMLInputElement;
+    const rigOffZ = hud.querySelector('[data-rig-offz]') as HTMLInputElement;
+    const rigRotX = hud.querySelector('[data-rig-rotx]') as HTMLInputElement;
+    const rigRotY = hud.querySelector('[data-rig-roty]') as HTMLInputElement;
+    const rigRotZ = hud.querySelector('[data-rig-rotz]') as HTMLInputElement;
+    const rigSwing = hud.querySelector('[data-rig-swing]') as HTMLInputElement;
+    const rigTwist = hud.querySelector('[data-rig-twist]') as HTMLInputElement;
+    const rigApplyButton = hud.querySelector('[data-rig-apply]') as HTMLButtonElement;
+    const rigResetButton = hud.querySelector('[data-rig-reset]') as HTMLButtonElement;
+    const playerLoadButton = hud.querySelector('[data-player-load]') as HTMLButtonElement;
+    const playerSaveButton = hud.querySelector('[data-player-save]') as HTMLButtonElement;
     this.timelineHeader = timelineHeader;
     this.timelineWrap = timelineWrap;
     const viewport = hud.querySelector('[data-viewport]') as HTMLDivElement;
@@ -313,8 +557,236 @@ export class EditorApp {
     const posX = hud.querySelector('[data-pos-x]') as HTMLInputElement;
     const posY = hud.querySelector('[data-pos-y]') as HTMLInputElement;
     const posZ = hud.querySelector('[data-pos-z]') as HTMLInputElement;
+    this.time = 0;
+    timeInput.value = '0';
     this.resizeTimeline();
     this.drawTimeline();
+
+    const setPlayerInputs = () => {
+      if (!ikOffsetInput) return;
+      ikOffsetInput.value = this.playerConfig.ikOffset.toFixed(2);
+      capRadiusInput.value = this.playerConfig.capsuleRadiusScale.toFixed(2);
+      capHeightInput.value = this.playerConfig.capsuleHeightScale.toFixed(2);
+      capYOffsetInput.value = this.playerConfig.capsuleYOffset.toFixed(2);
+      if (rigBoneSelect && rigBoneSelect.options.length === 0) {
+        for (const def of this.ragdollDefs) {
+          const opt = document.createElement('option');
+          opt.value = def.name;
+          opt.textContent = def.name;
+          rigBoneSelect.appendChild(opt);
+        }
+      }
+      if (rigShowInput) rigShowInput.checked = this.ragdollVisible || this.ragdollEnabled;
+      if (rigBoneSelect) {
+        const name = rigBoneSelect.value || this.ragdollDefs[0]?.name || '';
+        if (!name) return;
+        rigBoneSelect.value = name;
+        const cfg = this.playerConfig.ragdollRig[name] ?? {
+          radiusScale: 1,
+          lengthScale: 1,
+          offset: { x: 0, y: 0, z: 0 },
+          rot: { x: 0, y: 0, z: 0 },
+          swingLimit: 45,
+          twistLimit: 35,
+        };
+        rigRadiusInput.value = String(cfg.radiusScale ?? 1);
+        rigLengthInput.value = String(cfg.lengthScale ?? 1);
+        rigOffX.value = String(cfg.offset?.x ?? 0);
+        rigOffY.value = String(cfg.offset?.y ?? 0);
+        rigOffZ.value = String(cfg.offset?.z ?? 0);
+        rigRotX.value = String(cfg.rot?.x ?? 0);
+        rigRotY.value = String(cfg.rot?.y ?? 0);
+        rigRotZ.value = String(cfg.rot?.z ?? 0);
+        rigSwing.value = String(cfg.swingLimit ?? 45);
+        rigTwist.value = String(cfg.twistLimit ?? 35);
+      }
+    };
+
+    const readPlayerInputs = () => {
+      this.playerConfig.ikOffset = Number(ikOffsetInput.value) || 0;
+      this.playerConfig.capsuleRadiusScale = Number(capRadiusInput.value) || 1;
+      this.playerConfig.capsuleHeightScale = Number(capHeightInput.value) || 1;
+      this.playerConfig.capsuleYOffset = Number(capYOffsetInput.value) || 0;
+      if (rigBoneSelect) {
+        const name = rigBoneSelect.value;
+        if (name) {
+          this.playerConfig.ragdollRig[name] = {
+            radiusScale: Number(rigRadiusInput.value) || 1,
+            lengthScale: Number(rigLengthInput.value) || 1,
+            offset: {
+              x: Number(rigOffX.value) || 0,
+              y: Number(rigOffY.value) || 0,
+              z: Number(rigOffZ.value) || 0,
+            },
+            rot: {
+              x: Number(rigRotX.value) || 0,
+              y: Number(rigRotY.value) || 0,
+              z: Number(rigRotZ.value) || 0,
+            },
+            swingLimit: Number(rigSwing.value) || 0,
+            twistLimit: Number(rigTwist.value) || 0,
+          };
+        }
+      }
+    };
+
+    playerLoadButton?.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as Partial<typeof this.playerConfig>;
+        this.playerConfig = { ...this.playerConfig, ...data };
+        setPlayerInputs();
+        if (playerStatus) playerStatus.textContent = 'Loaded player config.';
+      } catch (error) {
+        if (playerStatus) playerStatus.textContent = `Load failed: ${String(error)}`;
+      }
+    });
+
+    playerSaveButton?.addEventListener('click', async () => {
+      try {
+        readPlayerInputs();
+        const res = await fetch('/api/player-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.playerConfig),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        if (playerStatus) playerStatus.textContent = 'Saved player config.';
+      } catch (error) {
+        if (playerStatus) playerStatus.textContent = `Save failed: ${String(error)}`;
+      }
+    });
+
+    setPlayerInputs();
+    rigBoneSelect?.addEventListener('change', () => {
+      const name = rigBoneSelect.value;
+      const cfg = this.playerConfig.ragdollRig[name] ?? {
+        radiusScale: 1,
+        lengthScale: 1,
+        offset: { x: 0, y: 0, z: 0 },
+        rot: { x: 0, y: 0, z: 0 },
+        swingLimit: 45,
+        twistLimit: 35,
+      };
+      rigRadiusInput.value = String(cfg.radiusScale ?? 1);
+      rigLengthInput.value = String(cfg.lengthScale ?? 1);
+      rigOffX.value = String(cfg.offset?.x ?? 0);
+      rigOffY.value = String(cfg.offset?.y ?? 0);
+      rigOffZ.value = String(cfg.offset?.z ?? 0);
+      rigRotX.value = String(cfg.rot?.x ?? 0);
+      rigRotY.value = String(cfg.rot?.y ?? 0);
+      rigRotZ.value = String(cfg.rot?.z ?? 0);
+      rigSwing.value = String(cfg.swingLimit ?? 45);
+      rigTwist.value = String(cfg.twistLimit ?? 35);
+      this.selectRagdoll(name);
+    });
+    const rebuildRagdoll = () => {
+      if (this.ragdollEnabled || this.ragdollVisible) {
+        this.buildRagdoll();
+        for (const mesh of this.ragdollDebugMeshes) {
+          mesh.visible = this.ragdollEnabled || this.ragdollVisible;
+        }
+        if (this.selectedRagdoll) this.selectRagdoll(this.selectedRagdoll);
+      }
+    };
+    rigRadiusInput?.addEventListener('input', () => {
+      const name = rigBoneSelect.value;
+      if (!name) return;
+      this.playerConfig.ragdollRig[name] = {
+        radiusScale: Number(rigRadiusInput.value) || 1,
+        lengthScale: Number(rigLengthInput.value) || 1,
+        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
+        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        swingLimit: Number(rigSwing.value) || 0,
+        twistLimit: Number(rigTwist.value) || 0,
+      };
+      rebuildRagdoll();
+    });
+    rigLengthInput?.addEventListener('input', () => {
+      const name = rigBoneSelect.value;
+      if (!name) return;
+      this.playerConfig.ragdollRig[name] = {
+        radiusScale: Number(rigRadiusInput.value) || 1,
+        lengthScale: Number(rigLengthInput.value) || 1,
+        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
+        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        swingLimit: Number(rigSwing.value) || 0,
+        twistLimit: Number(rigTwist.value) || 0,
+      };
+      rebuildRagdoll();
+    });
+    const applyRigField = () => {
+      const name = rigBoneSelect.value;
+      if (!name) return;
+      this.playerConfig.ragdollRig[name] = {
+        radiusScale: Number(rigRadiusInput.value) || 1,
+        lengthScale: Number(rigLengthInput.value) || 1,
+        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
+        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        swingLimit: Number(rigSwing.value) || 0,
+        twistLimit: Number(rigTwist.value) || 0,
+      };
+      rebuildRagdoll();
+    };
+    rigOffX?.addEventListener('input', applyRigField);
+    rigOffY?.addEventListener('input', applyRigField);
+    rigOffZ?.addEventListener('input', applyRigField);
+    rigRotX?.addEventListener('input', applyRigField);
+    rigRotY?.addEventListener('input', applyRigField);
+    rigRotZ?.addEventListener('input', applyRigField);
+    rigSwing?.addEventListener('input', applyRigField);
+    rigTwist?.addEventListener('input', applyRigField);
+    rigModeSelect?.addEventListener('change', () => {
+      if (this.ragdollTransform) {
+        this.ragdollTransform.setMode(rigModeSelect.value as 'translate' | 'rotate' | 'scale');
+      }
+    });
+    rigShowInput?.addEventListener('change', () => {
+      if (rigShowInput.checked && !this.ragdollVisible) {
+        void this.toggleRagdollVisual(ragdollStatus);
+      } else if (!rigShowInput.checked && this.ragdollVisible) {
+        void this.toggleRagdollVisual(ragdollStatus);
+      }
+    });
+    rigApplyButton?.addEventListener('click', () => {
+      readPlayerInputs();
+      rebuildRagdoll();
+    });
+    rigResetButton?.addEventListener('click', () => {
+      this.playerConfig.ragdollRig = {};
+      setPlayerInputs();
+      rebuildRagdoll();
+    });
+
+    this.ragdollTransform?.addEventListener('objectChange', () => {
+      if (!this.selectedRagdoll || !this.ragdollTransform) return;
+      const rag = this.ragdollBones.get(this.selectedRagdoll);
+      if (!rag || !rag.basePos || !rag.baseRot || !rag.boneWorldQuat) return;
+      const mesh = this.ragdollTransform.object;
+      if (!mesh) return;
+      const offsetWorld = mesh.position.clone().sub(rag.basePos);
+      const invBone = rag.boneWorldQuat.clone().invert();
+      const offsetLocal = offsetWorld.applyQuaternion(invBone);
+      const rotOffset = rag.baseRot.clone().invert().multiply(mesh.quaternion);
+      const euler = new THREE.Euler().setFromQuaternion(rotOffset, 'XYZ');
+      const cfg = this.playerConfig.ragdollRig[this.selectedRagdoll] ?? { radiusScale: 1, lengthScale: 1 };
+      cfg.offset = { x: offsetLocal.x, y: offsetLocal.y, z: offsetLocal.z };
+      cfg.rot = { x: euler.x, y: euler.y, z: euler.z };
+      this.playerConfig.ragdollRig[this.selectedRagdoll] = cfg;
+      setPlayerInputs();
+    });
+    void (async () => {
+      try {
+        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = (await res.json()) as Partial<typeof this.playerConfig>;
+        this.playerConfig = { ...this.playerConfig, ...data };
+        setPlayerInputs();
+      } catch {
+        // ignore
+      }
+    })();
 
     const applyRot = () => {
       if (!this.selectedBone) return;
@@ -343,19 +815,9 @@ export class EditorApp {
       const rect = this.timeline.getBoundingClientRect();
       const scrollX = wrap ? wrap.scrollLeft : 0;
       const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left)) + scrollX;
-      const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
-      const rowHeight = 20;
-      if (y <= rowHeight) {
-        const t = (x / this.timeline.width) * this.clip.duration;
-        this.time = t;
-        this.applyClipAtTime(t);
-        this.updateTimeline();
-        return;
-      }
-      const boneIndex = Math.floor((y - rowHeight) / rowHeight);
       const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
       const frameIndex = Math.min(totalFrames - 1, Math.floor((x / this.timeline.width) * totalFrames));
-      const bone = this.bones[boneIndex];
+      const bone = this.selectedBone ?? this.bones[0];
       if (!bone) return;
       this.time = frameIndex / this.fps;
       this.toggleKeyframe(bone, this.time);
@@ -444,8 +906,110 @@ export class EditorApp {
       this.drawTimeline();
     });
 
+    const setClipStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
+      clipStatus.textContent = text;
+      clipStatus.dataset.tone = tone;
+    };
+
+    const refreshEngineClips = async () => {
+      try {
+        const res = await fetch('/api/animations', { cache: 'no-store' });
+        if (!res.ok) {
+          setClipStatus(`List failed (${res.status})`, 'warn');
+          return;
+        }
+        const data = (await res.json()) as { files?: string[] };
+        const files = (data.files ?? []).filter((name) => name.toLowerCase().endsWith('.json'));
+        clipSelect.innerHTML = '';
+        for (const file of files) {
+          const opt = document.createElement('option');
+          opt.value = file;
+          opt.textContent = file;
+          clipSelect.appendChild(opt);
+        }
+        setClipStatus(`Files: ${files.length}`, 'ok');
+      } catch (err) {
+        setClipStatus(`List failed: ${String(err)}`, 'warn');
+      }
+    };
+
+    saveBtn.addEventListener('click', async () => {
+      const name = clipNameInput.value.trim() || this.retargetedName || 'clip';
+      try {
+        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, clip: this.clip }),
+        });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            const body = await res.json();
+            detail = body?.detail ? `: ${body.detail}` : '';
+          } catch {
+            // ignore
+          }
+          setClipStatus(`Save failed (${res.status})${detail}`, 'warn');
+          return;
+        }
+        setClipStatus(`Saved ${name}.json`, 'ok');
+        await refreshEngineClips();
+      } catch (err) {
+        setClipStatus(`Save failed: ${String(err)}`, 'warn');
+      }
+    });
+
+    const loadClip = async (name: string) => {
+      if (!name) {
+        setClipStatus('Load failed: no file selected', 'warn');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            const body = await res.json();
+            detail = body?.detail ? `: ${body.detail}` : '';
+          } catch {
+            // ignore
+          }
+          setClipStatus(`Load failed (${res.status})${detail}`, 'warn');
+          return;
+        }
+        const payload = (await res.json()) as unknown;
+        const data = parseClipPayload(payload);
+        if (!data) return;
+        this.clip = data;
+        this.fillEmptyFramesFromPose();
+        this.time = 0;
+        this.rebuildClipKeyMap();
+        durationInput.value = data.duration.toString();
+        timeInput.max = data.duration.toFixed(2);
+        timeInput.value = '0';
+        this.applyClipAtTime(0);
+        this.updateTimeline();
+        setClipStatus(`Loaded ${name}`, 'ok');
+      } catch (err) {
+        setClipStatus(`Load failed: ${String(err)}`, 'warn');
+      }
+    };
+
+    loadBtn.addEventListener('click', async () => {
+      const name = clipSelect.value || clipNameInput.value.trim();
+      await loadClip(name);
+    });
+
+    clipSelect.addEventListener('change', async () => {
+      const name = clipSelect.value;
+      if (!name) return;
+      await loadClip(name);
+    });
+
+    refreshBtn.addEventListener('click', refreshEngineClips);
+
     downloadBtn.addEventListener('click', () => {
-      const name = this.retargetedName || 'trashy_clip';
+      const name = this.retargetedName || 'sleepy_clip';
       const blob = new Blob([JSON.stringify(this.clip, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -454,6 +1018,8 @@ export class EditorApp {
       link.click();
       URL.revokeObjectURL(url);
     });
+
+    refreshEngineClips();
 
     exportBtn?.addEventListener('click', () => {
       if (!this.vrm) return;
@@ -469,7 +1035,7 @@ export class EditorApp {
           const url = URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = 'trashy-animation.glb';
+          link.download = 'sleepy-animation.glb';
           link.click();
           URL.revokeObjectURL(url);
         },
@@ -478,14 +1044,21 @@ export class EditorApp {
       );
     });
 
-    mixamoFile.addEventListener('change', () => {
-      const file = mixamoFile.files?.[0];
-      if (!file) return;
-      this.loadMixamoFile(file, mixamoSelect, mixamoStatus);
+    mixamoFile.addEventListener('change', async () => {
+      const files = Array.from(mixamoFile.files ?? []);
+      if (files.length === 0) return;
+      for (const file of files) {
+        await this.loadMixamoFile(file, mixamoSelect, mixamoStatus, mixamoStatus);
+      }
       mixamoFile.value = '';
     });
 
     mixamoPreview.addEventListener('click', () => {
+      this.previewMixamo(mixamoSelect.value, mixamoStatus);
+    });
+
+    mixamoSelect.addEventListener('change', () => {
+      if (!mixamoSelect.value) return;
       this.previewMixamo(mixamoSelect.value, mixamoStatus);
     });
 
@@ -633,6 +1206,43 @@ export class EditorApp {
       entry.z = q.z;
       entry.w = q.w;
     }
+
+    if (key === ROOT_BONE_KEY) {
+      let prevRoot: BoneFrame | null = null;
+      let nextRoot: BoneFrame | null = null;
+      for (let i = 0; i < this.clip.frames.length; i += 1) {
+        const frame = this.clip.frames[i]!;
+        if (!frame.rootPos) continue;
+        if (frame.time <= time) prevRoot = frame;
+        if (frame.time >= time) {
+          nextRoot = frame;
+          break;
+        }
+      }
+      if (prevRoot || nextRoot) {
+        if (!nextRoot) nextRoot = prevRoot;
+        if (!prevRoot) prevRoot = nextRoot;
+        if (prevRoot?.rootPos && nextRoot?.rootPos) {
+          const span = Math.max(0.0001, nextRoot.time - prevRoot.time);
+          const t = THREE.MathUtils.clamp((time - prevRoot.time) / span, 0, 1);
+          const basePos = new THREE.Vector3(
+            THREE.MathUtils.lerp(prevRoot.rootPos.x, nextRoot.rootPos.x, t),
+            THREE.MathUtils.lerp(prevRoot.rootPos.y, nextRoot.rootPos.y, t),
+            THREE.MathUtils.lerp(prevRoot.rootPos.z, nextRoot.rootPos.z, t),
+          );
+          const currentPos = bone.position.clone();
+          const offsetPos = currentPos.sub(basePos);
+          for (const frame of this.clip.frames) {
+            if (!frame.rootPos) continue;
+            frame.rootPos = {
+              x: frame.rootPos.x + offsetPos.x,
+              y: frame.rootPos.y + offsetPos.y,
+              z: frame.rootPos.z + offsetPos.z,
+            };
+          }
+        }
+      }
+    }
   }
 
   private applyClipAtTime(time: number) {
@@ -712,6 +1322,27 @@ export class EditorApp {
       }
       if (bone) {
         this.clipKeyMap.set(key, bone);
+      }
+    }
+  }
+
+  private fillEmptyFramesFromPose() {
+    if (!this.vrm) return;
+    const hasAny = this.clip.frames.some((frame) => Object.keys(frame.bones).length > 0);
+    if (hasAny) return;
+    const bonesSnapshot: Record<string, { x: number; y: number; z: number; w: number }> = {};
+    for (const bone of this.bones) {
+      const q = bone.quaternion;
+      bonesSnapshot[this.getBoneKey(bone)] = { x: q.x, y: q.y, z: q.z, w: q.w };
+    }
+    const root = this.boneByKey.get(ROOT_BONE_KEY);
+    const rootPos = root
+      ? { x: root.position.x, y: root.position.y, z: root.position.z }
+      : undefined;
+    for (const frame of this.clip.frames) {
+      frame.bones = { ...bonesSnapshot };
+      if (rootPos) {
+        frame.rootPos = { ...rootPos };
       }
     }
   }
@@ -872,24 +1503,38 @@ export class EditorApp {
     }
     this.vrm = vrm;
     vrm.humanoid.autoUpdateHumanBones = false;
-    vrm.scene.position.y = 0;
+    vrm.scene.position.set(0, 0, 0);
     this.scene.add(vrm.scene);
     if (this.skeletonHelper) {
       this.scene.remove(this.skeletonHelper);
       this.skeletonHelper = null;
     }
-    const hips = vrm.humanoid.getRawBoneNode('hips');
-    if (hips && this.controls) {
-      const target = hips.getWorldPosition(new THREE.Vector3());
-      this.controls.target.copy(target);
-      this.camera.position.set(target.x, target.y + 0.4, target.z - 4.2);
-      this.camera.lookAt(target);
-      this.controls.update();
-    }
+    requestAnimationFrame(() => {
+      this.resizeRenderer();
+      this.fitCameraToVrm(true);
+    });
     this.boneScale = this.computeBoneScale();
     this.collectBones();
     this.buildBoneGizmos();
     this.populateBoneList();
+  }
+
+  private fitCameraToVrm(forceAxis = false) {
+    if (!this.vrm || !this.controls) return;
+    const box = new THREE.Box3().setFromObject(this.vrm.scene);
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    const extent = Math.max(size.x, size.y, size.z, 1);
+    const target = forceAxis ? new THREE.Vector3(0, center.y, 0) : center;
+    this.controls.target.copy(target);
+    const dist = extent * 1.9;
+    this.camera.position.set(0, target.y + size.y * 0.2, -dist);
+    this.camera.lookAt(target);
+    this.controls.minDistance = Math.max(0.6, extent * 0.6);
+    this.controls.maxDistance = Math.max(6, extent * 6);
+    this.controls.update();
   }
 
   private computeBoneScale() {
@@ -1134,6 +1779,8 @@ export class EditorApp {
       }
     }
     this.updateBoneMarkers();
+    this.refreshTimelineLabels();
+    this.drawTimeline();
   }
 
   private stepFrame(direction: 1 | -1) {
@@ -1236,12 +1883,133 @@ export class EditorApp {
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
+    if (this.handleRagdollHandlePick(event)) {
+      return;
+    }
+    if (this.ragdollDebugMeshes.length > 0) {
+      const ragHits = this.raycaster.intersectObjects(this.ragdollDebugMeshes, false);
+      if (ragHits[0]) {
+        const name = ragHits[0].object.userData.ragdollName as string | undefined;
+        if (name) {
+          this.selectRagdoll(name);
+          return;
+        }
+      }
+    }
     const hits = this.raycaster.intersectObjects(Array.from(this.boneMarkers.values()), false);
     if (!hits[0]) return;
     const name = hits[0].object.userData.boneName as string | undefined;
     if (!name) return;
     const bone = this.boneByName.get(name) ?? null;
     this.setSelectedBone(bone);
+  };
+
+  private handleRagdollHandlePick(event: PointerEvent) {
+    if (!this.viewport || !this.ragdollHandles) return false;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.ragdollHandles.children, false);
+    if (!hits[0]) return false;
+    const handle = hits[0].object.userData.handle as 'start' | 'end' | undefined;
+    if (!handle) return false;
+    this.ragdollHandleActive = handle;
+    return true;
+  }
+
+  private selectRagdoll(name: string) {
+    this.selectedRagdoll = name;
+    const mesh = this.ragdollDebugMeshes.find((item) => item.userData.ragdollName === name) ?? null;
+    if (this.ragdollTransform) {
+      if (mesh) {
+        this.ragdollTransform.attach(mesh);
+        (this.ragdollTransform as unknown as THREE.Object3D).visible = true;
+      } else {
+        this.ragdollTransform.detach();
+        (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+      }
+    }
+    this.ensureRagdollHandles();
+  }
+
+  private ensureRagdollHandles() {
+    if (!this.selectedRagdoll) return;
+    const rag = this.ragdollBones.get(this.selectedRagdoll);
+    if (!rag || !rag.axis || !rag.baseLength || !rag.basePos) return;
+    if (!this.ragdollHandles) {
+      this.ragdollHandles = new THREE.Group();
+      this.scene.add(this.ragdollHandles);
+    }
+    this.ragdollHandles.clear();
+    const handleGeom = new THREE.SphereGeometry(0.05, 12, 8);
+    const handleMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, depthTest: false });
+    const start = new THREE.Mesh(handleGeom, handleMat);
+    const end = new THREE.Mesh(handleGeom, handleMat);
+    start.renderOrder = 12;
+    end.renderOrder = 12;
+    start.userData.handle = 'start';
+    end.userData.handle = 'end';
+    this.ragdollHandles.add(start, end);
+    this.updateRagdollHandles();
+  }
+
+  private updateRagdollHandles() {
+    if (!this.ragdollHandles || !this.selectedRagdoll) return;
+    const rag = this.ragdollBones.get(this.selectedRagdoll);
+    if (!rag || !rag.body || !rag.axis || !rag.baseLength) return;
+    const center = rag.body.translation();
+    const rot = rag.body.rotation();
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w),
+    );
+    const half = rag.baseLength * 0.5 * (this.playerConfig.ragdollRig[rag.name]?.lengthScale ?? 1);
+    const startPos = new THREE.Vector3(center.x, center.y, center.z).addScaledVector(axis, -half);
+    const endPos = new THREE.Vector3(center.x, center.y, center.z).addScaledVector(axis, half);
+    const start = this.ragdollHandles.children.find((c) => c.userData.handle === 'start');
+    const end = this.ragdollHandles.children.find((c) => c.userData.handle === 'end');
+    if (start) start.position.copy(startPos);
+    if (end) end.position.copy(endPos);
+  }
+
+  private handleRagdollDrag = (event: PointerEvent) => {
+    if (!this.viewport || !this.ragdollHandles || !this.selectedRagdoll) return;
+    if (!this.ragdollHandleActive) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const rag = this.ragdollBones.get(this.selectedRagdoll);
+    if (!rag || !rag.body || !rag.baseLength) return;
+    const center = rag.body.translation();
+    const rot = rag.body.rotation();
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w),
+    );
+    this.ragdollHandleLine.set(
+      new THREE.Vector3(center.x, center.y, center.z).addScaledVector(axis, -10),
+      new THREE.Vector3(center.x, center.y, center.z).addScaledVector(axis, 10),
+    );
+    this.ragdollHandleRay.origin.copy(this.raycaster.ray.origin);
+    this.ragdollHandleRay.direction.copy(this.raycaster.ray.direction);
+    const closest = this.closestPointOnLineToRay(
+      this.ragdollHandleLine,
+      this.ragdollHandleRay,
+      this.ragdollHandleTemp,
+    );
+    const half = new THREE.Vector3(center.x, center.y, center.z).distanceTo(closest);
+    const lengthScale = Math.max(0.3, Math.min(2.0, (half * 2) / rag.baseLength));
+    const cfg = this.playerConfig.ragdollRig[rag.name] ?? { radiusScale: 1, lengthScale: 1 };
+    cfg.lengthScale = lengthScale;
+    this.playerConfig.ragdollRig[rag.name] = cfg;
+    this.updateRagdollHandles();
+  };
+
+  private handleRagdollDragEnd = (event: PointerEvent) => {
+    if (!this.ragdollHandleActive) return;
+    this.ragdollHandleActive = null;
+    this.buildRagdoll();
+    this.updateRagdollHandles();
   };
 
   private resizeRenderer() {
@@ -1259,17 +2027,18 @@ export class EditorApp {
     this.timelineHeader.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'timeline-row header';
-    header.innerHTML = '<span>Bone</span><span class="timeline-scale">Time</span>';
+    const bone = this.selectedBone ?? this.bones[0];
+    const label = bone ? this.getBoneKey(bone) : 'none';
+    header.innerHTML = `<span>Bone</span><span class="timeline-scale">${label}</span>`;
     this.timelineHeader.appendChild(header);
-    for (const bone of this.bones) {
-      const row = document.createElement('div');
-      row.className = 'timeline-row';
-      row.textContent = this.getBoneKey(bone);
-      this.timelineHeader.appendChild(row);
-    }
   }
 
-  private async loadMixamoFile(file: File, select: HTMLSelectElement, status: HTMLElement) {
+  private async loadMixamoFile(
+    file: File,
+    select: HTMLSelectElement,
+    status: HTMLElement,
+    previewStatus?: HTMLElement,
+  ) {
     if (!this.vrm) return;
     const arrayBuffer = await file.arrayBuffer();
     const object = this.fbxLoader.parse(arrayBuffer, '');
@@ -1288,8 +2057,11 @@ export class EditorApp {
     option.value = entry.name;
     option.textContent = entry.name;
     select.appendChild(option);
-    select.value = entry.name;
+    if (!select.value) select.value = entry.name;
     status.textContent = `Mixamo: loaded ${entry.name}`;
+    if (previewStatus && this.currentMixamo == null) {
+      this.previewMixamo(entry.name, previewStatus);
+    }
   }
 
   private previewMixamo(name: string, status: HTMLElement) {
@@ -1472,32 +2244,12 @@ export class EditorApp {
     this.ragdollDebugMeshes = [];
     const humanoid = this.vrm.humanoid;
     const getBone = (name: string) => humanoid.getRawBoneNode(name as any);
-    const defs: { name: string; parent?: string }[] = [
-      { name: 'hips' },
-      { name: 'spine', parent: 'hips' },
-      { name: 'chest', parent: 'spine' },
-      { name: 'upperChest', parent: 'chest' },
-      { name: 'neck', parent: 'upperChest' },
-      { name: 'head', parent: 'neck' },
-      { name: 'leftUpperArm', parent: 'upperChest' },
-      { name: 'leftLowerArm', parent: 'leftUpperArm' },
-      { name: 'leftHand', parent: 'leftLowerArm' },
-      { name: 'rightUpperArm', parent: 'upperChest' },
-      { name: 'rightLowerArm', parent: 'rightUpperArm' },
-      { name: 'rightHand', parent: 'rightLowerArm' },
-      { name: 'leftUpperLeg', parent: 'hips' },
-      { name: 'leftLowerLeg', parent: 'leftUpperLeg' },
-      { name: 'leftFoot', parent: 'leftLowerLeg' },
-      { name: 'rightUpperLeg', parent: 'hips' },
-      { name: 'rightLowerLeg', parent: 'rightUpperLeg' },
-      { name: 'rightFoot', parent: 'rightLowerLeg' },
-    ];
+    const defs = this.ragdollDefs;
 
     const tmpVec = new THREE.Vector3();
     const tmpVec2 = new THREE.Vector3();
     const tmpQuat = new THREE.Quaternion();
     const axisQuat = new THREE.Quaternion();
-    const bonePoints = this.collectBonePoints(0.25);
 
     const rootBone = getBone('hips');
     if (rootBone) {
@@ -1509,7 +2261,8 @@ export class EditorApp {
       const bone = getBone(def.name);
       if (!bone) continue;
       bone.getWorldPosition(tmpVec);
-      const child = bone.children.find((childBone) => childBone.type === 'Bone');
+      const childDef = defs.find((entry) => entry.parent === def.name);
+      const child = childDef ? getBone(childDef.name) : null;
       let length = 0.25;
       if (child) {
         child.getWorldPosition(tmpVec2);
@@ -1535,44 +2288,47 @@ export class EditorApp {
         leftFoot: 0.06,
         rightFoot: 0.06,
       };
+      const defaultArmRot =
+        def.name === 'leftUpperArm' || def.name === 'leftLowerArm'
+          ? { x: 0, y: 0, z: Math.PI / 2 }
+          : def.name === 'rightUpperArm' || def.name === 'rightLowerArm'
+            ? { x: 0, y: 0, z: -Math.PI / 2 }
+            : { x: 0, y: 0, z: 0 };
+      const rig = this.playerConfig.ragdollRig[def.name] ?? {
+        radiusScale: 1,
+        lengthScale: 1,
+        offset: { x: 0, y: 0, z: 0 },
+        rot: defaultArmRot,
+        swingLimit: 45,
+        twistLimit: 35,
+      };
+      length = Math.max(0.12, length * (rig.lengthScale ?? 1));
       let radius = Math.max(0.045, boneRadiusMap[def.name] ?? length * 0.18);
-      let minProj = 0;
-      let maxProj = length;
-      const points = bonePoints.get(bone.name);
-      if (points && points.length > 4 && child) {
-        const axis = tmpVec2.clone().sub(tmpVec).normalize();
-        minProj = Infinity;
-        maxProj = -Infinity;
-        let maxDist = radius;
-        for (const p of points) {
-          const rel = p.clone().sub(tmpVec);
-          const proj = rel.dot(axis);
-          minProj = Math.min(minProj, proj);
-          maxProj = Math.max(maxProj, proj);
-          const closest = axis.clone().multiplyScalar(proj);
-          const dist = rel.sub(closest).length();
-          maxDist = Math.max(maxDist, dist);
-        }
-        minProj = Math.max(0, minProj);
-        maxProj = Math.max(minProj + 0.05, maxProj);
-        length = Math.max(0.1, maxProj - minProj);
-        radius = Math.max(0.045, maxDist);
-      }
+      radius = Math.max(0.03, radius * (rig.radiusScale ?? 1));
+      const maxRadius = Math.max(0.03, length * 0.45);
+      radius = Math.min(radius, maxRadius);
       const halfHeight = Math.max(0.05, length * 0.5 - radius);
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(tmpVec.x, tmpVec.y, tmpVec.z)
         .setLinearDamping(1.2)
         .setAngularDamping(1.1);
+      let axis = new THREE.Vector3(0, 1, 0);
+      let mid = tmpVec.clone();
       if (child) {
-        const axis = tmpVec2.clone().sub(tmpVec).normalize();
-        axisQuat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
-        bodyDesc.setRotation({
-          x: axisQuat.x,
-          y: axisQuat.y,
-          z: axisQuat.z,
-          w: axisQuat.w,
-        });
+        axis = tmpVec2.clone().sub(tmpVec).normalize();
+        mid = tmpVec.clone().add(tmpVec2).multiplyScalar(0.5);
       }
+      const boneWorldQuat = bone.getWorldQuaternion(new THREE.Quaternion());
+      const offsetLocal = new THREE.Vector3(rig.offset?.x ?? 0, rig.offset?.y ?? 0, rig.offset?.z ?? 0);
+      const offsetWorld = offsetLocal.clone().applyQuaternion(boneWorldQuat);
+      mid.add(offsetWorld);
+      bodyDesc.setTranslation(mid.x, mid.y, mid.z);
+      axisQuat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+      const extraRot = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(rig.rot?.x ?? 0, rig.rot?.y ?? 0, rig.rot?.z ?? 0),
+      );
+      const finalRot = axisQuat.clone().multiply(extraRot);
+      bodyDesc.setRotation({ x: finalRot.x, y: finalRot.y, z: finalRot.z, w: finalRot.w });
       const body = world.createRigidBody(bodyDesc);
       const collider =
         halfHeight > 0.06
@@ -1592,10 +2348,19 @@ export class EditorApp {
           : new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), debugMat);
       debugMesh.renderOrder = 12;
       debugMesh.userData.ragdollName = def.name;
-      debugMesh.visible = true;
+      debugMesh.visible = this.ragdollEnabled || this.ragdollVisible;
       this.scene.add(debugMesh);
       this.ragdollDebugMeshes.push(debugMesh);
-      const ragBone: RagdollBone = { name: def.name, bone, body };
+      const ragBone: RagdollBone = {
+        name: def.name,
+        bone,
+        body,
+        baseLength: length,
+        axis,
+        basePos: mid.clone(),
+        baseRot: finalRot.clone(),
+        boneWorldQuat,
+      };
       this.ragdollBones.set(def.name, ragBone);
     }
 
@@ -1637,7 +2402,36 @@ export class EditorApp {
       if (bone.parent) {
         bone.parent.getWorldQuaternion(parentWorld);
         invParent.copy(parentWorld).invert();
-        bone.quaternion.copy(invParent.multiply(bodyQuat));
+        const rel = invParent.clone().multiply(bodyQuat);
+        const cfg = this.playerConfig.ragdollRig[ragBone.name];
+        if (cfg && (cfg.swingLimit || cfg.twistLimit)) {
+          const axis = new THREE.Vector3(0, 1, 0);
+          const twist = new THREE.Quaternion();
+          const swing = new THREE.Quaternion();
+          const r = new THREE.Vector3(rel.x, rel.y, rel.z);
+          const proj = axis.clone().multiplyScalar(r.dot(axis));
+          twist.set(proj.x, proj.y, proj.z, rel.w).normalize();
+          swing.copy(twist).invert().multiply(rel).normalize();
+          const swingLimit = THREE.MathUtils.degToRad(cfg.swingLimit ?? 180);
+          const twistLimit = THREE.MathUtils.degToRad(cfg.twistLimit ?? 180);
+          const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swing.w, -1, 1));
+          const twistAngle = 2 * Math.acos(THREE.MathUtils.clamp(twist.w, -1, 1));
+          const swingClamped = swingAngle > swingLimit && swingLimit > 0
+            ? swing.clone().slerp(new THREE.Quaternion(), 1 - swingLimit / swingAngle)
+            : swing;
+          const twistClamped = twistAngle > twistLimit && twistLimit > 0
+            ? twist.clone().slerp(new THREE.Quaternion(), 1 - twistLimit / twistAngle)
+            : twist;
+          const clampedRel = swingClamped.clone().multiply(twistClamped).normalize();
+          const clampedWorld = parentWorld.clone().multiply(clampedRel);
+          bone.quaternion.copy(invParent.multiply(clampedWorld));
+          body.setRotation(
+            { x: clampedWorld.x, y: clampedWorld.y, z: clampedWorld.z, w: clampedWorld.w },
+            true,
+          );
+        } else {
+          bone.quaternion.copy(rel);
+        }
       } else {
         bone.quaternion.copy(bodyQuat);
       }
@@ -1667,6 +2461,7 @@ export class EditorApp {
         this.ragdollRecording = false;
       }
     }
+    this.updateRagdollHandles();
   }
 
   private updateRagdollDebugFromBones() {
@@ -1680,51 +2475,11 @@ export class EditorApp {
       mesh.position.copy(pos);
       mesh.quaternion.copy(rot);
     }
+    this.updateRagdollHandles();
   }
 
-  private collectBonePoints(threshold: number) {
-    const map = new Map<string, THREE.Vector3[]>();
-    if (!this.vrm) return map;
-    const tmp = new THREE.Vector3();
-    this.vrm.scene.traverse((obj) => {
-      const mesh = obj as THREE.SkinnedMesh;
-      if (!mesh.isSkinnedMesh || !mesh.geometry) return;
-      const pos = mesh.geometry.getAttribute('position');
-      const skinIndex = mesh.geometry.getAttribute('skinIndex');
-      const skinWeight = mesh.geometry.getAttribute('skinWeight');
-      if (!pos || !skinIndex || !skinWeight) return;
-      const skeleton = mesh.skeleton;
-      for (let i = 0; i < pos.count; i += 1) {
-        (mesh as unknown as { boneTransform: (index: number, target: THREE.Vector3) => void }).boneTransform(
-          i,
-          tmp,
-        );
-        const idx = [
-          Number(skinIndex.getX(i) ?? 0),
-          Number(skinIndex.getY(i) ?? 0),
-          Number(skinIndex.getZ(i) ?? 0),
-          Number(skinIndex.getW(i) ?? 0),
-        ];
-        const w = [
-          Number(skinWeight.getX(i) ?? 0),
-          Number(skinWeight.getY(i) ?? 0),
-          Number(skinWeight.getZ(i) ?? 0),
-          Number(skinWeight.getW(i) ?? 0),
-        ];
-        for (let j = 0; j < 4; j += 1) {
-          const weight = w[j] ?? 0;
-          if (weight < threshold) continue;
-          const boneIndex = idx[j] ?? 0;
-          if (boneIndex === undefined || boneIndex === null) continue;
-          const bone = skeleton.bones[boneIndex];
-          if (!bone) continue;
-          const arr = map.get(bone.name) ?? [];
-          arr.push(tmp.clone());
-          map.set(bone.name, arr);
-        }
-      }
-    });
-    return map;
+  private collectBonePoints(_threshold: number) {
+    return new Map<string, THREE.Vector3[]>();
   }
 
   private startRagdollRecording() {
@@ -1739,12 +2494,10 @@ export class EditorApp {
   private resizeTimeline() {
     if (!this.timeline) return;
     const rect = this.timeline.getBoundingClientRect();
-    const rowHeight = 20;
-    const headerRows = 1;
-    const totalRows = headerRows + Math.max(1, this.bones.length);
-    const heightPx = Math.max(rect.height, totalRows * rowHeight);
+    const rowHeight = 28;
+    const heightPx = Math.max(rect.height, rowHeight);
     const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-    const cellWidth = 12;
+    const cellWidth = 18;
     const widthPx = Math.max(rect.width, totalFrames * cellWidth);
     this.timeline.width = Math.max(1, Math.floor(widthPx * this.dpr));
     this.timeline.height = Math.max(1, Math.floor(heightPx * this.dpr));
@@ -1757,13 +2510,10 @@ export class EditorApp {
     if (!ctx) return;
     const width = this.timeline.width;
     const height = this.timeline.height;
-    const rowHeight = 20 * this.dpr;
-    const headerHeight = rowHeight;
+    const rowHeight = 28 * this.dpr;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#121418';
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#1b1e25';
-    ctx.fillRect(0, 0, width, headerHeight);
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.lineWidth = 1 * this.dpr;
     const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
@@ -1778,32 +2528,18 @@ export class EditorApp {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    for (let r = 0; r <= this.bones.length; r += 1) {
-      const y = headerHeight + r * rowHeight;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
-      ctx.stroke();
-    }
     const boxWidth = cellWidth;
-    const boxHeight = rowHeight * 0.6;
-    let index = 0;
-    for (const bone of this.bones) {
-      const rowY = headerHeight + index * rowHeight + rowHeight * 0.2;
-      if (bone === this.selectedBone) {
-        ctx.fillStyle = 'rgba(245,200,76,0.08)';
-        ctx.fillRect(0, rowY - rowHeight * 0.2, width, rowHeight);
-      }
-      for (let f = 0; f < totalFrames; f += 1) {
-        const x = f * boxWidth;
-        const t = f / this.fps;
-        const frame = this.clip.frames.find((fr) => Math.abs(fr.time - t) < 1e-4);
-        const hasKey = frame && frame.bones[this.getBoneKey(bone)];
-        ctx.fillStyle = hasKey ? '#f5c84c' : 'rgba(255,255,255,0.06)';
-        ctx.fillRect(x + 1, rowY + 1, Math.max(1, boxWidth - 2), boxHeight);
-      }
-      index += 1;
+    const boxHeight = rowHeight * 0.7;
+    const rowY = (height - boxHeight) * 0.5;
+    const bone = this.selectedBone ?? this.bones[0];
+    const boneKey = bone ? this.getBoneKey(bone) : null;
+    for (let f = 0; f < totalFrames; f += 1) {
+      const x = f * boxWidth;
+      const t = f / this.fps;
+      const frame = this.clip.frames.find((fr) => Math.abs(fr.time - t) < 1e-4);
+      const hasKey = boneKey ? frame && frame.bones[boneKey] : false;
+      ctx.fillStyle = hasKey ? '#f5c84c' : 'rgba(255,255,255,0.08)';
+      ctx.fillRect(x + 1, rowY, Math.max(1, boxWidth - 2), boxHeight);
     }
     const playX = (this.time / this.clip.duration) * width;
     ctx.strokeStyle = '#fef08a';

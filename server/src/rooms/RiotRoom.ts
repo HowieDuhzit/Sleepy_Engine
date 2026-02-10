@@ -12,12 +12,19 @@ import {
   CROWD_COUNT,
   CROWD_RADIUS,
   CROWD_SPEED,
+  CROWD_ATTACK_RANGE,
+  CROWD_ATTACK_COOLDOWN,
+  CROWD_ATTACK_DAMAGE,
+  CROWD_FLEE_TIME,
+  CROWD_FIGHT_TIME,
+  CROWD_HIT_KNOCKBACK,
   CROWD_REPEL_RADIUS,
   CROWD_REPEL_FORCE,
   CROWD_BOUNDS,
   GRAVITY,
   JUMP_SPEED,
   GROUND_Y,
+  STEP_HEIGHT,
   ATTACK_RANGE,
   ATTACK_COOLDOWN,
   ATTACK_DAMAGE,
@@ -25,7 +32,7 @@ import {
   OBSTACLES,
   resolveCircleAabb,
   resolveCircleCircle,
-} from '@trashy/shared';
+} from '@sleepy/shared';
 
 const { Room } = colyseusPkg as typeof import('colyseus');
 type Client = import('colyseus').Client;
@@ -169,7 +176,27 @@ export class RiotRoom extends Room {
     targetZ: 0,
     path: [] as Array<{ x: number; z: number }>,
     pathIndex: 0,
+    health: 30,
+    state: 'idle' as 'idle' | 'walk' | 'run' | 'hit' | 'attack',
+    stateTimer: 0,
+    stateTime: 0,
+    behavior: 'wander' as 'wander' | 'flee' | 'fight',
+    behaviorTimer: 0,
+    lastAttackAt: -Infinity,
+    threatId: '' as string,
   }));
+
+  private sampleGroundHeight(x: number, z: number) {
+    let height = GROUND_Y;
+    for (const obstacle of OBSTACLES) {
+      const halfX = obstacle.size.x / 2;
+      const halfZ = obstacle.size.z / 2;
+      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+        height = Math.max(height, obstacle.position.y + obstacle.size.y);
+      }
+    }
+    return height;
+  }
 
   onCreate() {
     this.setState(new RiotState());
@@ -205,6 +232,10 @@ export class RiotRoom extends Room {
     for (const [id, player] of this.state.players.entries()) {
       const input = this.inputBuffer.get(id);
       if (!input) continue;
+      player.lookYaw = input.lookYaw;
+      player.lookPitch = input.lookPitch;
+      player.animState = input.animState;
+      player.animTime = input.animTime;
 
       const speed =
         MOVE_SPEED * (input.sprint ? SPRINT_MULTIPLIER : input.crouch ? CROUCH_MULTIPLIER : 1);
@@ -225,13 +256,18 @@ export class RiotRoom extends Room {
         player.vz = targetVz;
       }
 
-      if (input.jump && player.y <= GROUND_Y + 0.001) {
+      if (Math.abs(player.vx) > 0.05 || Math.abs(player.vz) > 0.05) {
+        player.yaw = Math.atan2(player.vx, player.vz) + Math.PI;
+      }
+
+      const groundHeight = this.sampleGroundHeight(player.x, player.z);
+      if (input.jump && player.y <= groundHeight + 0.001) {
         player.vy = JUMP_SPEED;
       }
       player.vy += GRAVITY * delta;
       player.y += player.vy * delta;
-      if (player.y <= GROUND_Y) {
-        player.y = GROUND_Y;
+      if (player.y <= groundHeight) {
+        player.y = groundHeight;
         player.vy = 0;
       }
 
@@ -244,6 +280,11 @@ export class RiotRoom extends Room {
       }
       player.x = resolved.x;
       player.z = resolved.z;
+      const floorY = this.sampleGroundHeight(player.x, player.z);
+      if (player.y < floorY) {
+        player.y = floorY;
+        player.vy = 0;
+      }
 
       player.stamina = Math.max(0, Math.min(100, player.stamina - (input.sprint ? 8 : 2) * delta));
     }
@@ -263,6 +304,18 @@ export class RiotRoom extends Room {
     }
 
     for (const agent of this.crowd) {
+      if (agent.stateTimer > 0) {
+        agent.stateTimer = Math.max(0, agent.stateTimer - delta);
+        agent.stateTime += delta;
+      } else {
+        agent.stateTime = 0;
+      }
+      if (agent.behaviorTimer > 0) {
+        agent.behaviorTimer = Math.max(0, agent.behaviorTimer - delta);
+        if (agent.behaviorTimer === 0) {
+          agent.behavior = 'wander';
+        }
+      }
       if (agent.path.length === 0 || agent.pathIndex >= agent.path.length) {
         const target = this.navGrid.randomOpen();
         if (target) {
@@ -285,6 +338,7 @@ export class RiotRoom extends Room {
 
       let ax = 0;
       let az = 0;
+      let behaviorSpeed = CROWD_SPEED;
       for (const player of this.state.players.values()) {
         const dx = agent.x - player.x;
         const dz = agent.z - player.z;
@@ -295,7 +349,45 @@ export class RiotRoom extends Room {
         ax += (dx / dist) * force;
         az += (dz / dist) * force;
       }
-      if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
+      if (agent.behavior !== 'wander') {
+        const players = Array.from(this.state.players.values());
+        if (players.length > 0) {
+          let target = players[0]!;
+          let best = Infinity;
+          for (const player of players) {
+            const dx = player.x - agent.x;
+            const dz = player.z - agent.z;
+            const distSq = dx * dx + dz * dz;
+            if (distSq < best) {
+              best = distSq;
+              target = player;
+            }
+          }
+          const dx = target.x - agent.x;
+          const dz = target.z - agent.z;
+          const dist = Math.max(0.001, Math.hypot(dx, dz));
+          if (agent.behavior === 'fight') {
+            ax += (dx / dist) * 2.2;
+            az += (dz / dist) * 2.2;
+            behaviorSpeed = CROWD_SPEED * 1.6;
+            if (dist <= CROWD_ATTACK_RANGE) {
+              if (this.elapsed - agent.lastAttackAt >= CROWD_ATTACK_COOLDOWN) {
+                agent.lastAttackAt = this.elapsed;
+                agent.state = 'attack';
+                agent.stateTimer = 0.25;
+                agent.stateTime = 0;
+                target.health = Math.max(0, target.health - CROWD_ATTACK_DAMAGE);
+                target.vx += (dx / dist) * CROWD_HIT_KNOCKBACK;
+                target.vz += (dz / dist) * CROWD_HIT_KNOCKBACK;
+              }
+            }
+          } else if (agent.behavior === 'flee') {
+            ax += (-dx / dist) * 2.4;
+            az += (-dz / dist) * 2.4;
+            behaviorSpeed = CROWD_SPEED * 1.9;
+          }
+        }
+      } else if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
         const waypoint = agent.path[agent.pathIndex]!;
         const dx = waypoint.x - agent.x;
         const dz = waypoint.z - agent.z;
@@ -311,9 +403,9 @@ export class RiotRoom extends Room {
       agent.vx += ax * delta;
       agent.vz += az * delta;
       const speed = Math.hypot(agent.vx, agent.vz);
-      if (speed > CROWD_SPEED) {
-        agent.vx = (agent.vx / speed) * CROWD_SPEED;
-        agent.vz = (agent.vz / speed) * CROWD_SPEED;
+      if (speed > behaviorSpeed) {
+        agent.vx = (agent.vx / speed) * behaviorSpeed;
+        agent.vz = (agent.vz / speed) * behaviorSpeed;
       }
       agent.x += agent.vx * delta;
       agent.z += agent.vz * delta;
@@ -326,6 +418,16 @@ export class RiotRoom extends Room {
       }
       agent.x = resolved.x;
       agent.z = resolved.z;
+      if (agent.stateTimer <= 0) {
+        const moveSpeed = Math.hypot(agent.vx, agent.vz);
+        if (agent.behavior === 'flee' || agent.behavior === 'fight') {
+          agent.state = 'run';
+        } else if (moveSpeed > 0.25) {
+          agent.state = 'walk';
+        } else {
+          agent.state = 'idle';
+        }
+      }
     }
 
     for (const player of this.state.players.values()) {
@@ -358,6 +460,26 @@ export class RiotRoom extends Room {
         other.vx += nx * ATTACK_KNOCKBACK;
         other.vz += nz * ATTACK_KNOCKBACK;
       }
+
+      for (const agent of this.crowd) {
+        const dx = agent.x - player.x;
+        const dz = agent.z - player.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > ATTACK_RANGE * ATTACK_RANGE) continue;
+        const dist = Math.max(0.001, Math.sqrt(distSq));
+        const nx = dx / dist;
+        const nz = dz / dist;
+        agent.health = Math.max(0, agent.health - ATTACK_DAMAGE);
+        agent.vx += nx * CROWD_HIT_KNOCKBACK;
+        agent.vz += nz * CROWD_HIT_KNOCKBACK;
+        agent.state = 'hit';
+        agent.stateTimer = 0.3;
+        agent.stateTime = 0;
+        agent.threatId = id;
+        const fightRoll = agent.health > 12 && Math.random() < 0.35;
+        agent.behavior = fightRoll ? 'fight' : 'flee';
+        agent.behaviorTimer = fightRoll ? CROWD_FIGHT_TIME : CROWD_FLEE_TIME;
+      }
     }
 
     this.state.heat = Math.max(0, Math.min(1, this.state.heat + heatDelta - 0.01 * delta));
@@ -371,6 +493,11 @@ export class RiotRoom extends Room {
         velocity: { x: number; y: number; z: number };
         health: number;
         stamina: number;
+        lookYaw: number;
+        lookPitch: number;
+        animState: string;
+        animTime: number;
+        yaw: number;
       }
     > = {};
     for (const [id, player] of this.state.players.entries()) {
@@ -380,6 +507,11 @@ export class RiotRoom extends Room {
         velocity: { x: player.vx, y: player.vy, z: player.vz },
         health: player.health,
         stamina: player.stamina,
+        lookYaw: player.lookYaw,
+        lookPitch: player.lookPitch,
+        animState: player.animState,
+        animTime: player.animTime,
+        yaw: player.yaw,
       };
     }
     this.broadcast(PROTOCOL.snapshot, {
@@ -392,6 +524,8 @@ export class RiotRoom extends Room {
         id: agent.id,
         position: { x: agent.x, y: agent.y, z: agent.z },
         velocity: { x: agent.vx, y: agent.vy, z: agent.vz },
+        state: agent.state,
+        stateTime: agent.stateTime,
       })),
     });
   }

@@ -1,5 +1,5 @@
 {
-  "name": "trashy-game",
+  "name": "sleepy-engine",
   "private": true,
   "version": "0.0.1",
   "packageManager": "pnpm@9.0.0",
@@ -8,12 +8,19 @@
     "dev:server": "pnpm -C server dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "desktop:compile": "tsc -p desktop/tsconfig.json",
+    "desktop:dev": "pnpm desktop:compile && concurrently -k \"pnpm -C client dev --host 127.0.0.1 --port 5175\" \"wait-on http://127.0.0.1:5175 && VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron desktop/dist/main.js\"",
+    "desktop:build": "pnpm -C client build && pnpm desktop:compile",
+    "desktop:start": "electron desktop/dist/main.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
+    "concurrently": "^9.1.0",
+    "electron": "^31.3.1",
     "eslint": "^9.18.0",
     "prettier": "^3.3.3",
+    "wait-on": "^7.2.0",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.14.0"
   }

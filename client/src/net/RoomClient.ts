@@ -1,5 +1,5 @@
 import { Client, Room } from 'colyseus.js';
-import { PlayerSnapshot, PROTOCOL, PlayerInput, CrowdSnapshot, WorldSnapshot } from '@trashy/shared';
+import { PlayerSnapshot, PROTOCOL, PlayerInput, CrowdSnapshot, WorldSnapshot } from '@sleepy/shared';
 
 export class RoomClient {
   private client: Client;
@@ -48,6 +48,11 @@ export class RoomClient {
         velocity: { x: player.vx, y: player.vy, z: player.vz },
         health: player.health,
         stamina: player.stamina,
+        lookYaw: player.lookYaw ?? 0,
+        lookPitch: player.lookPitch ?? 0,
+        animState: player.animState ?? 'idle',
+        animTime: player.animTime ?? 0,
+        yaw: player.yaw ?? 0,
       };
     }
     return {

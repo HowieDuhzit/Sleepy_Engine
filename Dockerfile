@@ -51,6 +51,7 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/client/dist /usr/share/nginx/html
 COPY --from=build /app/client/public/animations /app/animations
+COPY --from=build /app/client/public/config /app/config
 COPY server/package.json server/package.json
 COPY shared/package.json shared/package.json
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

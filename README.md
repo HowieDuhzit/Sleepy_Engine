@@ -1,4 +1,4 @@
-# Trashy Game
+# Sleepy Engine
 
 Session-based multiplayer urban riot sandbox prototype. The client is a Three.js + Vite app, the server is a Colyseus authoritative simulation, and shared protocol types live in `shared/`.
 
@@ -47,6 +47,6 @@ Then open:
 If you want to build images separately:
 
 ```bash
-docker build --target server -t trashy-server .
-docker build --target client -t trashy-client .
+docker build --target server -t sleepy-server .
+docker build --target client -t sleepy-client .
 ```
