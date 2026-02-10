@@ -920,12 +920,16 @@ export class GameApp {
     const onGround = this.localPlayer.position.y <= groundHeight + 0.001;
     const movementLocked = this.localMovementLockTimer > 0;
 
-    // Simple client-side prediction: apply input velocity immediately
-    // This makes start/stop feel instant without complex physics simulation
+    // Smooth velocity transition for better animation blending
+    // Fast acceleration (10x per second) makes it feel responsive while animations blend smoothly
     if (!movementLocked) {
       const speed = MOVE_SPEED * (flags.sprint ? SPRINT_MULTIPLIER : flags.crouch ? CROUCH_MULTIPLIER : 1);
-      this.localVelocityX = moveX * speed;
-      this.localVelocityZ = moveZ * speed;
+      const targetVx = moveX * speed;
+      const targetVz = moveZ * speed;
+      const accelRate = 10; // 10x per second = very responsive but smooth
+      const blend = Math.min(1, delta * accelRate);
+      this.localVelocityX += (targetVx - this.localVelocityX) * blend;
+      this.localVelocityZ += (targetVz - this.localVelocityZ) * blend;
     }
     const moveDir = new THREE.Vector3(moveX, 0, moveZ);
     if (moveDir.lengthSq() > 1e-6) moveDir.normalize();
@@ -1322,7 +1326,7 @@ export class GameApp {
         yaw: playerSnap.yaw ?? 0,
       });
       this.remoteLatest.set(id, { ...playerSnap.position });
-      this.remoteLatestVel.set(id, { ...playerSnap.velocity });
+      // Velocity now set via interpolation in updateRemoteInterpolation
       this.remoteLatestLook.set(id, {
         yaw: playerSnap.lookYaw ?? 0,
         pitch: playerSnap.lookPitch ?? 0,
@@ -1381,7 +1385,7 @@ export class GameApp {
 
   private updateRemoteInterpolation(nowSeconds: number) {
     const renderTime = nowSeconds - this.remoteBufferSeconds;
-    for (const entry of this.remotePlayers.values()) {
+    for (const [id, entry] of this.remotePlayers.entries()) {
       const { mesh, snapshots } = entry;
       if (snapshots.length === 0) continue;
       if (snapshots.length === 1) {
@@ -1390,6 +1394,8 @@ export class GameApp {
         if (Number.isFinite(snap.yaw)) {
           mesh.rotation.y = snap.yaw;
         }
+        // Update velocity for animation
+        this.remoteLatestVel.set(id, { x: snap.velocity.x, y: snap.velocity.y, z: snap.velocity.z });
         continue;
       }
 
@@ -1417,6 +1423,12 @@ export class GameApp {
         if (Number.isFinite(older.yaw)) {
           mesh.rotation.y = older.yaw;
         }
+        // Update velocity for animation with damping
+        this.remoteLatestVel.set(id, {
+          x: older.velocity.x * dampingFactor,
+          y: older.velocity.y,
+          z: older.velocity.z * dampingFactor,
+        });
         continue;
       }
 
@@ -1431,6 +1443,12 @@ export class GameApp {
         const dy = Math.atan2(Math.sin(newer.yaw - older.yaw), Math.cos(newer.yaw - older.yaw));
         mesh.rotation.y = older.yaw + dy * alpha;
       }
+      // Interpolate velocity for animation
+      this.remoteLatestVel.set(id, {
+        x: THREE.MathUtils.lerp(older.velocity.x, newer.velocity.x, alpha),
+        y: THREE.MathUtils.lerp(older.velocity.y, newer.velocity.y, alpha),
+        z: THREE.MathUtils.lerp(older.velocity.z, newer.velocity.z, alpha),
+      });
     }
   }
 
