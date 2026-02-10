@@ -5,5 +5,5 @@ services:
       context: .
       target: allinone
     ports:
-      - "5175:80"
+      - "5175:8080"
       - "2567:2567"

@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@trashy/shared": "workspace:*",
+    "@dimforge/rapier3d-compat": "^0.12.0",
+    "@pixiv/three-vrm": "^2.0.0",
     "colyseus.js": "^0.15.28",
     "three": "^0.170.0"
   },

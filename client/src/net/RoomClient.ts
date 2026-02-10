@@ -1,5 +1,5 @@
 import { Client, Room } from 'colyseus.js';
-import { PlayerSnapshot, PROTOCOL, PlayerInput } from '@trashy/shared';
+import { PlayerSnapshot, PROTOCOL, PlayerInput, CrowdSnapshot, WorldSnapshot } from '@trashy/shared';
 
 export class RoomClient {
   private client: Client;
@@ -20,21 +20,41 @@ export class RoomClient {
     this.room.send(PROTOCOL.input, input);
   }
 
-  onSnapshot(handler: (state: Record<string, PlayerSnapshot>) => void) {
+  onSnapshot(handler: (state: WorldSnapshot) => void) {
     if (!this.room) return;
-    this.room.onStateChange((state) => {
-      const players: Record<string, PlayerSnapshot> = {};
-      for (const [id, player] of state.players.entries()) {
-        players[id] = {
-          id,
-          position: { x: player.x, y: player.y, z: player.z },
-          velocity: { x: player.vx, y: player.vy, z: player.vz },
-          health: player.health,
-          stamina: player.stamina,
-        };
-      }
-      handler(players);
+    this.room.onMessage(PROTOCOL.snapshot, (state: WorldSnapshot) => {
+      handler(state);
     });
+    this.room.onStateChange.once((state) => {
+      handler(this.serializeState(state));
+    });
+    this.room.onStateChange((state) => handler(this.serializeState(state)));
+  }
+
+  onCrowd(handler: (snapshot: CrowdSnapshot) => void) {
+    if (!this.room) return;
+    this.room.onMessage(PROTOCOL.crowd, (snapshot: CrowdSnapshot) => handler(snapshot));
+  }
+
+  private serializeState(state: any): WorldSnapshot {
+    const players: Record<string, PlayerSnapshot> = {};
+    if (!state?.players) {
+      return { players, heat: 0, phase: 0 };
+    }
+    for (const [id, player] of state.players.entries()) {
+      players[id] = {
+        id,
+        position: { x: player.x, y: player.y, z: player.z },
+        velocity: { x: player.vx, y: player.vy, z: player.vz },
+        health: player.health,
+        stamina: player.stamina,
+      };
+    }
+    return {
+      players,
+      heat: state?.heat ?? 0,
+      phase: state?.phase ?? 0,
+    };
   }
 
   getSessionId() {

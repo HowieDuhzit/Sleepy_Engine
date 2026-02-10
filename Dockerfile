@@ -50,9 +50,11 @@ COPY --from=deps /app/shared/node_modules ./shared/node_modules
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/client/dist /usr/share/nginx/html
+COPY --from=build /app/client/public/animations /app/animations
 COPY server/package.json server/package.json
 COPY shared/package.json shared/package.json
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx.main.conf /etc/nginx/nginx.conf
 COPY docker/start.sh /start.sh
 EXPOSE 2567 80
 CMD ["/start.sh"]
