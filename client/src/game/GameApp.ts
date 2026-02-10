@@ -2101,20 +2101,21 @@ export class GameApp {
         head.rotation.x += state.lookPitch * 0.45;
       }
 
+      // TODO: Re-enable IK after fixing rotation accumulation
       // 2-bone IK for legs (proper knee bending)
-      const leftUpperLeg = actor.vrm.humanoid.getRawBoneNode('leftUpperLeg');
-      const leftLowerLeg = actor.vrm.humanoid.getRawBoneNode('leftLowerLeg');
-      const leftFoot = actor.vrm.humanoid.getRawBoneNode('leftFoot');
-      const rightUpperLeg = actor.vrm.humanoid.getRawBoneNode('rightUpperLeg');
-      const rightLowerLeg = actor.vrm.humanoid.getRawBoneNode('rightLowerLeg');
-      const rightFoot = actor.vrm.humanoid.getRawBoneNode('rightFoot');
+      // const leftUpperLeg = actor.vrm.humanoid.getRawBoneNode('leftUpperLeg');
+      // const leftLowerLeg = actor.vrm.humanoid.getRawBoneNode('leftLowerLeg');
+      // const leftFoot = actor.vrm.humanoid.getRawBoneNode('leftFoot');
+      // const rightUpperLeg = actor.vrm.humanoid.getRawBoneNode('rightUpperLeg');
+      // const rightLowerLeg = actor.vrm.humanoid.getRawBoneNode('rightLowerLeg');
+      // const rightFoot = actor.vrm.humanoid.getRawBoneNode('rightFoot');
 
-      if (leftUpperLeg && leftLowerLeg && leftFoot) {
-        this.applyLegIK(leftUpperLeg, leftLowerLeg, leftFoot);
-      }
-      if (rightUpperLeg && rightLowerLeg && rightFoot) {
-        this.applyLegIK(rightUpperLeg, rightLowerLeg, rightFoot);
-      }
+      // if (leftUpperLeg && leftLowerLeg && leftFoot) {
+      //   this.applyLegIK(leftUpperLeg, leftLowerLeg, leftFoot);
+      // }
+      // if (rightUpperLeg && rightLowerLeg && rightFoot) {
+      //   this.applyLegIK(rightUpperLeg, rightLowerLeg, rightFoot);
+      // }
     }
   }
 
