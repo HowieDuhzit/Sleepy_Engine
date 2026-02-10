@@ -170,7 +170,10 @@ export class GameApp {
   private localId: string | null = null;
   private inputHistory: PlayerInput[] = []; // Store last 60 inputs (~3 seconds at 20Hz)
   private readonly MAX_INPUT_HISTORY = 60;
-  private readonly remoteBufferSeconds = 0.12;
+  private remoteBufferSeconds = 0.1; // Adaptive: starts at 100ms
+  private remoteBufferMin = 0.05; // Min 50ms
+  private remoteBufferMax = 0.2; // Max 200ms
+  private lastSnapshotTimes: number[] = []; // Track snapshot arrival times for adaptive buffer
   private crowdAgents: CrowdSnapshot['agents'] = [];
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
   private remoteLatestVel = new Map<string, Vec3>();
@@ -1112,6 +1115,32 @@ export class GameApp {
     if (heatNode) heatNode.textContent = this.statusLines.heat;
     const phaseNode = this.hud.querySelector('[data-hud-phase]');
     if (phaseNode) phaseNode.textContent = this.statusLines.phase;
+
+    // Track snapshot arrival time for adaptive buffering
+    const now = performance.now() / 1000;
+    this.lastSnapshotTimes.push(now);
+    if (this.lastSnapshotTimes.length > 10) {
+      this.lastSnapshotTimes.shift();
+      // Calculate jitter (variance in snapshot arrival times)
+      if (this.lastSnapshotTimes.length >= 3) {
+        const intervals: number[] = [];
+        for (let i = 1; i < this.lastSnapshotTimes.length; i++) {
+          intervals.push(this.lastSnapshotTimes[i]! - this.lastSnapshotTimes[i - 1]!);
+        }
+        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const variance =
+          intervals.reduce((sum, interval) => sum + Math.pow(interval - avgInterval, 2), 0) /
+          intervals.length;
+        const jitter = Math.sqrt(variance);
+        // Adaptive buffer: 2x average interval + 3x jitter (handles both latency and jitter)
+        const targetBuffer = Math.min(
+          this.remoteBufferMax,
+          Math.max(this.remoteBufferMin, avgInterval * 2 + jitter * 3),
+        );
+        // Smooth adjustment
+        this.remoteBufferSeconds += (targetBuffer - this.remoteBufferSeconds) * 0.1;
+      }
+    }
     for (const [id, playerSnap] of Object.entries(snapshot.players)) {
       if (this.localId && id === this.localId) {
         const lastProcessedSeq = snapshot.lastProcessedInput?.[id];
@@ -1146,8 +1175,9 @@ export class GameApp {
         state: playerSnap.animState ?? 'idle',
         time: playerSnap.animTime ?? 0,
       });
-      if (entry.snapshots.length > 5) {
-        entry.snapshots.splice(0, entry.snapshots.length - 5);
+      // Keep only last 3 snapshots (enough for interpolation + 1 buffer)
+      if (entry.snapshots.length > 3) {
+        entry.snapshots.splice(0, entry.snapshots.length - 3);
       }
     }
 
@@ -1304,11 +1334,14 @@ export class GameApp {
       }
 
       if (older === newer) {
-        const dt = Math.min(0.1, renderTime - older.t);
+        // Extrapolate with damping (packet loss/delayed snapshot case)
+        const dt = Math.min(0.15, renderTime - older.t);
+        // Apply damping factor based on how old the snapshot is
+        const dampingFactor = Math.max(0, 1 - dt * 2); // Reduces to 0 after 500ms
         mesh.position.set(
-          older.position.x + older.velocity.x * dt,
+          older.position.x + older.velocity.x * dt * dampingFactor,
           older.position.y + older.velocity.y * dt,
-          older.position.z + older.velocity.z * dt,
+          older.position.z + older.velocity.z * dt * dampingFactor,
         );
         if (Number.isFinite(older.yaw)) {
           mesh.rotation.y = older.yaw;
