@@ -1047,7 +1047,9 @@ body,
 }
 
 .splash-logo {
-  width: min(420px, 55vw);
+  width: 70%;
+  height: 70%;
+  object-fit: contain;
   display: block;
   position: relative;
   z-index: 2;
