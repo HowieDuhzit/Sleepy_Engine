@@ -146,6 +146,14 @@ export class GameApp {
   private hudVisible = false;
   private perfHud: HTMLDivElement;
   private perfVisible = false;
+  private touchControls: HTMLDivElement | null = null;
+  private touchMoveActive = false;
+  private touchLookActive = false;
+  private touchMoveId: number | null = null;
+  private touchLookId: number | null = null;
+  private touchMoveOrigin = new THREE.Vector2();
+  private touchLookOrigin = new THREE.Vector2();
+  private touchLookDelta = new THREE.Vector2();
   private perfFrames = 0;
   private perfAccum = 0;
   private perfFps = 0;
@@ -275,6 +283,8 @@ export class GameApp {
     this.container.appendChild(this.hud);
     this.container.appendChild(this.perfHud);
     this.hud.style.display = this.hudVisible ? 'block' : 'none';
+    this.touchControls = this.createTouchControls();
+    if (this.touchControls) this.container.appendChild(this.touchControls);
     this.container.focus();
     window.addEventListener('keydown', (event) => {
       const value = `raw: ${event.code || event.key}`;
@@ -2193,6 +2203,129 @@ export class GameApp {
     this.statusLines.input = value;
     const node = this.hud.querySelector('[data-hud-input]');
     if (node) node.textContent = value;
+  }
+
+  private createTouchControls() {
+    const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (!isTouch) return null;
+
+    const root = document.createElement('div');
+    root.className = 'touch-controls';
+    root.innerHTML = [
+      '<div class="touch-left">',
+      '<div class="touch-stick" data-touch-stick>',
+      '<div class="touch-stick-thumb" data-touch-thumb></div>',
+      '</div>',
+      '</div>',
+      '<div class="touch-right">',
+      '<button class="touch-btn" data-touch-jump>Jump</button>',
+      '<button class="touch-btn" data-touch-sprint>Sprint</button>',
+      '<button class="touch-btn" data-touch-crouch>Crouch</button>',
+      '<button class="touch-btn" data-touch-attack>Attack</button>',
+      '</div>',
+      '<div class="touch-look" data-touch-look></div>',
+    ].join('');
+
+    const stick = root.querySelector('[data-touch-stick]') as HTMLDivElement;
+    const thumb = root.querySelector('[data-touch-thumb]') as HTMLDivElement;
+    const lookZone = root.querySelector('[data-touch-look]') as HTMLDivElement;
+    const jumpBtn = root.querySelector('[data-touch-jump]') as HTMLButtonElement;
+    const sprintBtn = root.querySelector('[data-touch-sprint]') as HTMLButtonElement;
+    const crouchBtn = root.querySelector('[data-touch-crouch]') as HTMLButtonElement;
+    const attackBtn = root.querySelector('[data-touch-attack]') as HTMLButtonElement;
+
+    const setThumb = (dx: number, dy: number) => {
+      thumb.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+
+    const handleMoveStart = (event: PointerEvent) => {
+      if (this.touchMoveActive) return;
+      this.touchMoveActive = true;
+      this.touchMoveId = event.pointerId;
+      stick.setPointerCapture(event.pointerId);
+      const rect = stick.getBoundingClientRect();
+      this.touchMoveOrigin.set(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      setThumb(0, 0);
+    };
+
+    const handleMove = (event: PointerEvent) => {
+      if (!this.touchMoveActive || event.pointerId !== this.touchMoveId) return;
+      const dx = event.clientX - this.touchMoveOrigin.x;
+      const dy = event.clientY - this.touchMoveOrigin.y;
+      const radius = 40;
+      const dist = Math.hypot(dx, dy);
+      const scale = dist > radius ? radius / dist : 1;
+      const clampedX = dx * scale;
+      const clampedY = dy * scale;
+      setThumb(clampedX, clampedY);
+      this.input.setTouchVector(clampedX / radius, clampedY / radius);
+    };
+
+    const handleMoveEnd = (event: PointerEvent) => {
+      if (event.pointerId !== this.touchMoveId) return;
+      this.touchMoveActive = false;
+      this.touchMoveId = null;
+      this.input.setTouchVector(0, 0);
+      setThumb(0, 0);
+    };
+
+    const handleLookStart = (event: PointerEvent) => {
+      if (this.touchLookActive) return;
+      this.touchLookActive = true;
+      this.touchLookId = event.pointerId;
+      lookZone.setPointerCapture(event.pointerId);
+      this.touchLookOrigin.set(event.clientX, event.clientY);
+      this.touchLookDelta.set(0, 0);
+    };
+
+    const handleLook = (event: PointerEvent) => {
+      if (!this.touchLookActive || event.pointerId !== this.touchLookId) return;
+      const dx = event.clientX - this.touchLookOrigin.x;
+      const dy = event.clientY - this.touchLookOrigin.y;
+      this.touchLookOrigin.set(event.clientX, event.clientY);
+      this.touchLookDelta.set(dx, dy);
+      const scale = 0.03;
+      this.input.setTouchLook(dx * scale, dy * scale);
+    };
+
+    const handleLookEnd = (event: PointerEvent) => {
+      if (event.pointerId !== this.touchLookId) return;
+      this.touchLookActive = false;
+      this.touchLookId = null;
+      this.input.setTouchLook(0, 0);
+    };
+
+    stick.addEventListener('pointerdown', handleMoveStart);
+    stick.addEventListener('pointermove', handleMove);
+    stick.addEventListener('pointerup', handleMoveEnd);
+    stick.addEventListener('pointercancel', handleMoveEnd);
+
+    lookZone.addEventListener('pointerdown', handleLookStart);
+    lookZone.addEventListener('pointermove', handleLook);
+    lookZone.addEventListener('pointerup', handleLookEnd);
+    lookZone.addEventListener('pointercancel', handleLookEnd);
+
+    const setFlag = (name: 'jump' | 'sprint' | 'crouch' | 'attack', active: boolean) => {
+      this.input.setTouchFlags({ [name]: active } as any);
+    };
+
+    jumpBtn.addEventListener('pointerdown', () => setFlag('jump', true));
+    jumpBtn.addEventListener('pointerup', () => setFlag('jump', false));
+    jumpBtn.addEventListener('pointerleave', () => setFlag('jump', false));
+
+    sprintBtn.addEventListener('pointerdown', () => setFlag('sprint', true));
+    sprintBtn.addEventListener('pointerup', () => setFlag('sprint', false));
+    sprintBtn.addEventListener('pointerleave', () => setFlag('sprint', false));
+
+    crouchBtn.addEventListener('pointerdown', () => setFlag('crouch', true));
+    crouchBtn.addEventListener('pointerup', () => setFlag('crouch', false));
+    crouchBtn.addEventListener('pointerleave', () => setFlag('crouch', false));
+
+    attackBtn.addEventListener('pointerdown', () => setFlag('attack', true));
+    attackBtn.addEventListener('pointerup', () => setFlag('attack', false));
+    attackBtn.addEventListener('pointerleave', () => setFlag('attack', false));
+
+    return root;
   }
 
   private updateKeyHud() {

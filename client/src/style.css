@@ -596,6 +596,73 @@ body,
   font-size: 12px;
 }
 
+.touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.touch-left {
+  position: absolute;
+  left: 20px;
+  bottom: 30px;
+  width: 120px;
+  height: 120px;
+  pointer-events: auto;
+}
+
+.touch-stick {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(15, 18, 26, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.touch-stick-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  margin-left: -24px;
+  margin-top: -24px;
+  border-radius: 50%;
+  background: rgba(100, 150, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: transform 0.03s linear;
+}
+
+.touch-right {
+  position: absolute;
+  right: 16px;
+  bottom: 30px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.touch-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.75);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.touch-look {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 55%;
+  height: 55%;
+  pointer-events: auto;
+}
+
 .editor-ui button {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(45, 54, 74, 0.9);
