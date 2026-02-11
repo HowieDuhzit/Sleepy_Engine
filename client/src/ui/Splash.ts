@@ -11,14 +11,13 @@ export const createSplash = () => {
       </div>
       <div class="splash-controls">
         <div class="splash-led"></div>
-        <div class="splash-caption">Sleepy Studio</div>
         <div class="splash-led"></div>
       </div>
       <div class="splash-bar">
         <div class="splash-bar-fill"></div>
       </div>
       <div class="splash-footer">
-        <span>CARTRIDGE READY</span>
+        <span data-splash-status>WAKING UP</span>
         <span class="splash-blink">PRESS ANY KEY</span>
       </div>
     </div>

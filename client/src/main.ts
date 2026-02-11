@@ -30,6 +30,13 @@ const menu = createMenu((choice, scene) => {
 
 const splash = createSplash();
 document.body.appendChild(splash);
+const splashStatus = splash.querySelector('[data-splash-status]') as HTMLSpanElement | null;
+
+const markSplashReady = () => {
+  splash.classList.add('splash-ready');
+  if (splashStatus) splashStatus.textContent = 'ENGINE LOADED';
+};
+window.setTimeout(markSplashReady, 2200);
 container.appendChild(menu);
 
 const dismissSplash = () => {

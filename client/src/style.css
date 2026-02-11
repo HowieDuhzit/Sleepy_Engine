@@ -1105,10 +1105,10 @@ body,
 
 .splash-bar-fill {
   height: 100%;
-  width: 45%;
+  width: 0%;
   background: linear-gradient(90deg, rgba(255, 200, 120, 0.15), rgba(255, 200, 120, 0.95));
   box-shadow: 0 0 12px rgba(255, 200, 120, 0.7);
-  animation: splash-load 2.8s ease-in-out infinite;
+  animation: splash-load 2.2s ease-in-out forwards;
 }
 
 .splash-footer {
@@ -1139,16 +1139,12 @@ body,
 
 @keyframes splash-load {
   0% {
-    width: 10%;
+    width: 0%;
     filter: brightness(0.8);
   }
-  50% {
-    width: 70%;
-    filter: brightness(1.2);
-  }
   100% {
-    width: 25%;
-    filter: brightness(0.9);
+    width: 100%;
+    filter: brightness(1.15);
   }
 }
 
@@ -1185,6 +1181,11 @@ body,
   50% {
     opacity: 1;
   }
+}
+
+.splash-ready .splash-bar-fill {
+  width: 100%;
+  animation: none;
 }
 
 @keyframes splash-blink {
