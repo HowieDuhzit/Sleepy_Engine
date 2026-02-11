@@ -959,8 +959,8 @@ body,
   display: grid;
   place-items: center;
   background:
-    radial-gradient(circle at top, rgba(110, 160, 255, 0.22), rgba(0, 0, 0, 0.88) 55%),
-    linear-gradient(180deg, #0b0f16 0%, #0a0d12 55%, #05070c 100%);
+    radial-gradient(circle at 50% 20%, rgba(90, 140, 255, 0.28), rgba(0, 0, 0, 0.9) 60%),
+    linear-gradient(180deg, #06070d 0%, #06070c 55%, #03040a 100%);
   z-index: 9999;
   color: #d6fffb;
   text-transform: uppercase;
@@ -979,7 +979,7 @@ body,
       transparent 2px,
       transparent 4px
     ),
-    radial-gradient(circle at 20% 20%, rgba(80, 120, 255, 0.16), transparent 40%);
+    radial-gradient(circle at 30% 20%, rgba(70, 110, 255, 0.18), transparent 45%);
   mix-blend-mode: screen;
   pointer-events: none;
 }
@@ -987,24 +987,26 @@ body,
 .splash-screen::after {
   content: '';
   position: absolute;
-  inset: -20% 0;
-  background: linear-gradient(120deg, rgba(120, 160, 255, 0.12), transparent 45%);
+  inset: -40% 0;
+  background:
+    linear-gradient(120deg, rgba(110, 160, 255, 0.18), transparent 50%),
+    conic-gradient(from 220deg at 50% 40%, rgba(40, 80, 200, 0.2), transparent 50%);
   transform: translateY(0);
-  animation: splash-scan 6s linear infinite;
+  animation: splash-scan 5.5s linear infinite;
   pointer-events: none;
 }
 
 .splash-console {
   width: min(1200px, 92vw);
-  background: linear-gradient(165deg, #d6d8dd, #b9bcc3 55%, #90949d);
-  border: 2px solid rgba(50, 55, 65, 0.45);
+  background: linear-gradient(165deg, #d9dadd, #bfc3c8 55%, #9fa4ad);
+  border: 2px solid rgba(42, 46, 58, 0.5);
   box-shadow:
     0 30px 80px rgba(0, 0, 0, 0.6),
     inset 0 0 20px rgba(0, 0, 0, 0.35);
   border-radius: 26px;
   padding: 28px 32px 30px;
   display: grid;
-  gap: 18px;
+  gap: 16px;
   position: relative;
   justify-items: stretch;
   animation: splash-float 4s ease-in-out infinite;
@@ -1024,9 +1026,9 @@ body,
   border-radius: 16px;
   padding: 26px 18px;
   background:
-    radial-gradient(circle at 50% 30%, rgba(100, 140, 255, 0.22), transparent 60%),
-    linear-gradient(180deg, rgba(12, 16, 26, 0.98), rgba(6, 8, 14, 0.98));
-  border: 2px solid rgba(20, 26, 40, 0.9);
+    radial-gradient(circle at 50% 35%, rgba(110, 160, 255, 0.28), transparent 60%),
+    linear-gradient(180deg, rgba(10, 12, 22, 0.98), rgba(5, 6, 12, 0.98));
+  border: 2px solid rgba(14, 18, 32, 0.92);
   overflow: hidden;
 }
 
@@ -1059,8 +1061,8 @@ body,
   width: min(520px, 70vw);
   display: block;
   margin: 0 auto;
-  filter: drop-shadow(0 0 18px rgba(90, 140, 255, 0.55));
-  animation: splash-glow 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 22px rgba(110, 160, 255, 0.65));
+  animation: splash-glow 2.6s ease-in-out infinite;
 }
 
 .splash-glow {
@@ -1116,6 +1118,24 @@ body,
   justify-content: space-between;
   font-size: 0.75rem;
   color: rgba(210, 220, 255, 0.85);
+}
+
+.splash-boot {
+  text-align: center;
+  font-size: 0.7rem;
+  color: rgba(40, 46, 68, 0.8);
+  letter-spacing: 0.22em;
+}
+
+.splash-boot-title {
+  font-weight: 700;
+}
+
+.splash-boot-sub {
+  margin-top: 4px;
+  font-size: 0.6rem;
+  letter-spacing: 0.3em;
+  color: rgba(60, 70, 100, 0.75);
 }
 
 .splash-blink {

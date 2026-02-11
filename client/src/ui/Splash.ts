@@ -13,6 +13,10 @@ export const createSplash = () => {
         <div class="splash-led"></div>
         <div class="splash-led"></div>
       </div>
+      <div class="splash-boot">
+        <div class="splash-boot-title">Sleepy Computer Systems</div>
+        <div class="splash-boot-sub">Licensed by Sleepy Engine</div>
+      </div>
       <div class="splash-bar">
         <div class="splash-bar-fill"></div>
       </div>
