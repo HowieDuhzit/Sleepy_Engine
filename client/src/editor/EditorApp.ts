@@ -38,6 +38,13 @@ type RagdollBone = {
   boneWorldQuat?: THREE.Quaternion;
 };
 
+type UndoEntry = {
+  clip: ClipData;
+  time: number;
+};
+
+const UNDO_MAX = 50;
+
 export class EditorApp {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
@@ -48,6 +55,14 @@ export class EditorApp {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private viewportObserver: ResizeObserver | null = null;
+  // Undo / redo stacks
+  private undoStack: UndoEntry[] = [];
+  private redoStack: UndoEntry[] = [];
+  // Clipboard for copy/paste keyframe
+  private keyframeClipboard: { bones: Record<string, { x: number; y: number; z: number; w: number }>; rootPos?: { x: number; y: number; z: number } } | null = null;
+  // Callbacks wired by createHud
+  private updateUndoInfo: (() => void) | null = null;
+  private updateBoneList: (() => void) | null = null;
   // Stylus/pointer state tracking
   private pointerPressure = 0;
   private pointerTiltX = 0;
@@ -319,15 +334,11 @@ export class EditorApp {
       // Swipe right = undo, swipe left = redo (threshold: 100px)
       if (Math.abs(avgDx) > 100) {
         if (avgDx > 0) {
-          // Undo gesture (swipe right)
           this.triggerHapticFeedback('heavy');
-          // TODO: Implement undo functionality
-          console.log('Undo gesture detected');
+          this.undo();
         } else {
-          // Redo gesture (swipe left)
           this.triggerHapticFeedback('heavy');
-          // TODO: Implement redo functionality
-          console.log('Redo gesture detected');
+          this.redo();
         }
         // Reset gesture to prevent repeated triggers
         this.isGesturing = false;
@@ -475,6 +486,7 @@ export class EditorApp {
     this.renderer.domElement.addEventListener('pointercancel', this.handleGestureEnd);
 
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('keydown', this.handleKeyboard);
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
         this.resizeRenderer();
@@ -497,6 +509,7 @@ export class EditorApp {
       this.animationId = null;
     }
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('keydown', this.handleKeyboard);
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
     window.removeEventListener('pointermove', this.handleRagdollDrag);
     window.removeEventListener('pointerup', this.handleRagdollDragEnd);
@@ -523,6 +536,15 @@ export class EditorApp {
     this.resizeRenderer();
     this.resizeTimeline();
     this.fitCameraToVrm();
+  };
+
+  private handleKeyboard = (e: KeyboardEvent) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); }
+    else if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); this.redo(); }
+    else if (mod && e.key === 'y') { e.preventDefault(); this.redo(); }
+    else if (mod && e.key === 'c') { e.preventDefault(); this.copyKeyframeAtTime(this.time); }
+    else if (mod && e.key === 'v') { e.preventDefault(); this.pasteKeyframeAtTime(this.time); }
   };
 
   private tick = () => {
@@ -568,7 +590,28 @@ export class EditorApp {
       '</div>',
       '</div>',
       '<div class="editor-shell">',
-      '<div class="editor-left" data-tab-panel="animation" style="display:none;"></div>',
+      '<div class="editor-left" data-tab-panel="animation" style="display:none;">',
+      '<div class="panel">',
+      '<div class="panel-title">Bones</div>',
+      '<div class="bone-list" data-bone-list></div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">History</div>',
+      '<div class="undo-info" data-undo-info>Undo: 0 &middot; Redo: 0</div>',
+      '<div class="panel-actions">',
+      '<button data-undo-btn>Undo</button>',
+      '<button data-redo-btn>Redo</button>',
+      '</div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Clipboard</div>',
+      '<div class="undo-info" data-clipboard-info>Empty</div>',
+      '<div class="panel-actions">',
+      '<button data-copy-btn>Copy Frame</button>',
+      '<button data-paste-btn>Paste Frame</button>',
+      '</div>',
+      '</div>',
+      '</div>',
       '<div class="editor-left" data-tab-panel="player" style="display:none;">',
       '<div class="panel">',
       '<div class="panel-title">Player Controller</div>',
@@ -792,6 +835,10 @@ export class EditorApp {
     });
 
     hud.classList.add('mode-animation');
+    // Show animation tab panels on startup
+    for (const panel of tabPanels) {
+      panel.style.display = panel.dataset.tabPanel === 'animation' ? '' : 'none';
+    }
 
     const timeInput = hud.querySelector('[data-time]') as HTMLInputElement;
     const durationInput = hud.querySelector('[data-duration]') as HTMLInputElement;
@@ -1369,6 +1416,7 @@ export class EditorApp {
     });
 
     addBtn.addEventListener('click', () => {
+      this.pushUndo();
       if (this.overrideMode && this.selectedBone) {
         this.applyOverrideOffset(this.selectedBone, this.time);
       } else {
@@ -1440,6 +1488,7 @@ export class EditorApp {
     });
 
     clearBtn.addEventListener('click', () => {
+      this.pushUndo();
       this.clip.frames = [];
       this.clip.duration = Math.max(1, Math.min(MAX_DURATION, parseFloat(durationInput.value)));
       this.rebuildClipKeyMap();
@@ -1505,6 +1554,7 @@ export class EditorApp {
         setClipStatus('Load failed: no file selected', 'warn');
         return;
       }
+      this.pushUndo();
       try {
         const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
         if (!res.ok) {
@@ -1636,7 +1686,120 @@ export class EditorApp {
       ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
     });
 
+    // --- Animation left panel: bone list, history, clipboard ---
+    const boneListEl = hud.querySelector('[data-bone-list]') as HTMLDivElement;
+    const undoInfo = hud.querySelector('[data-undo-info]') as HTMLDivElement;
+    const clipboardInfo = hud.querySelector('[data-clipboard-info]') as HTMLDivElement;
+    const undoBtn = hud.querySelector('[data-undo-btn]') as HTMLButtonElement;
+    const redoBtn = hud.querySelector('[data-redo-btn]') as HTMLButtonElement;
+    const copyBtn = hud.querySelector('[data-copy-btn]') as HTMLButtonElement;
+    const pasteBtn = hud.querySelector('[data-paste-btn]') as HTMLButtonElement;
+
+    undoBtn?.addEventListener('click', () => this.undo());
+    redoBtn?.addEventListener('click', () => this.redo());
+    copyBtn?.addEventListener('click', () => {
+      if (this.copyKeyframeAtTime(this.time) && clipboardInfo) {
+        const snap = 1 / this.fps;
+        const t = Math.round(this.time / snap) * snap;
+        clipboardInfo.textContent = `Copied frame at ${t.toFixed(2)}s`;
+      }
+    });
+    pasteBtn?.addEventListener('click', () => {
+      if (this.pasteKeyframeAtTime(this.time) && clipboardInfo) {
+        clipboardInfo.textContent = `Pasted at ${this.time.toFixed(2)}s`;
+      }
+    });
+
+    this.updateUndoInfo = () => {
+      if (undoInfo) undoInfo.textContent = `Undo: ${this.undoStack.length} \u00b7 Redo: ${this.redoStack.length}`;
+    };
+    this.updateBoneList = () => {
+      if (!boneListEl) return;
+      boneListEl.innerHTML = '';
+      for (const bone of this.bones) {
+        const key = this.getBoneKey(bone);
+        const btn = document.createElement('button');
+        btn.className = 'bone-list-item' + (bone === this.selectedBone ? ' active' : '');
+        btn.textContent = key;
+        btn.addEventListener('click', () => {
+          this.setSelectedBone(bone);
+          this.updateBoneList?.();
+        });
+        boneListEl.appendChild(btn);
+      }
+    };
+
     return hud;
+  }
+
+  private cloneClip(): ClipData {
+    return JSON.parse(JSON.stringify(this.clip)) as ClipData;
+  }
+
+  private pushUndo() {
+    this.undoStack.push({ clip: this.cloneClip(), time: this.time });
+    if (this.undoStack.length > UNDO_MAX) this.undoStack.shift();
+    this.redoStack.length = 0;
+    this.updateUndoInfo?.();
+  }
+
+  private undo() {
+    const entry = this.undoStack.pop();
+    if (!entry) return;
+    this.redoStack.push({ clip: this.cloneClip(), time: this.time });
+    this.clip = entry.clip;
+    this.time = entry.time;
+    this.rebuildClipKeyMap();
+    this.applyClipAtTime(this.time);
+    this.updateTimeline();
+    this.updateUndoInfo?.();
+  }
+
+  private redo() {
+    const entry = this.redoStack.pop();
+    if (!entry) return;
+    this.undoStack.push({ clip: this.cloneClip(), time: this.time });
+    this.clip = entry.clip;
+    this.time = entry.time;
+    this.rebuildClipKeyMap();
+    this.applyClipAtTime(this.time);
+    this.updateTimeline();
+    this.updateUndoInfo?.();
+  }
+
+  private copyKeyframeAtTime(time: number) {
+    const snap = 1 / this.fps;
+    const t = Math.round(time / snap) * snap;
+    const frame = this.clip.frames.find((f) => Math.abs(f.time - t) < 1e-4);
+    if (!frame) return false;
+    this.keyframeClipboard = {
+      bones: JSON.parse(JSON.stringify(frame.bones)),
+      rootPos: frame.rootPos ? { ...frame.rootPos } : undefined,
+    };
+    return true;
+  }
+
+  private pasteKeyframeAtTime(time: number) {
+    if (!this.keyframeClipboard) return false;
+    this.pushUndo();
+    const snap = 1 / this.fps;
+    const t = Math.round(time / snap) * snap;
+    const existing = this.clip.frames.find((f) => Math.abs(f.time - t) < 1e-4);
+    const pasted = {
+      bones: JSON.parse(JSON.stringify(this.keyframeClipboard.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+      rootPos: this.keyframeClipboard.rootPos ? { ...this.keyframeClipboard.rootPos } : undefined,
+    };
+    if (existing) {
+      Object.assign(existing.bones, pasted.bones);
+      if (pasted.rootPos) existing.rootPos = pasted.rootPos;
+    } else {
+      this.clip.frames.push({ time: t, ...pasted });
+      this.clip.frames.sort((a, b) => a.time - b.time);
+    }
+    this.rebuildClipKeyMap();
+    this.applyClipAtTime(t);
+    this.updateTimeline();
+    return true;
   }
 
   private refreshJson(textarea: HTMLTextAreaElement) {
@@ -1678,11 +1841,13 @@ export class EditorApp {
     animate();
   }
 
-  /**
-   * Show context menu for timeline at specific frame (long-press).
-   * Options: delete keyframe, insert keyframe, copy keyframe, paste keyframe
-   */
+  private dismissContextMenu() {
+    const old = this.container.querySelector('.context-menu');
+    if (old) old.remove();
+  }
+
   private showTimelineContextMenu(frameIndex: number) {
+    this.dismissContextMenu();
     const time = frameIndex / this.fps;
     const snap = 1 / this.fps;
     const t = Math.round(time / snap) * snap;
@@ -1693,29 +1858,56 @@ export class EditorApp {
     const existing = this.clip.frames.find((frame) => Math.abs(frame.time - t) < 1e-4);
     const hasKeyframe = existing && existing.bones[key];
 
-    // Simple context actions via browser confirm/prompt
-    // In production, you'd use a custom context menu UI component
-    const actions = hasKeyframe
-      ? ['Delete Keyframe', 'Copy Keyframe', 'Cancel']
-      : ['Insert Keyframe', 'Paste Keyframe', 'Cancel'];
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
 
-    // For now, just toggle keyframe as a simple action
-    // A full context menu would require additional UI components
+    type Action = { label: string; disabled?: boolean; action: () => void };
+    const items: Action[] = [];
+
     if (hasKeyframe) {
-      const confirmed = confirm(`Delete keyframe at ${t.toFixed(2)}s for ${key}?`);
-      if (confirmed) {
-        this.toggleKeyframe(bone, t);
-        this.updateTimeline();
-        this.triggerHapticFeedback('medium');
-      }
+      items.push({ label: 'Delete Keyframe', action: () => { this.toggleKeyframe(bone, t); this.updateTimeline(); this.triggerHapticFeedback('medium'); } });
+      items.push({ label: 'Copy Keyframe', action: () => { this.copyKeyframeAtTime(t); } });
     } else {
-      const confirmed = confirm(`Insert keyframe at ${t.toFixed(2)}s for ${key}?`);
-      if (confirmed) {
-        this.toggleKeyframe(bone, t);
-        this.updateTimeline();
-        this.triggerHapticFeedback('medium');
-      }
+      items.push({ label: 'Insert Keyframe', action: () => { this.toggleKeyframe(bone, t); this.updateTimeline(); this.triggerHapticFeedback('medium'); } });
+      items.push({ label: 'Paste Keyframe', disabled: !this.keyframeClipboard, action: () => { this.pasteKeyframeAtTime(t); this.triggerHapticFeedback('medium'); } });
     }
+
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.className = 'context-menu-item' + (item.disabled ? ' disabled' : '');
+      btn.textContent = item.label;
+      btn.addEventListener('click', () => { this.dismissContextMenu(); item.action(); });
+      menu.appendChild(btn);
+    }
+
+    // Separator + cancel
+    const sep = document.createElement('div');
+    sep.className = 'context-menu-sep';
+    menu.appendChild(sep);
+    const cancel = document.createElement('button');
+    cancel.className = 'context-menu-item';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => this.dismissContextMenu());
+    menu.appendChild(cancel);
+
+    // Position near the timeline scrub point
+    const rect = this.timeline!.getBoundingClientRect();
+    const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
+    const px = rect.left + (frameIndex / totalFrames) * rect.width;
+    menu.style.left = `${Math.min(px, window.innerWidth - 180)}px`;
+    menu.style.top = `${Math.max(0, rect.top - 10)}px`;
+    menu.style.transform = 'translateY(-100%)';
+
+    this.container.appendChild(menu);
+
+    // Close on outside click
+    const dismiss = (e: PointerEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        this.dismissContextMenu();
+        window.removeEventListener('pointerdown', dismiss, true);
+      }
+    };
+    window.addEventListener('pointerdown', dismiss, true);
   }
 
   private addKeyframe(time: number) {
@@ -1736,6 +1928,7 @@ export class EditorApp {
   }
 
   private toggleKeyframe(bone: THREE.Object3D, time: number) {
+    this.pushUndo();
     const snap = 1 / this.fps;
     const t = Math.round(time / snap) * snap;
     const key = this.getBoneKey(bone);
@@ -2350,6 +2543,7 @@ export class EditorApp {
     if (this.bones[0]) {
       this.setSelectedBone(this.bones[0]);
     }
+    this.updateBoneList?.();
   }
 
   private getBoneKey(bone: THREE.Object3D) {
@@ -2417,6 +2611,7 @@ export class EditorApp {
       }
     }
     this.updateBoneMarkers();
+    this.updateBoneList?.();
     this.refreshTimelineLabels();
     this.drawTimeline();
   }
@@ -2871,6 +3066,7 @@ export class EditorApp {
     if (!this.vrm || !name) return;
     const entry = this.mixamoEntries.find((item) => item.name === name);
     if (!entry) return;
+    this.pushUndo();
     if (!this.mixer) this.mixer = new THREE.AnimationMixer(this.vrm.scene);
     this.stopMixamoPreview();
     this.disableRagdoll();
@@ -3260,6 +3456,7 @@ export class EditorApp {
   }
 
   private startRagdollRecording() {
+    this.pushUndo();
     this.clip.frames = [];
     this.clip.duration = MAX_DURATION;
     this.ragdollTime = 0;
