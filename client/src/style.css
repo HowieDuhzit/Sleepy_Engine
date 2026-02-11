@@ -952,3 +952,138 @@ body,
   padding: 10px;
   gap: 4px;
 }
+
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top, rgba(88, 240, 255, 0.16), rgba(0, 0, 0, 0.9) 55%),
+    linear-gradient(180deg, #05060a 0%, #0b1018 55%, #05060a 100%);
+  z-index: 9999;
+  color: #d6fffb;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  overflow: hidden;
+}
+
+.splash-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    radial-gradient(circle at 20% 20%, rgba(50, 255, 220, 0.12), transparent 40%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.splash-screen::after {
+  content: '';
+  position: absolute;
+  inset: -20% 0;
+  background: linear-gradient(120deg, rgba(0, 255, 170, 0.08), transparent 45%);
+  transform: translateY(0);
+  animation: splash-scan 6s linear infinite;
+  pointer-events: none;
+}
+
+.splash-console {
+  width: min(1200px, 92vw);
+  background: rgba(7, 12, 20, 0.88);
+  border: 1px solid rgba(118, 255, 226, 0.25);
+  box-shadow:
+    0 0 30px rgba(0, 255, 200, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  border-radius: 18px;
+  padding: 28px 32px 24px;
+  display: grid;
+  gap: 18px;
+  position: relative;
+}
+
+.splash-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.splash-power {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: #2cffb0;
+  box-shadow: 0 0 10px rgba(44, 255, 176, 0.7);
+}
+
+.splash-title {
+  flex: 1;
+  text-align: center;
+  font-size: 1.1rem;
+  letter-spacing: 0.2em;
+}
+
+.splash-chip {
+  padding: 4px 8px;
+  border: 1px solid rgba(118, 255, 226, 0.4);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  background: rgba(19, 28, 40, 0.7);
+}
+
+.splash-ascii {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
+    monospace;
+  font-size: clamp(7px, 0.7vw, 11px);
+  line-height: 1.05;
+  white-space: pre;
+  color: #cafff2;
+  text-shadow: 0 0 12px rgba(55, 255, 215, 0.35);
+  margin: 0;
+}
+
+.splash-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: rgba(214, 255, 251, 0.85);
+}
+
+.splash-blink {
+  animation: splash-blink 1.2s steps(2, start) infinite;
+}
+
+.splash-hide {
+  opacity: 0;
+  transform: scale(0.98);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+@keyframes splash-scan {
+  0% {
+    transform: translateY(-10%);
+  }
+  100% {
+    transform: translateY(10%);
+  }
+}
+
+@keyframes splash-blink {
+  0% {
+    opacity: 0.1;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
+}
