@@ -6,6 +6,7 @@ import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
+const host = process.env.HOST ?? '0.0.0.0';
 const animationsDir =
   process.env.ANIMATIONS_DIR ?? path.join(process.cwd(), 'client', 'public', 'animations');
 const configDir = process.env.CONFIG_DIR ?? path.join(process.cwd(), 'client', 'public', 'config');
@@ -124,8 +125,8 @@ app.post('/api/player-config', async (req: Request, res: Response) => {
 
 const httpServer = createServer(app);
 gameServer.attach({ server: httpServer });
-httpServer.listen(port);
-console.log(`Game server listening on ws://localhost:${port}`);
+httpServer.listen(port, host);
+console.log(`Game server listening on ws://${host}:${port}`);
 
 process.on('SIGTERM', () => {
   gameServer.gracefullyShutdown();
