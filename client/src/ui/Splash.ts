@@ -1,73 +1,27 @@
-const SPLASH_ASCII = `                                              ▓▓▓▓▓▓▓▓                                              
-                                            ▓▓▓▓▓▓▓▓▓▓▓▓                                            
-                                            ▓▓▓▓    ▓▓▓▓                                            
-                                           ▓▓▓▓      ▓▓▓▓                                           
-                                            ▓▓▓▓    ▓▓▓▓                                            
-                                             ▓▓▓▓▓▓▓▓▓▓                                             
-                                               ▓█▓▓█▓                                               
-                                               ██████                                               
-                                               ██████                                               
-                                               ██████                                               
-                                               ██████                                               
-                                               ██████                                               
-                                               ██████                                               
-                                            ████████████                                            
-                    ████████████████████████████████████████████████████████████                    
-                    ████████████████████████████████████████████████████████████                    
-                    ████████████████████████████████████████████████████████████                    
-                    ████████████████████████████████████████████████████████████                    
-                    █████████                ██████████                 ████████                    
-                    █████████                ██████████                 ████████                    
-                    █████████                ██████████                 ████████                    
-                    █████████                ██████████                 ████████                    
-                                                                                                    
-                                                                                                    
-▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-▓▓▓                 ▓▓▓▓                                                                         ▓▓▓
-▓▓▓   ██████████    ▓▓▓▓          ██████████████ ██████████████  ███████████    ▓▓▓▓▓       ▓▓▓▓▓▓▓▓
-▓▓▓ ██████████████  ▓▓▓▓          ██████████████ ██████████████  █████████████   ▓▓▓▓▓    ▓▓▓▓▓  ▓▓▓
-▓▓▓ ████            ▓▓▓▓                                         ████      ████   ▓▓▓▓▓  ▓▓▓▓▓   ▓▓▓
-▓▓▓ ████████        ▓▓▓▓                                         ████      ████    ▓▓▓▓▓▓▓▓▓▓    ▓▓▓
-▓▓▓  ████████████   ▓▓▓▓          █████████████  ██████████████  ████      ████     ▓▓▓▓▓▓▓▓     ▓▓▓
-▓▓▓       ████████  ▓▓▓▓          ███  ████  ██  ███  ████  ██   █████████████        ▓▓▓▓       ▓▓▓
-▓▓▓           █████ ▓▓▓▓                                         ███████████          ▓▓▓▓       ▓▓▓
-▓▓▓█████      ████  ▓▓▓▓                                         ████                 ▓▓▓▓       ▓▓▓
-▓▓▓ █████████████   ▓▓▓▓▓▓▓▓▓▓▓▓▓ ██████████████ ██████████████  ████                 ▓▓▓▓       ▓▓▓
-▓▓▓    ████████      ▓▓▓▓▓▓▓▓▓▓▓   ████████████   ████████████   ███                  ▓▓▓▓       ▓▓▓
-▓▓▓                                                                                   ▓▓▓▓       ▓▓▓
-▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓
-                                                                                                    
-                                                                                                    
-     ██████          ████████          █     █          ███████            █            ███████     
-    ██                  ██             █     █          ██     ██          █           █      ██    
-     ██████             ██             █     █          ██     ██          █          ██       █    
-          ██            ██             █     █          ██     ██          █           █      ██    
-     ███████            ██              █████           ███████            █            ███████     `;
-
 export const createSplash = () => {
   const splash = document.createElement('div');
   splash.className = 'splash-screen';
   splash.innerHTML = `
     <div class="splash-console">
-      <div class="splash-header">
-        <div class="splash-power">■</div>
-        <div class="splash-title">Sleepy Engine</div>
-        <div class="splash-chip">v0.1</div>
+      <div class="splash-bezel">
+        <div class="splash-crt">
+          <img class="splash-logo" src="https://sleepystudio.xyz/SleepyStudioBlackShadowed.png" alt="Sleepy Studio" />
+          <div class="splash-glow"></div>
+        </div>
       </div>
-      <div class="splash-ascii-wrap">
-        <pre class="splash-ascii"></pre>
+      <div class="splash-controls">
+        <div class="splash-led"></div>
+        <div class="splash-caption">Sleepy Studio</div>
+        <div class="splash-led"></div>
       </div>
       <div class="splash-bar">
         <div class="splash-bar-fill"></div>
       </div>
       <div class="splash-footer">
-        <span>BOOT SEQUENCE</span>
+        <span>CARTRIDGE READY</span>
         <span class="splash-blink">PRESS ANY KEY</span>
       </div>
     </div>
   `;
-  const ascii = splash.querySelector('.splash-ascii') as HTMLPreElement | null;
-  if (ascii) ascii.textContent = SPLASH_ASCII;
   return splash;
 };
