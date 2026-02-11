@@ -55,7 +55,12 @@ export const createSplash = () => {
         <div class="splash-title">Sleepy Engine</div>
         <div class="splash-chip">v0.1</div>
       </div>
-      <pre class="splash-ascii"></pre>
+      <div class="splash-ascii-wrap">
+        <pre class="splash-ascii"></pre>
+      </div>
+      <div class="splash-bar">
+        <div class="splash-bar-fill"></div>
+      </div>
       <div class="splash-footer">
         <span>BOOT SEQUENCE</span>
         <span class="splash-blink">PRESS ANY KEY</span>

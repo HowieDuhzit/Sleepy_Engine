@@ -1006,6 +1006,8 @@ body,
   display: grid;
   gap: 18px;
   position: relative;
+  justify-items: stretch;
+  animation: splash-float 4s ease-in-out infinite;
 }
 
 .splash-header {
@@ -1042,12 +1044,41 @@ body,
 .splash-ascii {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
     monospace;
-  font-size: clamp(7px, 0.7vw, 11px);
-  line-height: 1.05;
+  font-size: clamp(6px, 0.62vw, 10px);
+  line-height: 1;
   white-space: pre;
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-ligatures: none;
+  text-align: left;
   color: #cafff2;
   text-shadow: 0 0 12px rgba(55, 255, 215, 0.35);
+  animation: splash-glow 2.4s ease-in-out infinite;
   margin: 0;
+}
+
+.splash-ascii-wrap {
+  overflow: hidden;
+  display: grid;
+  justify-items: center;
+  animation: splash-flicker 3.6s infinite;
+}
+
+.splash-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(6, 18, 28, 0.9);
+  border: 1px solid rgba(118, 255, 226, 0.25);
+  overflow: hidden;
+  position: relative;
+}
+
+.splash-bar-fill {
+  height: 100%;
+  width: 45%;
+  background: linear-gradient(90deg, rgba(44, 255, 176, 0.2), rgba(44, 255, 176, 0.95));
+  box-shadow: 0 0 12px rgba(44, 255, 176, 0.7);
+  animation: splash-load 2.8s ease-in-out infinite;
 }
 
 .splash-footer {
@@ -1076,6 +1107,46 @@ body,
   }
 }
 
+@keyframes splash-load {
+  0% {
+    width: 10%;
+    filter: brightness(0.8);
+  }
+  50% {
+    width: 70%;
+    filter: brightness(1.2);
+  }
+  100% {
+    width: 25%;
+    filter: brightness(0.9);
+  }
+}
+
+@keyframes splash-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  8% {
+    opacity: 0.92;
+  }
+  12% {
+    opacity: 0.98;
+  }
+  16% {
+    opacity: 0.88;
+  }
+  21% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.93;
+  }
+  66% {
+    opacity: 1;
+  }
+}
+
 @keyframes splash-blink {
   0% {
     opacity: 0.1;
@@ -1085,5 +1156,25 @@ body,
   }
   100% {
     opacity: 0.2;
+  }
+}
+
+@keyframes splash-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes splash-glow {
+  0%,
+  100% {
+    text-shadow: 0 0 10px rgba(55, 255, 215, 0.25);
+  }
+  50% {
+    text-shadow: 0 0 18px rgba(55, 255, 215, 0.6);
   }
 }
