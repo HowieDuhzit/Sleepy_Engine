@@ -8,9 +8,9 @@ if (!container) throw new Error('Missing #app');
 
 let app: { start: () => void; stop: () => void } | null = null;
 
-const startGame = () => {
+const startGame = (scene?: string) => {
   app?.stop();
-  app = new GameApp(container);
+  app = new GameApp(container, scene);
   app.start();
 };
 
@@ -20,9 +20,9 @@ const startEditor = () => {
   app.start();
 };
 
-const menu = createMenu((choice) => {
+const menu = createMenu((choice, scene) => {
   container.innerHTML = '';
-  if (choice === 'game') startGame();
+  if (choice === 'game') startGame(scene);
   if (choice === 'editor') startEditor();
 });
 

@@ -30,6 +30,9 @@ import {
 } from '@sleepy/shared';
 
 export class GameApp {
+  private sceneName: string;
+  private obstacles = OBSTACLES;
+  private obstacleGroup: THREE.Group | null = null;
   private playerConfig = {
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
@@ -228,11 +231,12 @@ export class GameApp {
   };
   private inputDebugTimer = 0;
 
-  constructor(container: HTMLElement | null) {
+  constructor(container: HTMLElement | null, sceneName = 'prototype') {
     if (!container) {
       throw new Error('Missing #app container');
     }
     this.container = container;
+    this.sceneName = sceneName;
     this.container.tabIndex = 0;
     this.container.addEventListener('click', () => this.container.focus());
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -262,6 +266,7 @@ export class GameApp {
     this.hud = this.createHud();
     this.perfHud = this.createPerfHud();
     this.createSettingsMenu();
+    void this.loadSceneConfig();
     this.crowd = this.createCrowd();
     this.input = new InputState();
     const env = (import.meta as any).env || {};
@@ -305,10 +310,11 @@ export class GameApp {
         if (toggle) toggle.checked = this.firstPersonMode;
       }
     });
+    this.obstacleGroup = this.createObstacles();
     this.scene.add(
       this.createLights(),
       this.createGround(),
-      this.createObstacles(),
+      this.obstacleGroup,
       this.localPlayer,
       this.crowd,
     );
@@ -483,7 +489,7 @@ export class GameApp {
   private createObstacles() {
     const group = new THREE.Group();
     const material = new THREE.MeshStandardMaterial({ color: 0x2a2f3c, roughness: 0.85, metalness: 0.1 });
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const geometry = new THREE.BoxGeometry(
         obstacle.size.x,
         obstacle.size.y,
@@ -498,7 +504,7 @@ export class GameApp {
 
   private sampleGroundHeight(x: number, z: number) {
     let height = GROUND_Y;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
       if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
@@ -1102,7 +1108,7 @@ export class GameApp {
     }
 
     let resolved = next;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
     }
     for (const entry of this.crowdAgents.values()) {
@@ -1126,7 +1132,7 @@ export class GameApp {
     if (dir.lengthSq() < 0.2) return false;
     const forward = 1.1;
     const pos = this.localPlayer.position;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       const ox = obstacle.position.x;
@@ -1144,7 +1150,7 @@ export class GameApp {
     if (dir.lengthSq() < 0.2) return false;
     const forward = 0.9;
     const pos = this.localPlayer.position;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       const ox = obstacle.position.x;
@@ -1167,7 +1173,7 @@ export class GameApp {
     const probeX = pos.x + dir.x * forward;
     const probeZ = pos.z + dir.z * forward;
     let best = 0;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       if (Math.abs(probeX - obstacle.position.x) <= halfX && Math.abs(probeZ - obstacle.position.z) <= halfZ) {
@@ -1622,6 +1628,31 @@ export class GameApp {
     } catch (error) {
       console.warn('Player config load failed', error);
     }
+  }
+
+  private async loadSceneConfig() {
+    try {
+      const res = await fetch('/config/scenes.json', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        scenes?: { name: string; obstacles?: typeof OBSTACLES }[];
+      };
+      const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
+      if (scene?.obstacles) {
+        this.obstacles = scene.obstacles;
+        this.rebuildObstacleMeshes();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private rebuildObstacleMeshes() {
+    if (this.obstacleGroup) {
+      this.scene.remove(this.obstacleGroup);
+    }
+    this.obstacleGroup = this.createObstacles();
+    this.scene.add(this.obstacleGroup);
   }
 
   private updateVrms(delta: number) {

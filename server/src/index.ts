@@ -122,6 +122,31 @@ app.post('/api/player-config', async (req: Request, res: Response) => {
   }
 });
 
+app.get('/api/scenes', async (_req: Request, res: Response) => {
+  try {
+    await ensureConfigDir();
+    const filePath = path.join(configDir, 'scenes.json');
+    const raw = await fs.readFile(filePath, 'utf8');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(raw);
+  } catch (err) {
+    console.error('Read scenes failed', err);
+    res.status(404).json({ error: 'not_found', detail: String(err) });
+  }
+});
+
+app.post('/api/scenes', async (req: Request, res: Response) => {
+  try {
+    await ensureConfigDir();
+    const filePath = path.join(configDir, 'scenes.json');
+    await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+    res.json({ ok: true, file: 'scenes.json' });
+  } catch (err) {
+    console.error('Save scenes failed', err);
+    res.status(500).json({ error: 'failed_to_save', detail: String(err), dir: configDir });
+  }
+});
+
 const httpServer = createServer(app);
 gameServer.attach({ server: httpServer });
 httpServer.listen(port);

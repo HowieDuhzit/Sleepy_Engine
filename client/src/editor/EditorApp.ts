@@ -371,7 +371,7 @@ export class EditorApp {
   };
   private boneVisualsVisible = true;
   private overrideMode = false;
-  private currentTab: 'animation' | 'player' = 'animation';
+  private currentTab: 'animation' | 'player' | 'level' = 'animation';
   private readonly ragdollDefs: { name: string; parent?: string }[] = [
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
@@ -565,6 +565,7 @@ export class EditorApp {
       '<div class="editor-tabs">',
       '<button class="editor-tab active" data-tab="animation">Animation</button>',
       '<button class="editor-tab" data-tab="player">Player</button>',
+      '<button class="editor-tab" data-tab="level">Level</button>',
       '</div>',
       '</div>',
       '<div class="editor-shell">',
@@ -618,6 +619,24 @@ export class EditorApp {
       '<div class="panel-actions">',
       '<button data-rig-apply>Apply Rig</button>',
       '<button data-rig-reset>Reset Rig</button>',
+      '</div>',
+      '</div>',
+      '<div class="editor-left" data-tab-panel="level" style="display:none;">',
+      '<div class="panel">',
+      '<div class="panel-title">Scene</div>',
+      '<label class="field"><span>Scenes</span><select data-scene-list></select></label>',
+      '<label class="field"><span>Name</span><input data-scene-name type="text" placeholder="prototype" /></label>',
+      '<div class="panel-actions">',
+      '<button data-scene-new>New</button>',
+      '<button data-scene-load>Load</button>',
+      '<button data-scene-save>Save</button>',
+      '<button data-scene-delete>Delete</button>',
+      '</div>',
+      '<div class="clip-status" data-scene-status></div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Obstacles JSON</div>',
+      '<textarea data-scene-obstacles rows="12"></textarea>',
       '</div>',
       '</div>',
       '</div>',
@@ -727,6 +746,18 @@ export class EditorApp {
       '</div>',
       '</div>',
       '</div>',
+      '<div class="editor-bottom player-bottom" data-tab-panel="level" style="display:none;">',
+      '<div class="player-bottom-grid">',
+      '<div class="panel">',
+      '<div class="panel-title">Scene JSON</div>',
+      '<textarea data-scene-json rows="10"></textarea>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Tips</div>',
+      '<div class="clip-status">Edit obstacles as an array of boxes. Save to write /config/scenes.json.</div>',
+      '</div>',
+      '</div>',
+      '</div>',
     ].join('');
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
@@ -762,10 +793,11 @@ export class EditorApp {
     }
     tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        const tab = button.dataset.tab as 'animation' | 'player';
+        const tab = button.dataset.tab as 'animation' | 'player' | 'level';
         this.currentTab = tab;
         hud.classList.toggle('mode-animation', tab === 'animation');
         hud.classList.toggle('mode-player', tab === 'player');
+        hud.classList.toggle('mode-level', tab === 'level');
         for (const btn of tabButtons) {
           btn.classList.toggle('active', btn.dataset.tab === tab);
         }
@@ -792,6 +824,106 @@ export class EditorApp {
     });
 
     hud.classList.add('mode-animation');
+
+    const sceneState = { scenes: [] as { name: string; obstacles?: any[] }[] };
+    const setSceneStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
+      sceneStatus.textContent = text;
+      sceneStatus.dataset.tone = tone;
+    };
+    const syncSceneSelect = () => {
+      sceneList.innerHTML = '';
+      for (const entry of sceneState.scenes) {
+        const opt = document.createElement('option');
+        opt.value = entry.name;
+        opt.textContent = entry.name;
+        sceneList.appendChild(opt);
+      }
+    };
+    const syncSceneJson = () => {
+      sceneJson.value = JSON.stringify(sceneState, null, 2);
+    };
+    const loadSceneFromState = (name: string) => {
+      const entry = sceneState.scenes.find((s) => s.name === name);
+      if (!entry) return;
+      sceneNameInput.value = entry.name;
+      sceneObstacles.value = JSON.stringify(entry.obstacles ?? [], null, 2);
+      syncSceneJson();
+    };
+    const loadScenes = async () => {
+      try {
+        const res = await fetch('/api/scenes', { cache: 'no-store' });
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as { scenes?: { name: string; obstacles?: any[] }[] };
+        sceneState.scenes = data.scenes ?? [{ name: 'prototype', obstacles: [] }];
+        syncSceneSelect();
+        loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
+        setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
+      } catch (err) {
+        sceneState.scenes = [{ name: 'prototype', obstacles: [] }];
+        syncSceneSelect();
+        loadSceneFromState('prototype');
+        setSceneStatus(`Load failed: ${String(err)}`, 'warn');
+      }
+    };
+    const saveScenes = async () => {
+      try {
+        const res = await fetch('/api/scenes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sceneState),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        setSceneStatus('Saved scenes.json', 'ok');
+      } catch (err) {
+        setSceneStatus(`Save failed: ${String(err)}`, 'warn');
+      }
+    };
+
+    sceneLoadBtn?.addEventListener('click', () => loadSceneFromState(sceneList.value));
+    sceneList?.addEventListener('change', () => loadSceneFromState(sceneList.value));
+    sceneNewBtn?.addEventListener('click', () => {
+      const name = (sceneNameInput.value || '').trim() || `scene_${sceneState.scenes.length + 1}`;
+      if (sceneState.scenes.find((s) => s.name === name)) {
+        setSceneStatus('Scene already exists', 'warn');
+        return;
+      }
+      sceneState.scenes.push({ name, obstacles: [] });
+      syncSceneSelect();
+      sceneList.value = name;
+      loadSceneFromState(name);
+    });
+    sceneSaveBtn?.addEventListener('click', async () => {
+      const name = (sceneNameInput.value || '').trim() || sceneList.value || 'prototype';
+      let obstacles: any[] = [];
+      try {
+        obstacles = JSON.parse(sceneObstacles.value || '[]');
+      } catch (err) {
+        setSceneStatus(`Invalid JSON: ${String(err)}`, 'warn');
+        return;
+      }
+      const entry = sceneState.scenes.find((s) => s.name === name);
+      if (entry) {
+        entry.obstacles = obstacles;
+      } else {
+        sceneState.scenes.push({ name, obstacles });
+      }
+      syncSceneSelect();
+      sceneList.value = name;
+      syncSceneJson();
+      await saveScenes();
+    });
+    sceneDeleteBtn?.addEventListener('click', async () => {
+      const name = sceneList.value;
+      sceneState.scenes = sceneState.scenes.filter((s) => s.name !== name);
+      if (sceneState.scenes.length === 0) {
+        sceneState.scenes.push({ name: 'prototype', obstacles: [] });
+      }
+      syncSceneSelect();
+      loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
+      syncSceneJson();
+      await saveScenes();
+    });
+    void loadScenes();
 
     const timeInput = hud.querySelector('[data-time]') as HTMLInputElement;
     const durationInput = hud.querySelector('[data-duration]') as HTMLInputElement;
@@ -873,6 +1005,15 @@ export class EditorApp {
     const rigResetButton = hud.querySelector('[data-rig-reset]') as HTMLButtonElement;
     const playerLoadButton = hud.querySelector('[data-player-load]') as HTMLButtonElement;
     const playerSaveButton = hud.querySelector('[data-player-save]') as HTMLButtonElement;
+    const sceneList = hud.querySelector('[data-scene-list]') as HTMLSelectElement;
+    const sceneNameInput = hud.querySelector('[data-scene-name]') as HTMLInputElement;
+    const sceneNewBtn = hud.querySelector('[data-scene-new]') as HTMLButtonElement;
+    const sceneLoadBtn = hud.querySelector('[data-scene-load]') as HTMLButtonElement;
+    const sceneSaveBtn = hud.querySelector('[data-scene-save]') as HTMLButtonElement;
+    const sceneDeleteBtn = hud.querySelector('[data-scene-delete]') as HTMLButtonElement;
+    const sceneStatus = hud.querySelector('[data-scene-status]') as HTMLDivElement;
+    const sceneObstacles = hud.querySelector('[data-scene-obstacles]') as HTMLTextAreaElement;
+    const sceneJson = hud.querySelector('[data-scene-json]') as HTMLTextAreaElement;
     this.timelineHeader = timelineHeader;
     this.timelineWrap = timelineWrap;
     const viewport = hud.querySelector('[data-viewport]') as HTMLDivElement;
