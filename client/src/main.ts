@@ -40,7 +40,6 @@ const dismissSplash = () => {
 
 window.addEventListener('keydown', dismissSplash, { once: true });
 window.addEventListener('pointerdown', dismissSplash, { once: true });
-window.setTimeout(dismissSplash, 2200);
 
 window.addEventListener('beforeunload', () => {
   app?.stop();
