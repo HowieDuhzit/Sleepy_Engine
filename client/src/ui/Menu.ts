@@ -6,7 +6,7 @@ export function createMenu(onSelect: (choice: 'game' | 'editor') => void) {
     '<h1>Sleepy Engine</h1>',
     '<p>Choose a scene</p>',
     '<button data-game>Play Prototype</button>',
-    '<button data-editor>Animation Editor</button>',
+    '<button data-editor>Editor</button>',
     '</div>',
   ].join('');
 
