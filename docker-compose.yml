@@ -1,16 +1,46 @@
-version: '3.9'
-
 services:
-  app:
-    build:
-      context: .
-      target: allinone
-    ports:
-      - "5173:80"
+  game:
+    image: howieduhzit/sleepyengine:main
+    container_name: sleepyengine
+    restart: unless-stopped
+
     environment:
+      # Production environment
       NODE_ENV: production
+
+      # Server configuration paths
       ANIMATIONS_DIR: /app/animations
       CONFIG_DIR: /app/config
+
+      # Coolify magic variable for the service URL
+      # This will be auto-populated by Coolify with the assigned domain
+      APP_URL: ${SERVICE_FQDN_GAME_80}
+
     volumes:
-      - ./client/public/animations:/app/animations
-      - ./client/public/config:/app/config
+      # Persistent storage for animations
+      - game-animations:/app/animations
+
+      # Persistent storage for config
+      - game-config:/app/config
+
+      # Persistent storage for any runtime data
+      - game-data:/app/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    labels:
+      # Coolify labels for service management
+      coolify.managed: "true"
+
+volumes:
+  game-animations:
+    driver: local
+  game-config:
+    driver: local
+  game-data:
+    driver: local

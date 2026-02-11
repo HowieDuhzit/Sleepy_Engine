@@ -1,0 +1,25 @@
+# Local development docker-compose
+# Use this for testing the Docker build locally
+# Usage: docker compose -f docker-compose.local.yml up
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: allinone
+    ports:
+      - "5173:80"
+    environment:
+      NODE_ENV: production
+      ANIMATIONS_DIR: /app/animations
+      CONFIG_DIR: /app/config
+    volumes:
+      - ./client/public/animations:/app/animations
+      - ./client/public/config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
