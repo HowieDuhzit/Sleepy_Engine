@@ -54,6 +54,21 @@ export class EditorApp {
   private pointerTiltY = 0;
   private pointerType: 'mouse' | 'pen' | 'touch' = 'mouse';
   private isBarrelButtonPressed = false;
+  // Timeline interaction state
+  private timelineScrubbing = false;
+  private timelineLongPressTimer: number | null = null;
+  private timelineLongPressThreshold = 500; // ms
+  private timelineLastFrame = -1;
+  private timelineScrubVelocity = 0;
+  private timelineScrubLastX = 0;
+  private timelineScrubLastTime = 0;
+  // Multi-touch gesture state
+  private activePointers = new Map<number, { x: number; y: number; type: string }>();
+  private gestureStartDistance = 0;
+  private gestureStartCameraDistance = 0;
+  private gestureStartRotation = 0;
+  private gestureStartCameraRotation = { yaw: 0, pitch: 0 };
+  private isGesturing = false;
   private boneMarkers: Map<string, THREE.Mesh> = new Map();
   private boneScale = 0.08;
   private clipKeyMap: Map<string, THREE.Object3D> = new Map();
@@ -179,6 +194,181 @@ export class EditorApp {
       // Ignore if vibration not supported
     }
   }
+
+  /**
+   * Track active pointers for multi-touch gestures.
+   */
+  private handleGestureStart = (event: PointerEvent) => {
+    // Only track touch pointers for gestures
+    if (event.pointerType !== 'touch') return;
+
+    this.activePointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      type: event.pointerType
+    });
+
+    // Detect gesture start (2+ fingers)
+    if (this.activePointers.size >= 2) {
+      this.isGesturing = true;
+
+      // Disable OrbitControls during gestures
+      if (this.controls) {
+        this.controls.enabled = false;
+      }
+
+      // Calculate initial gesture state for pinch and rotation
+      const pointers = Array.from(this.activePointers.values());
+      if (pointers.length >= 2) {
+        const dx = pointers[1]!.x - pointers[0]!.x;
+        const dy = pointers[1]!.y - pointers[0]!.y;
+        this.gestureStartDistance = Math.sqrt(dx * dx + dy * dy);
+        this.gestureStartRotation = Math.atan2(dy, dx);
+
+        if (this.controls) {
+          this.gestureStartCameraDistance = this.controls.getDistance();
+          // Store camera rotation (spherical coordinates)
+          const offset = new THREE.Vector3();
+          offset.copy(this.camera.position).sub(this.controls.target);
+          const radius = offset.length();
+          const theta = Math.atan2(offset.x, offset.z); // yaw
+          const phi = Math.acos(Math.max(-1, Math.min(1, offset.y / radius))); // pitch
+          this.gestureStartCameraRotation = { yaw: theta, pitch: phi };
+        }
+      }
+
+      this.triggerHapticFeedback('light');
+    }
+  };
+
+  /**
+   * Handle multi-touch gestures: pinch to zoom, two-finger rotate camera.
+   */
+  private handleGestureMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return;
+
+    // Update pointer position
+    if (this.activePointers.has(event.pointerId)) {
+      this.activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+        type: event.pointerType
+      });
+    }
+
+    if (!this.isGesturing || this.activePointers.size < 2) return;
+
+    const pointers = Array.from(this.activePointers.values());
+
+    // Two-finger gestures
+    if (pointers.length === 2 && this.controls) {
+      const dx = pointers[1]!.x - pointers[0]!.x;
+      const dy = pointers[1]!.y - pointers[0]!.y;
+      const currentDistance = Math.sqrt(dx * dx + dy * dy);
+      const currentRotation = Math.atan2(dy, dx);
+
+      // Pinch to zoom (adjust camera distance)
+      if (this.gestureStartDistance > 0) {
+        const scale = currentDistance / this.gestureStartDistance;
+        const newDistance = this.gestureStartCameraDistance / scale;
+
+        // Clamp to OrbitControls limits
+        const clampedDistance = Math.max(
+          this.controls.minDistance,
+          Math.min(this.controls.maxDistance, newDistance)
+        );
+
+        // Apply to camera
+        const offset = new THREE.Vector3();
+        offset.copy(this.camera.position).sub(this.controls.target);
+        offset.setLength(clampedDistance);
+        this.camera.position.copy(this.controls.target).add(offset);
+      }
+
+      // Two-finger rotation (rotate camera around target)
+      const rotationDelta = currentRotation - this.gestureStartRotation;
+      if (Math.abs(rotationDelta) > 0.01) {
+        const sensitivity = 0.5;
+        const newYaw = this.gestureStartCameraRotation.yaw + rotationDelta * sensitivity;
+
+        // Apply rotation
+        const radius = this.controls.getDistance();
+        const phi = this.gestureStartCameraRotation.pitch;
+        const offset = new THREE.Vector3(
+          radius * Math.sin(phi) * Math.sin(newYaw),
+          radius * Math.cos(phi),
+          radius * Math.sin(phi) * Math.cos(newYaw)
+        );
+        this.camera.position.copy(this.controls.target).add(offset);
+        this.camera.lookAt(this.controls.target);
+      }
+    }
+
+    // Three-finger swipe for undo/redo
+    if (pointers.length === 3) {
+      // Calculate average horizontal movement
+      let totalDx = 0;
+      this.activePointers.forEach((pointer, id) => {
+        const initial = Array.from(this.activePointers.values())[0];
+        if (initial) {
+          totalDx += pointer.x - initial.x;
+        }
+      });
+      const avgDx = totalDx / pointers.length;
+
+      // Swipe right = undo, swipe left = redo (threshold: 100px)
+      if (Math.abs(avgDx) > 100) {
+        if (avgDx > 0) {
+          // Undo gesture (swipe right)
+          this.triggerHapticFeedback('heavy');
+          // TODO: Implement undo functionality
+          console.log('Undo gesture detected');
+        } else {
+          // Redo gesture (swipe left)
+          this.triggerHapticFeedback('heavy');
+          // TODO: Implement redo functionality
+          console.log('Redo gesture detected');
+        }
+        // Reset gesture to prevent repeated triggers
+        this.isGesturing = false;
+        this.activePointers.clear();
+      }
+    }
+  };
+
+  /**
+   * End gesture tracking when pointers are lifted.
+   */
+  private handleGestureEnd = (event: PointerEvent) => {
+    this.activePointers.delete(event.pointerId);
+
+    // Re-enable OrbitControls when no more gestures
+    if (this.activePointers.size < 2) {
+      this.isGesturing = false;
+      if (this.controls) {
+        this.controls.enabled = true;
+      }
+    }
+
+    // Update gesture state if still 2+ fingers
+    if (this.activePointers.size >= 2) {
+      const pointers = Array.from(this.activePointers.values());
+      const dx = pointers[1]!.x - pointers[0]!.x;
+      const dy = pointers[1]!.y - pointers[0]!.y;
+      this.gestureStartDistance = Math.sqrt(dx * dx + dy * dy);
+      this.gestureStartRotation = Math.atan2(dy, dx);
+
+      if (this.controls) {
+        this.gestureStartCameraDistance = this.controls.getDistance();
+        const offset = new THREE.Vector3();
+        offset.copy(this.camera.position).sub(this.controls.target);
+        const radius = offset.length();
+        const theta = Math.atan2(offset.x, offset.z);
+        const phi = Math.acos(Math.max(-1, Math.min(1, offset.y / radius)));
+        this.gestureStartCameraRotation = { yaw: theta, pitch: phi };
+      }
+    }
+  };
   private boneVisualsVisible = true;
   private overrideMode = false;
   private currentTab: 'animation' | 'player' = 'animation';
@@ -278,6 +468,12 @@ export class EditorApp {
     this.viewport?.addEventListener('drop', this.handleDrop);
     this.viewport?.addEventListener('dragleave', this.handleDragLeave);
 
+    // Multi-touch gesture support
+    this.renderer.domElement.addEventListener('pointerdown', this.handleGestureStart);
+    this.renderer.domElement.addEventListener('pointermove', this.handleGestureMove);
+    this.renderer.domElement.addEventListener('pointerup', this.handleGestureEnd);
+    this.renderer.domElement.addEventListener('pointercancel', this.handleGestureEnd);
+
     window.addEventListener('resize', this.handleResize);
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
@@ -304,6 +500,11 @@ export class EditorApp {
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
     window.removeEventListener('pointermove', this.handleRagdollDrag);
     window.removeEventListener('pointerup', this.handleRagdollDragEnd);
+    // Remove gesture listeners
+    this.renderer.domElement.removeEventListener('pointerdown', this.handleGestureStart);
+    this.renderer.domElement.removeEventListener('pointermove', this.handleGestureMove);
+    this.renderer.domElement.removeEventListener('pointerup', this.handleGestureEnd);
+    this.renderer.domElement.removeEventListener('pointercancel', this.handleGestureEnd);
     if (this.viewportObserver && this.viewport) {
       this.viewportObserver.unobserve(this.viewport);
       this.viewportObserver.disconnect();
@@ -1017,17 +1218,135 @@ export class EditorApp {
     posZ.addEventListener('input', applyPos);
     timeline.addEventListener('pointerdown', (event) => {
       if (!this.timeline) return;
+
+      // Update pointer state
+      this.pointerPressure = event.pressure ?? 0.5;
+      this.pointerType = event.pointerType as 'mouse' | 'pen' | 'touch';
+
       const wrap = this.timelineWrap;
       const rect = this.timeline.getBoundingClientRect();
       const scrollX = wrap ? wrap.scrollLeft : 0;
       const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left)) + scrollX;
       const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
       const frameIndex = Math.min(totalFrames - 1, Math.floor((x / this.timeline.width) * totalFrames));
-      const bone = this.selectedBone ?? this.bones[0];
-      if (!bone) return;
+
+      // Start scrubbing
+      this.timelineScrubbing = true;
+      this.timelineScrubLastX = event.clientX;
+      this.timelineScrubLastTime = performance.now();
+      this.timelineScrubVelocity = 0;
+      this.timelineLastFrame = frameIndex;
+
+      // Set time and scrub to frame
       this.time = frameIndex / this.fps;
-      this.toggleKeyframe(bone, this.time);
-      this.updateTimeline();
+      this.applyClipAtTime(this.time);
+
+      // Haptic feedback on frame snap
+      if (this.pointerType === 'pen' || this.pointerType === 'touch') {
+        this.triggerHapticFeedback('light');
+      }
+
+      // Long-press detection for context menu (touch/pen only)
+      if (this.pointerType === 'pen' || this.pointerType === 'touch') {
+        this.timelineLongPressTimer = window.setTimeout(() => {
+          this.showTimelineContextMenu(frameIndex);
+          this.triggerHapticFeedback('medium');
+          this.timelineScrubbing = false; // Cancel scrubbing on long press
+        }, this.timelineLongPressThreshold);
+      }
+    });
+
+    // Timeline scrubbing (drag to scrub)
+    timeline.addEventListener('pointermove', (event) => {
+      if (!this.timeline || !this.timelineScrubbing) return;
+
+      // Cancel long-press if moved
+      if (this.timelineLongPressTimer !== null) {
+        clearTimeout(this.timelineLongPressTimer);
+        this.timelineLongPressTimer = null;
+      }
+
+      // Update pointer state
+      this.pointerPressure = event.pressure ?? 0.5;
+
+      const wrap = this.timelineWrap;
+      const rect = this.timeline.getBoundingClientRect();
+      const scrollX = wrap ? wrap.scrollLeft : 0;
+      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left)) + scrollX;
+      const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
+      const frameIndex = Math.min(totalFrames - 1, Math.floor((x / this.timeline.width) * totalFrames));
+
+      // Calculate velocity for momentum
+      const now = performance.now();
+      const dt = now - this.timelineScrubLastTime;
+      if (dt > 0) {
+        const dx = event.clientX - this.timelineScrubLastX;
+        this.timelineScrubVelocity = dx / dt; // pixels per ms
+        this.timelineScrubLastX = event.clientX;
+        this.timelineScrubLastTime = now;
+      }
+
+      // Apply pressure-based sensitivity for stylus
+      let actualFrameIndex = frameIndex;
+      if (this.pointerType === 'pen' && this.pointerPressure > 0) {
+        // Light pressure = slower scrubbing (finer control)
+        const pressureFactor = 0.3 + (this.pointerPressure * 0.7);
+        const frameDelta = frameIndex - this.timelineLastFrame;
+        actualFrameIndex = Math.floor(this.timelineLastFrame + frameDelta * pressureFactor);
+        actualFrameIndex = Math.max(0, Math.min(totalFrames - 1, actualFrameIndex));
+      }
+
+      // Only update if frame changed
+      if (actualFrameIndex !== this.timelineLastFrame) {
+        this.timelineLastFrame = actualFrameIndex;
+        this.time = actualFrameIndex / this.fps;
+        this.applyClipAtTime(this.time);
+
+        // Haptic feedback on frame snap
+        if (this.pointerType === 'pen' || this.pointerType === 'touch') {
+          this.triggerHapticFeedback('light');
+        }
+      }
+    });
+
+    // Timeline scrubbing end (momentum application)
+    timeline.addEventListener('pointerup', (event) => {
+      this.timelineScrubbing = false;
+
+      // Cancel long-press
+      if (this.timelineLongPressTimer !== null) {
+        clearTimeout(this.timelineLongPressTimer);
+        this.timelineLongPressTimer = null;
+      }
+
+      // Apply momentum for flick gestures (only on touch/pen)
+      if ((this.pointerType === 'pen' || this.pointerType === 'touch') && Math.abs(this.timelineScrubVelocity) > 0.5) {
+        const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
+        const momentumFrames = Math.floor(this.timelineScrubVelocity * 50); // Scale velocity to frames
+        const targetFrame = Math.max(0, Math.min(totalFrames - 1, this.timelineLastFrame + momentumFrames));
+
+        // Animate to target frame with easing
+        this.animateTimelineToFrame(targetFrame);
+      } else {
+        // Simple click/tap - toggle keyframe
+        const bone = this.selectedBone ?? this.bones[0];
+        if (bone && !event.movementX && !event.movementY) {
+          this.toggleKeyframe(bone, this.time);
+          this.updateTimeline();
+          this.triggerHapticFeedback('medium');
+        }
+      }
+
+      this.timelineScrubVelocity = 0;
+    });
+
+    // Cancel scrubbing if pointer leaves timeline
+    timeline.addEventListener('pointerleave', () => {
+      this.timelineScrubbing = false;
+      if (this.timelineLongPressTimer !== null) {
+        clearTimeout(this.timelineLongPressTimer);
+        this.timelineLongPressTimer = null;
+      }
     });
 
     timeInput.addEventListener('input', () => {
@@ -1328,6 +1647,75 @@ export class EditorApp {
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
     if (timeInput) timeInput.value = this.time.toFixed(2);
     this.drawTimeline();
+  }
+
+  /**
+   * Animate timeline scrubbing to target frame with easing (momentum effect).
+   */
+  private animateTimelineToFrame(targetFrame: number) {
+    const startFrame = this.timelineLastFrame;
+    const startTime = performance.now();
+    const duration = 300; // ms
+
+    const animate = () => {
+      const now = performance.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+
+      // Ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const currentFrame = Math.floor(startFrame + (targetFrame - startFrame) * eased);
+
+      this.timelineLastFrame = currentFrame;
+      this.time = currentFrame / this.fps;
+      this.applyClipAtTime(this.time);
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    };
+
+    animate();
+  }
+
+  /**
+   * Show context menu for timeline at specific frame (long-press).
+   * Options: delete keyframe, insert keyframe, copy keyframe, paste keyframe
+   */
+  private showTimelineContextMenu(frameIndex: number) {
+    const time = frameIndex / this.fps;
+    const snap = 1 / this.fps;
+    const t = Math.round(time / snap) * snap;
+    const bone = this.selectedBone ?? this.bones[0];
+    if (!bone) return;
+
+    const key = this.getBoneKey(bone);
+    const existing = this.clip.frames.find((frame) => Math.abs(frame.time - t) < 1e-4);
+    const hasKeyframe = existing && existing.bones[key];
+
+    // Simple context actions via browser confirm/prompt
+    // In production, you'd use a custom context menu UI component
+    const actions = hasKeyframe
+      ? ['Delete Keyframe', 'Copy Keyframe', 'Cancel']
+      : ['Insert Keyframe', 'Paste Keyframe', 'Cancel'];
+
+    // For now, just toggle keyframe as a simple action
+    // A full context menu would require additional UI components
+    if (hasKeyframe) {
+      const confirmed = confirm(`Delete keyframe at ${t.toFixed(2)}s for ${key}?`);
+      if (confirmed) {
+        this.toggleKeyframe(bone, t);
+        this.updateTimeline();
+        this.triggerHapticFeedback('medium');
+      }
+    } else {
+      const confirmed = confirm(`Insert keyframe at ${t.toFixed(2)}s for ${key}?`);
+      if (confirmed) {
+        this.toggleKeyframe(bone, t);
+        this.updateTimeline();
+        this.triggerHapticFeedback('medium');
+      }
+    }
   }
 
   private addKeyframe(time: number) {
@@ -1768,6 +2156,28 @@ export class EditorApp {
     return Math.max(0.02, Math.min(0.16, height * 0.04));
   }
 
+  /**
+   * Compute adaptive bone gizmo scale with camera distance and pointer type.
+   * Adjusts size based on camera zoom and input method for optimal precision.
+   */
+  private computeAdaptiveBoneScale(): number {
+    const baseScale = this.computeBoneScale();
+
+    // Scale based on camera distance
+    const cameraDistance = this.controls ? this.controls.getDistance() : 5;
+    const distanceMultiplier = Math.max(0.8, Math.min(1.5, cameraDistance / 5));
+
+    // Input-specific multipliers
+    let inputMultiplier = 1.0;
+    if (this.pointerType === 'touch') {
+      inputMultiplier = 1.5; // 50% larger for finger touch
+    } else if (this.pointerType === 'pen') {
+      inputMultiplier = 1.3; // 30% larger for stylus precision
+    }
+
+    return baseScale * distanceMultiplier * inputMultiplier;
+  }
+
   private handleDragOver = (event: DragEvent) => {
     event.preventDefault();
     if (!this.viewport) return;
@@ -2024,13 +2434,18 @@ export class EditorApp {
       this.scene.remove(marker);
     }
     this.boneMarkers.clear();
-    const geom = new THREE.SphereGeometry(this.boneScale * 0.6, 16, 12);
+
+    // Use adaptive scale for touch/stylus precision
+    const adaptiveScale = this.computeAdaptiveBoneScale();
+    const geom = new THREE.SphereGeometry(adaptiveScale * 0.6, 16, 12);
+
     for (const bone of this.bones) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0x60a5fa, depthTest: false });
+      const mat = new THREE.MeshBasicMaterial({ color: 0x60a5fa, depthTest: false, transparent: true });
       const marker = new THREE.Mesh(geom, mat);
       marker.renderOrder = 10;
       marker.visible = this.boneVisualsVisible;
       marker.userData.boneName = bone.name;
+      marker.userData.baseScale = adaptiveScale;
       this.scene.add(marker);
       this.boneMarkers.set(bone.name, marker);
     }
@@ -2038,13 +2453,45 @@ export class EditorApp {
 
   private updateBoneMarkers() {
     if (!this.vrm) return;
+
+    // Check for hover (snap to bone behavior for stylus)
+    let hoveredBone: THREE.Object3D | null = null;
+    if ((this.pointerType === 'pen' || this.pointerType === 'touch') && !this.dragActive) {
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      const hits = this.raycaster.intersectObjects(Array.from(this.boneMarkers.values()), false);
+      if (hits[0]) {
+        const boneName = hits[0].object.userData.boneName as string | undefined;
+        if (boneName) {
+          hoveredBone = this.boneByName.get(boneName) ?? null;
+        }
+      }
+    }
+
     for (const bone of this.bones) {
       const marker = this.boneMarkers.get(bone.name);
       if (!marker) continue;
+
       const pos = bone.getWorldPosition(new THREE.Vector3());
       marker.position.copy(pos);
+
       const mat = marker.material as THREE.MeshBasicMaterial;
-      mat.color.set(bone === this.selectedBone ? 0xf59e0b : 0x60a5fa);
+      const isSelected = bone === this.selectedBone;
+      const isHovered = bone === hoveredBone;
+
+      // Color and scale based on state
+      if (isSelected) {
+        mat.color.set(0xf59e0b); // Orange for selected
+        mat.opacity = 1.0;
+        marker.scale.setScalar(1.2); // Slightly larger when selected
+      } else if (isHovered) {
+        mat.color.set(0x60a5fa); // Blue for hover
+        mat.opacity = 0.9;
+        marker.scale.setScalar(1.4); // Larger on hover for easy targeting
+      } else {
+        mat.color.set(0x60a5fa); // Default blue
+        mat.opacity = 0.7;
+        marker.scale.setScalar(1.0);
+      }
     }
   }
 
@@ -2166,11 +2613,34 @@ export class EditorApp {
       // Lighter pressure = more forgiving hit detection for stylus
       const pressureFactor = Math.max(0.5, 1 - this.pointerPressure * 0.3);
       this.raycaster.params.Points = { threshold: 0.1 * pressureFactor };
+    } else if (this.pointerType === 'touch') {
+      // Larger threshold for finger touch
+      this.raycaster.params.Points = { threshold: 0.15 };
     } else {
       this.raycaster.params.Points = { threshold: 0.1 };
     }
 
     this.raycaster.setFromCamera(this.pointer, this.camera);
+
+    // Snap to bone behavior: if stylus/touch is near a bone, expand hit area
+    if (this.pointerType === 'pen' || this.pointerType === 'touch') {
+      const boneMarkerArray = Array.from(this.boneMarkers.values());
+      const expandedHits = this.raycaster.intersectObjects(boneMarkerArray, false);
+
+      // Check if any bone is within snap distance (in screen space)
+      for (const hit of expandedHits) {
+        const boneName = hit.object.userData.boneName as string | undefined;
+        if (boneName && hit.distance < 100) { // 100 units in world space
+          const bone = this.boneByName.get(boneName);
+          if (bone) {
+            // Visual feedback for snap
+            this.triggerHapticFeedback('light');
+            // Highlight logic is handled in updateBoneMarkers
+          }
+          break;
+        }
+      }
+    }
     if (this.handleRagdollHandlePick(event)) {
       return;
     }
