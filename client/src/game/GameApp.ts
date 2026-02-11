@@ -2239,20 +2239,21 @@ export class GameApp {
     };
 
     const handleMoveStart = (event: PointerEvent) => {
+      event.preventDefault();
       if (this.touchMoveActive) return;
       this.touchMoveActive = true;
       this.touchMoveId = event.pointerId;
       stick.setPointerCapture(event.pointerId);
-      const rect = stick.getBoundingClientRect();
-      this.touchMoveOrigin.set(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      this.touchMoveOrigin.set(event.clientX, event.clientY);
       setThumb(0, 0);
     };
 
     const handleMove = (event: PointerEvent) => {
+      event.preventDefault();
       if (!this.touchMoveActive || event.pointerId !== this.touchMoveId) return;
       const dx = event.clientX - this.touchMoveOrigin.x;
       const dy = event.clientY - this.touchMoveOrigin.y;
-      const radius = 40;
+      const radius = 50;
       const dist = Math.hypot(dx, dy);
       const scale = dist > radius ? radius / dist : 1;
       const clampedX = dx * scale;
@@ -2262,6 +2263,7 @@ export class GameApp {
     };
 
     const handleMoveEnd = (event: PointerEvent) => {
+      event.preventDefault();
       if (event.pointerId !== this.touchMoveId) return;
       this.touchMoveActive = false;
       this.touchMoveId = null;
@@ -2270,6 +2272,7 @@ export class GameApp {
     };
 
     const handleLookStart = (event: PointerEvent) => {
+      event.preventDefault();
       if (this.touchLookActive) return;
       this.touchLookActive = true;
       this.touchLookId = event.pointerId;
@@ -2279,16 +2282,18 @@ export class GameApp {
     };
 
     const handleLook = (event: PointerEvent) => {
+      event.preventDefault();
       if (!this.touchLookActive || event.pointerId !== this.touchLookId) return;
       const dx = event.clientX - this.touchLookOrigin.x;
       const dy = event.clientY - this.touchLookOrigin.y;
       this.touchLookOrigin.set(event.clientX, event.clientY);
       this.touchLookDelta.set(dx, dy);
-      const scale = 0.03;
+      const scale = 0.025;
       this.input.setTouchLook(dx * scale, dy * scale);
     };
 
     const handleLookEnd = (event: PointerEvent) => {
+      event.preventDefault();
       if (event.pointerId !== this.touchLookId) return;
       this.touchLookActive = false;
       this.touchLookId = null;
@@ -2309,21 +2314,24 @@ export class GameApp {
       this.input.setTouchFlags({ [name]: active } as any);
     };
 
-    jumpBtn.addEventListener('pointerdown', () => setFlag('jump', true));
-    jumpBtn.addEventListener('pointerup', () => setFlag('jump', false));
-    jumpBtn.addEventListener('pointerleave', () => setFlag('jump', false));
+    const bindButton = (btn: HTMLButtonElement, name: 'jump' | 'sprint' | 'crouch' | 'attack') => {
+      btn.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        setFlag(name, true);
+      });
+      const clear = (event: PointerEvent) => {
+        event.preventDefault();
+        setFlag(name, false);
+      };
+      btn.addEventListener('pointerup', clear);
+      btn.addEventListener('pointerleave', clear);
+      btn.addEventListener('pointercancel', clear);
+    };
 
-    sprintBtn.addEventListener('pointerdown', () => setFlag('sprint', true));
-    sprintBtn.addEventListener('pointerup', () => setFlag('sprint', false));
-    sprintBtn.addEventListener('pointerleave', () => setFlag('sprint', false));
-
-    crouchBtn.addEventListener('pointerdown', () => setFlag('crouch', true));
-    crouchBtn.addEventListener('pointerup', () => setFlag('crouch', false));
-    crouchBtn.addEventListener('pointerleave', () => setFlag('crouch', false));
-
-    attackBtn.addEventListener('pointerdown', () => setFlag('attack', true));
-    attackBtn.addEventListener('pointerup', () => setFlag('attack', false));
-    attackBtn.addEventListener('pointerleave', () => setFlag('attack', false));
+    bindButton(jumpBtn, 'jump');
+    bindButton(sprintBtn, 'sprint');
+    bindButton(crouchBtn, 'crouch');
+    bindButton(attackBtn, 'attack');
 
     return root;
   }

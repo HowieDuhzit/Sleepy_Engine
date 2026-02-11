@@ -601,6 +601,7 @@ body,
   inset: 0;
   pointer-events: none;
   z-index: 5;
+  touch-action: none;
 }
 
 .touch-left {
@@ -619,6 +620,7 @@ body,
   border-radius: 50%;
   background: rgba(15, 18, 26, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.15);
+  touch-action: none;
 }
 
 .touch-stick-thumb {
@@ -643,6 +645,7 @@ body,
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   pointer-events: auto;
+  touch-action: none;
 }
 
 .touch-btn {
@@ -661,6 +664,7 @@ body,
   width: 55%;
   height: 55%;
   pointer-events: auto;
+  touch-action: none;
 }
 
 .editor-ui button {
