@@ -48,6 +48,12 @@ export class EditorApp {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private viewportObserver: ResizeObserver | null = null;
+  // Stylus/pointer state tracking
+  private pointerPressure = 0;
+  private pointerTiltX = 0;
+  private pointerTiltY = 0;
+  private pointerType: 'mouse' | 'pen' | 'touch' = 'mouse';
+  private isBarrelButtonPressed = false;
   private boneMarkers: Map<string, THREE.Mesh> = new Map();
   private boneScale = 0.08;
   private clipKeyMap: Map<string, THREE.Object3D> = new Map();
@@ -122,6 +128,56 @@ export class EditorApp {
     }
     target.copy(p1).addScaledVector(p21, mua);
     return target;
+  }
+
+  /**
+   * Get pressure-based manipulation multiplier for stylus input.
+   * Light pressure = fine control (0.3x), heavy pressure = coarse control (1.0x)
+   */
+  private getPressureMultiplier(): number {
+    if (this.pointerType !== 'pen' || this.pointerPressure <= 0) {
+      return 1.0;
+    }
+    // Map pressure (0-1) to multiplier (0.3-1.0)
+    return 0.3 + (this.pointerPressure * 0.7);
+  }
+
+  /**
+   * Get stylus tilt-based direction vector for additional manipulation axes.
+   * Returns normalized direction based on tilt angles.
+   */
+  private getTiltDirection(): THREE.Vector2 {
+    if (this.pointerType !== 'pen') {
+      return new THREE.Vector2(0, 0);
+    }
+    // Tilt angles are in degrees (-90 to 90)
+    // Convert to normalized direction vector
+    const tiltRadX = (this.pointerTiltX * Math.PI) / 180;
+    const tiltRadY = (this.pointerTiltY * Math.PI) / 180;
+    return new THREE.Vector2(
+      Math.sin(tiltRadX),
+      Math.sin(tiltRadY)
+    ).normalize();
+  }
+
+  /**
+   * Trigger haptic feedback if available (for stylus/touch devices).
+   * Provides tactile confirmation for interactions like bone selection, keyframe placement.
+   */
+  private triggerHapticFeedback(intensity: 'light' | 'medium' | 'heavy' = 'light') {
+    if (!navigator.vibrate) return;
+
+    const duration = {
+      light: 10,
+      medium: 20,
+      heavy: 40
+    }[intensity];
+
+    try {
+      navigator.vibrate(duration);
+    } catch {
+      // Ignore if vibration not supported
+    }
   }
   private boneVisualsVisible = true;
   private overrideMode = false;
@@ -1918,6 +1974,12 @@ export class EditorApp {
 
   private setSelectedBone(bone: THREE.Object3D | null) {
     this.selectedBone = bone;
+
+    // Haptic feedback for bone selection (stylus/touch devices)
+    if (bone && (this.pointerType === 'pen' || this.pointerType === 'touch')) {
+      this.triggerHapticFeedback('light');
+    }
+
     if (this.boneOverlay) {
       if (bone) {
         this.boneOverlay.classList.add('visible');
@@ -2016,13 +2078,38 @@ export class EditorApp {
     const up = new THREE.Vector3(0, 1, 0);
     const v0 = new THREE.Vector3();
     const v1 = new THREE.Vector3();
+
+    // Calculate pressure-based scale multiplier for gizmos
+    const pressureScale = this.pointerType === 'pen' && this.pointerPressure > 0
+      ? 1.0 + (this.pointerPressure * 0.5) // Scale up to 1.5x with heavy pressure
+      : 1.0;
+
     for (const bone of this.bones) {
       const gizmo = this.boneGizmos.get(bone.name);
       if (!gizmo) continue;
       bone.getWorldPosition(v0);
       gizmo.joint.position.copy(v0);
+
       const jointMat = gizmo.joint.material as THREE.MeshBasicMaterial;
-      jointMat.color.set(bone === this.selectedBone ? 0xf59e0b : 0x93c5fd);
+      const isSelected = bone === this.selectedBone;
+
+      // Enhanced color feedback for stylus interaction
+      if (isSelected) {
+        // Selected bone: orange/amber with pressure-based intensity
+        if (this.pointerType === 'pen' && this.pointerPressure > 0) {
+          const intensity = 0.6 + (this.pointerPressure * 0.4);
+          jointMat.color.setRGB(0.96 * intensity, 0.62 * intensity, 0.04 * intensity);
+        } else {
+          jointMat.color.set(0xf59e0b);
+        }
+        // Scale selected joint by pressure
+        gizmo.joint.scale.setScalar(pressureScale);
+      } else {
+        // Unselected bones: light blue
+        jointMat.color.set(0x93c5fd);
+        gizmo.joint.scale.setScalar(1.0);
+      }
+
       const parent = gizmo.parent;
       if (parent && parent.type === 'Bone') {
         parent.getWorldPosition(v1);
@@ -2045,9 +2132,44 @@ export class EditorApp {
 
   private handleViewportPick = (event: PointerEvent) => {
     if (!this.viewport) return;
+
+    // Capture stylus/pointer state
+    this.pointerPressure = event.pressure ?? 0.5;
+    this.pointerTiltX = event.tiltX ?? 0;
+    this.pointerTiltY = event.tiltY ?? 0;
+    this.pointerType = event.pointerType as 'mouse' | 'pen' | 'touch';
+    this.isBarrelButtonPressed = event.button === 1 || event.buttons === 4; // Middle/barrel button
+
+    // Palm rejection: reject touches with large contact area (likely palm)
+    if (this.pointerType === 'touch') {
+      const contactWidth = event.width ?? 0;
+      const contactHeight = event.height ?? 0;
+      const contactArea = contactWidth * contactHeight;
+      // Reject if contact area is larger than typical finger (> 400 sq pixels)
+      if (contactArea > 400) {
+        return;
+      }
+    }
+
+    // Barrel button shortcut: reset pose
+    if (this.isBarrelButtonPressed && this.pointerType === 'pen') {
+      this.resetPose();
+      return;
+    }
+
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Adjust raycaster precision based on pointer type and pressure
+    if (this.pointerType === 'pen' && this.pointerPressure > 0) {
+      // Lighter pressure = more forgiving hit detection for stylus
+      const pressureFactor = Math.max(0.5, 1 - this.pointerPressure * 0.3);
+      this.raycaster.params.Points = { threshold: 0.1 * pressureFactor };
+    } else {
+      this.raycaster.params.Points = { threshold: 0.1 };
+    }
+
     this.raycaster.setFromCamera(this.pointer, this.camera);
     if (this.handleRagdollHandlePick(event)) {
       return;
@@ -2141,6 +2263,13 @@ export class EditorApp {
   private handleRagdollDrag = (event: PointerEvent) => {
     if (!this.viewport || !this.ragdollHandles || !this.selectedRagdoll) return;
     if (!this.ragdollHandleActive) return;
+
+    // Update stylus state during drag
+    this.pointerPressure = event.pressure ?? 0.5;
+    this.pointerTiltX = event.tiltX ?? 0;
+    this.pointerTiltY = event.tiltY ?? 0;
+    this.pointerType = event.pointerType as 'mouse' | 'pen' | 'touch';
+
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -2164,7 +2293,19 @@ export class EditorApp {
       this.ragdollHandleTemp,
     );
     const half = new THREE.Vector3(center.x, center.y, center.z).distanceTo(closest);
-    const lengthScale = Math.max(0.3, Math.min(2.0, (half * 2) / rag.baseLength));
+
+    // Apply pressure-based sensitivity: lighter pressure = finer control
+    let pressureMultiplier = 1.0;
+    if (this.pointerType === 'pen' && this.pointerPressure > 0) {
+      // Map pressure (0-1) to multiplier (0.3-1.0)
+      // Light pressure gives fine control, heavy pressure gives coarse control
+      pressureMultiplier = 0.3 + (this.pointerPressure * 0.7);
+    }
+
+    const rawLengthScale = (half * 2) / rag.baseLength;
+    const adjustedLengthScale = 1.0 + (rawLengthScale - 1.0) * pressureMultiplier;
+    const lengthScale = Math.max(0.3, Math.min(2.0, adjustedLengthScale));
+
     const cfg = this.playerConfig.ragdollRig[rag.name] ?? { radiusScale: 1, lengthScale: 1 };
     cfg.lengthScale = lengthScale;
     this.playerConfig.ragdollRig[rag.name] = cfg;

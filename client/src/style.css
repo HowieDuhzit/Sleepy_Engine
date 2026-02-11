@@ -66,7 +66,8 @@ body,
 }
 
 .editor-tab {
-  padding: 6px 12px;
+  padding: 10px 16px;
+  min-height: 44px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(20, 24, 34, 0.6);
@@ -74,6 +75,10 @@ body,
   font-size: 12px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .editor-tab.active {
@@ -173,10 +178,21 @@ body,
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(20, 24, 34, 0.7);
   color: rgba(255, 255, 255, 0.85);
-  font-size: 11px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  min-width: 30px;
+  font-size: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.icon-btn:active {
+  transform: scale(0.95);
+  background: rgba(40, 48, 68, 0.9);
 }
 
 .overlay-bottom-left {
@@ -548,8 +564,23 @@ body,
 }
 
 .editor-ui canvas[data-timeline] {
-  height: 80px;
+  height: 120px;
   display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* Stylus-specific cursor for precise timeline scrubbing */
+@media (pointer: fine) {
+  .editor-ui canvas[data-timeline] {
+    cursor: crosshair;
+  }
+}
+
+@media (pointer: coarse) {
+  .editor-ui canvas[data-timeline] {
+    cursor: pointer;
+  }
 }
 
 .editor-ui textarea {
@@ -569,10 +600,15 @@ body,
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(45, 54, 74, 0.9);
   color: #eaf2ff;
-  padding: 6px 10px;
+  padding: 10px 14px;
+  min-height: 44px;
   border-radius: 8px;
   font-weight: 600;
+  font-size: 13px;
   cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
   transition: transform 0.1s ease, background 0.2s ease;
 }
 
@@ -581,13 +617,39 @@ body,
   background: rgba(66, 85, 128, 0.95);
 }
 
+.editor-ui button:active {
+  transform: scale(0.97);
+  background: rgba(75, 95, 140, 0.95);
+}
+
 .editor-ui input,
 .editor-ui select {
   background: rgba(7, 9, 12, 0.85);
   color: #e6ebf2;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  padding: 4px 6px;
+  padding: 8px 10px;
+  min-height: 40px;
+  font-size: 13px;
+  touch-action: manipulation;
+}
+
+.editor-ui input:focus,
+.editor-ui select:focus {
+  outline: 2px solid rgba(90, 136, 255, 0.5);
+  outline-offset: 2px;
+  border-color: rgba(90, 136, 255, 0.6);
+}
+
+.editor-ui input[type='range'] {
+  min-height: 44px;
+  padding: 0;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.editor-ui input[type='number'] {
+  min-width: 70px;
 }
 
 .menu {
@@ -645,4 +707,148 @@ body,
 
 .hud input[type='range'] {
   width: 100%;
+}
+
+/* ========================================
+   Touch & Stylus Optimizations
+   ======================================== */
+
+/* Increase spacing between interactive elements on touch devices */
+@media (pointer: coarse) {
+  .panel-actions {
+    gap: 12px;
+  }
+
+  .timeline-controls {
+    gap: 12px;
+  }
+
+  .field {
+    gap: 12px;
+    padding: 4px 0;
+  }
+
+  .overlay-group {
+    gap: 10px;
+    padding: 10px;
+  }
+}
+
+/* Stylus-specific enhancements (fine pointer with hover) */
+@media (pointer: fine) and (hover: hover) {
+  .editor-ui button:hover,
+  .icon-btn:hover,
+  .editor-tab:hover {
+    filter: brightness(1.15);
+  }
+}
+
+/* Tablet layout optimizations */
+@media (min-width: 768px) and (max-width: 1366px) and (hover: none) {
+  .editor-shell {
+    grid-template-columns: 380px minmax(0, 1fr);
+  }
+
+  .editor-ui.mode-player .editor-shell {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
+
+  .editor-bottom {
+    min-height: 260px;
+  }
+
+  .timeline-grid {
+    grid-template-columns: 260px 1fr;
+  }
+}
+
+/* Touch-specific feedback */
+@media (hover: none) {
+  .editor-ui button:active,
+  .icon-btn:active,
+  .editor-tab:active {
+    background: rgba(75, 95, 140, 0.95);
+    transform: scale(0.96);
+  }
+
+  /* Larger touch targets for timeline rows */
+  .timeline-row {
+    height: 32px;
+    padding: 0 8px;
+  }
+
+  /* Increase overlay button size */
+  .overlay-tab {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+/* Stylus pressure visualization */
+.stylus-cursor {
+  position: absolute;
+  pointer-events: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(90, 136, 255, 0.8);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+  transition: width 0.05s, height 0.05s, opacity 0.05s;
+}
+
+/* Prevent text selection during stylus manipulation */
+.editor-view,
+.timeline-canvas-wrap,
+.bone-overlay {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Improve scrollbar sizing for touch */
+@media (pointer: coarse) {
+  .timeline-canvas-wrap::-webkit-scrollbar {
+    height: 14px;
+  }
+
+  .timeline-canvas-wrap::-webkit-scrollbar-thumb {
+    background: rgba(90, 136, 255, 0.4);
+    border-radius: 7px;
+  }
+
+  .timeline-canvas-wrap::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Bone overlay touch improvements */
+.bone-overlay {
+  width: 280px;
+  padding: 14px;
+  gap: 12px;
+}
+
+.bone-overlay input[type='number'] {
+  min-width: 80px;
+}
+
+/* Panel toggle button - larger for touch */
+.panel-toggle {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+/* Overlay slider improvements for stylus */
+.overlay-slider input[type='range'] {
+  width: 140px;
+  height: 40px;
+}
+
+/* Timeline header touch improvements */
+.timeline-header {
+  padding: 10px;
+  gap: 4px;
 }
