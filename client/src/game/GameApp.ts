@@ -2259,7 +2259,7 @@ export class GameApp {
       const clampedX = dx * scale;
       const clampedY = dy * scale;
       setThumb(clampedX, clampedY);
-      this.input.setTouchVector(clampedX / radius, clampedY / radius);
+      this.input.setTouchVector(clampedX / radius, -clampedY / radius);
     };
 
     const handleMoveEnd = (event: PointerEvent) => {
@@ -2288,7 +2288,7 @@ export class GameApp {
       const dy = event.clientY - this.touchLookOrigin.y;
       this.touchLookOrigin.set(event.clientX, event.clientY);
       this.touchLookDelta.set(dx, dy);
-      const scale = 0.025;
+      const scale = 0.04;
       this.input.setTouchLook(dx * scale, dy * scale);
     };
 

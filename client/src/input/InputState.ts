@@ -79,7 +79,7 @@ export class InputState {
   }
 
   getLook() {
-    if (Math.abs(this.touchLook.x) > 0.01 || Math.abs(this.touchLook.y) > 0.01) {
+    if (Math.abs(this.touchLook.x) > 0.001 || Math.abs(this.touchLook.y) > 0.001) {
       return { ...this.touchLook };
     }
     return { ...this.padLook };
