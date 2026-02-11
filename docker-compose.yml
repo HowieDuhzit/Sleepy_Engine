@@ -1,6 +1,6 @@
 services:
   game:
-    image: howieduhzit/sleepyengine:main
+    image: ghcr.io/howieduhzit/sleepy_engine:main
     container_name: sleepyengine
     restart: unless-stopped
 
