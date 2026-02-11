@@ -977,7 +977,7 @@ export class GameApp {
       const speed = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
       const targetVx = moveX * speed;
       const targetVz = moveZ * speed;
-      const accelRate = 15; // 15x per second = smooth and server-aligned
+      const accelRate = 25; // 25x per second = smooth and server-aligned
       const blend = Math.min(1, delta * accelRate);
       this.localVelocityX += (targetVx - this.localVelocityX) * blend;
       this.localVelocityZ += (targetVz - this.localVelocityZ) * blend;
@@ -1417,10 +1417,10 @@ export class GameApp {
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
-    // Tight threshold (30cm) - catch drift early before it's noticeable
-    const correctionThreshold = 0.3 * 0.3;
+    // Tight threshold (20cm) - catch drift early before it's noticeable
+    const correctionThreshold = 0.2 * 0.2;
 
-    if (distSq > correctionThreshold || Math.abs(dy) > 0.12) {
+    if (distSq > correctionThreshold || Math.abs(dy) > 0.1) {
       // Store old position before correction
       const oldX = this.localPlayer.position.x;
       const oldY = this.localPlayer.position.y;
@@ -1429,19 +1429,19 @@ export class GameApp {
       // Apply server correction to physics position (instant for gameplay)
       this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
 
-      // Set visual offset to the correction delta (replaces previous offset)
-      // This prevents accumulation if corrections happen faster than decay
-      this.localVisualOffset.x = oldX - snapshot.position.x;
-      this.localVisualOffset.y = oldY - snapshot.position.y;
-      this.localVisualOffset.z = oldZ - snapshot.position.z;
+      // Add correction delta to visual offset (accumulates smoothly)
+      // The offset decays at 30x per second, so accumulation is balanced
+      this.localVisualOffset.x += oldX - snapshot.position.x;
+      this.localVisualOffset.y += oldY - snapshot.position.y;
+      this.localVisualOffset.z += oldZ - snapshot.position.z;
 
       // Sync velocity to server completely
       this.localVelocityX = snapshot.velocity.x;
       this.localVelocityY = snapshot.velocity.y;
       this.localVelocityZ = snapshot.velocity.z;
     } else {
-      // Small drift - sync velocity very aggressively to stay aligned
-      const velocityMatch = 0.8;
+      // Small drift - sync velocity moderately to stay aligned
+      const velocityMatch = 0.3;
       this.localVelocityX += (snapshot.velocity.x - this.localVelocityX) * velocityMatch;
       this.localVelocityY += (snapshot.velocity.y - this.localVelocityY) * velocityMatch;
       this.localVelocityZ += (snapshot.velocity.z - this.localVelocityZ) * velocityMatch;
