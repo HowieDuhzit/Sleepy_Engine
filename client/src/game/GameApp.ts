@@ -267,10 +267,10 @@ export class GameApp {
     const env = (import.meta as any).env || {};
     const envUrl = env.VITE_PUBLIC_WS_URL;
 
-    // Default: use same host/protocol as the page (works for Coolify deployments)
+    // Default: use same host with explicit game server port
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host; // includes port if present
-    const defaultUrl = `${protocol}//${host}`;
+    const host = window.location.hostname;
+    const defaultUrl = `${protocol}//${host}:2567`;
 
     // For localhost dev, use explicit port
     const wsUrl = envUrl || (window.location.hostname === 'localhost'
