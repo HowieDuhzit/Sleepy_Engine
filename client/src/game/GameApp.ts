@@ -5,6 +5,7 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
+import { getProjectAnimation, getProjectPlayer, getProjectScenes, listProjectAnimations } from '../services/project-api';
 import { PSXRenderer } from '../rendering/PSXRenderer';
 import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
 import { PSXMaterial } from '../materials/PSXMaterial';
@@ -1823,9 +1824,7 @@ export class GameApp {
 
   private async loadPlayerConfig() {
     try {
-      const res = await fetch(`/api/projects/${this.projectId}/player`, { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = (await res.json()) as Partial<typeof this.playerConfig>;
+      const data = await getProjectPlayer<Partial<typeof this.playerConfig>>(this.projectId);
       this.playerConfig = { ...this.playerConfig, ...data };
       if (typeof this.playerConfig.cameraDistance === 'number') {
         this.orbitRadius = this.playerConfig.cameraDistance;
@@ -1847,14 +1846,7 @@ export class GameApp {
 
   private async loadSceneConfig() {
     try {
-      const res = await fetch(`/api/projects/${this.projectId}/scenes`, { cache: 'no-store' });
-      if (!res.ok) {
-        console.warn('Failed to load scenes from project API');
-        return;
-      }
-      const data = (await res.json()) as {
-        scenes?: { name: string; obstacles?: any[] }[];
-      };
+      const data = await getProjectScenes(this.projectId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
       if (scene?.obstacles) {
         // Convert editor format {x, y, z, width, height, depth} to game format
@@ -1939,17 +1931,11 @@ export class GameApp {
     // Load animations from project API
     let manifest: string[] | null = null;
     try {
-      const animationsPath = `/api/projects/${this.projectId}/animations`;
-      console.log('Loading animations from project:', animationsPath);
-      const res = await fetch(animationsPath, { cache: 'no-store' });
-      if (res.ok) {
-        const data = (await res.json()) as { files?: string[] };
-        if (Array.isArray(data.files)) {
-          manifest = data.files;
-          console.log('Found', data.files.length, 'animation files');
-        }
-      } else {
-        console.warn('Failed to load animations from project:', res.status);
+      console.log('Loading animations from project:', this.projectId);
+      const data = await listProjectAnimations(this.projectId);
+      if (Array.isArray(data.files)) {
+        manifest = data.files;
+        console.log('Found', data.files.length, 'animation files');
       }
     } catch (error) {
       console.warn('Failed to load animations manifest:', error);
@@ -1964,10 +1950,7 @@ export class GameApp {
     await Promise.all(
       jsonEntries.map(async (name) => {
         try {
-          const animPath = `/api/projects/${this.projectId}/animations/${encodeURIComponent(name)}`;
-          const res = await fetch(animPath, { cache: 'no-store' });
-          if (!res.ok) return;
-          const payload = (await res.json()) as unknown;
+          const payload = await getProjectAnimation(this.projectId, name);
           const data = parseClipPayload(payload);
           if (!data) return;
           const key = resolveKey(name);

@@ -10,6 +10,7 @@ import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
 import { PSXMaterial } from '../materials/PSXMaterial';
 import { psxSettings } from '../settings/PSXSettings';
 import { retargetMixamoClip } from '../game/retarget';
+import { createProject, getProjectAnimation, getProjectScenes, listProjects, saveProjectAnimation, saveProjectScenes } from '../services/project-api';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
 import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
 
@@ -1072,14 +1073,9 @@ export class EditorApp {
     // Fetch and populate projects list
     const loadProjectsList = async () => {
       try {
-        const res = await fetch('/api/projects');
-        if (!res.ok) {
-          console.warn('Failed to fetch projects list');
-          return;
-        }
-        const data = (await res.json()) as { projects: Array<{ id: string; name: string }> };
+        const projects = await listProjects();
         projectSelect.innerHTML = '<option value="">-- Select Project --</option>';
-        for (const project of data.projects) {
+        for (const project of projects) {
           const option = document.createElement('option');
           option.value = project.id;
           option.textContent = project.name;
@@ -1088,9 +1084,9 @@ export class EditorApp {
 
         // Load saved project from localStorage, or default to prototype
         const savedProjectId = localStorage.getItem('editorProjectId');
-        const prototypeProject = data.projects.find(p => p.id === 'prototype');
+        const prototypeProject = projects.find((p) => p.id === 'prototype');
 
-        if (savedProjectId && data.projects.find(p => p.id === savedProjectId)) {
+        if (savedProjectId && projects.find((p) => p.id === savedProjectId)) {
           // Saved project exists, use it
           this.currentProjectId = savedProjectId;
           projectSelect.value = savedProjectId;
@@ -1170,19 +1166,7 @@ export class EditorApp {
       const description = prompt('Enter project description (optional):') || '';
 
       try {
-        const res = await fetch('/api/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, description }),
-        });
-
-        if (!res.ok) {
-          const error = await res.json();
-          alert(`Failed to create project: ${error.error || 'Unknown error'}`);
-          return;
-        }
-
-        const data = (await res.json()) as { id: string; name: string };
+        const data = await createProject({ name, description });
         this.currentProjectId = data.id;
         localStorage.setItem('editorProjectId', data.id);
 
@@ -1442,41 +1426,7 @@ export class EditorApp {
         return;
       }
       try {
-        const res = await fetch(scenesPath, { cache: 'no-store' });
-        if (!res.ok) {
-          // API not available, use default with sample obstacles
-          sceneState.scenes = [{
-            name: 'prototype',
-            obstacles: [
-              { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
-              { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-              { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-            ]
-          }];
-          syncSceneSelect();
-          loadSceneFromState('prototype');
-          setSceneStatus('Using default scene (API unavailable)', 'ok');
-          return;
-        }
-
-        const contentType = res.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          // Not JSON, use default with sample obstacles
-          sceneState.scenes = [{
-            name: 'prototype',
-            obstacles: [
-              { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
-              { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-              { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-            ]
-          }];
-          syncSceneSelect();
-          loadSceneFromState('prototype');
-          setSceneStatus('Using default scene', 'ok');
-          return;
-        }
-
-        const data = (await res.json()) as { scenes?: { name: string; obstacles?: any[] }[] };
+        const data = await getProjectScenes(this.currentProjectId ?? 'prototype');
         sceneState.scenes = data.scenes ?? [{ name: 'prototype', obstacles: [] }];
         syncSceneSelect();
         loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
@@ -1502,12 +1452,7 @@ export class EditorApp {
         return;
       }
       try {
-        const res = await fetch(scenesPath, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(sceneState),
-        });
-        if (!res.ok) throw new Error(await res.text());
+        await saveProjectScenes(this.currentProjectId ?? 'prototype', sceneState);
         setSceneStatus(`Saved to project "${this.currentProjectId}"`, 'ok');
       } catch (err) {
         setSceneStatus(`Save failed: ${String(err)}`, 'warn');
@@ -2305,22 +2250,7 @@ export class EditorApp {
         return;
       }
       try {
-        const res = await fetch(`${animPath}/${encodeURIComponent(name)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, clip: this.clip }),
-        });
-        if (!res.ok) {
-          let detail = '';
-          try {
-            const body = await res.json();
-            detail = body?.detail ? `: ${body.detail}` : '';
-          } catch {
-            // ignore
-          }
-          setClipStatus(`Save failed (${res.status})${detail}`, 'warn');
-          return;
-        }
+        await saveProjectAnimation(this.currentProjectId ?? 'prototype', name, { name, clip: this.clip });
         setClipStatus(`Saved ${name}.json`, 'ok');
         await refreshEngineClips();
       } catch (err) {
@@ -2339,19 +2269,7 @@ export class EditorApp {
         return;
       }
       try {
-        const res = await fetch(`${animPath}/${encodeURIComponent(name)}`, { cache: 'no-store' });
-        if (!res.ok) {
-          let detail = '';
-          try {
-            const body = await res.json();
-            detail = body?.detail ? `: ${body.detail}` : '';
-          } catch {
-            // ignore
-          }
-          setClipStatus(`Load failed (${res.status})${detail}`, 'warn');
-          return;
-        }
-        const payload = (await res.json()) as unknown;
+        const payload = await getProjectAnimation(this.currentProjectId ?? 'prototype', name);
         const data = parseClipPayload(payload);
         if (!data) return;
         this.clip = data;

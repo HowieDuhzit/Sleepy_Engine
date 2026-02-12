@@ -1,4 +1,5 @@
 import { PSXSettingsPanel } from './PSXSettingsPanel';
+import { getProjectScenes, listProjects } from '../services/project-api';
 
 type SceneOption = { name: string };
 
@@ -29,22 +30,20 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', scene?: string,
 
   const loadProjects = async () => {
     try {
-      const res = await fetch('/api/projects', { cache: 'no-store' });
-      if (!res.ok) throw new Error('failed to load projects');
-      const data = (await res.json()) as { projects: { id: string; name: string }[] };
+      const projects = await listProjects();
       projectSelect.innerHTML = '';
-      for (const project of data.projects) {
+      for (const project of projects) {
         const opt = document.createElement('option');
         opt.value = project.id;
         opt.textContent = project.name;
         projectSelect.appendChild(opt);
       }
       // Auto-select prototype if available
-      if (data.projects.find((p) => p.id === 'prototype')) {
+      if (projects.find((p) => p.id === 'prototype')) {
         projectSelect.value = 'prototype';
         currentProjectId = 'prototype';
-      } else if (data.projects.length > 0) {
-        currentProjectId = data.projects[0]?.id ?? null;
+      } else if (projects.length > 0) {
+        currentProjectId = projects[0]?.id ?? null;
       }
       await loadScenes();
     } catch (err) {
@@ -63,9 +62,7 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', scene?: string,
       return;
     }
     try {
-      const res = await fetch(`/api/projects/${currentProjectId}/scenes`, { cache: 'no-store' });
-      if (!res.ok) throw new Error('failed to load scenes');
-      const data = (await res.json()) as { scenes?: SceneOption[] };
+      const data = await getProjectScenes(currentProjectId);
       const scenes = data.scenes?.length ? data.scenes : [{ name: 'prototype' }];
       sceneSelect.innerHTML = '';
       for (const scene of scenes) {
