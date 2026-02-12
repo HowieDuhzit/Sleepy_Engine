@@ -245,6 +245,8 @@ export class GameApp {
   };
   private inputDebugTimer = 0;
   private settingsMenu: HTMLDivElement | null = null;
+  private backButton: HTMLButtonElement | null = null;
+  private onBackToMenu: (() => void) | null = null;
   private handleContainerClick = () => {
     this.container.focus();
   };
@@ -274,13 +276,19 @@ export class GameApp {
     this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
   };
 
-  constructor(container: HTMLElement | null, sceneName = 'main', gameId = 'prototype') {
+  constructor(
+    container: HTMLElement | null,
+    sceneName = 'main',
+    gameId = 'prototype',
+    onBackToMenu: (() => void) | null = null,
+  ) {
     if (!container) {
       throw new Error('Missing #app container');
     }
     this.container = container;
     this.sceneName = sceneName;
     this.gameId = gameId;
+    this.onBackToMenu = onBackToMenu;
     this.container.tabIndex = 0;
     this.container.addEventListener('click', this.handleContainerClick);
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -365,6 +373,17 @@ export class GameApp {
     this.localPlayer = this.createPlayer();
 
     this.container.appendChild(this.renderer.domElement);
+    this.backButton = document.createElement('button');
+    this.backButton.textContent = 'Back to Menu';
+    this.backButton.className = 'mode-back-button';
+    this.backButton.style.position = 'absolute';
+    this.backButton.style.top = '14px';
+    this.backButton.style.right = '14px';
+    this.backButton.style.zIndex = '20';
+    this.backButton.addEventListener('click', () => {
+      this.onBackToMenu?.();
+    });
+    this.container.appendChild(this.backButton);
     this.container.appendChild(this.hud);
     this.container.appendChild(this.perfHud);
     this.hud.style.display = this.hudVisible ? 'block' : 'none';
@@ -450,6 +469,8 @@ export class GameApp {
     void this.roomClient.disconnect();
     this.settingsMenu?.remove();
     this.settingsMenu = null;
+    this.backButton?.remove();
+    this.backButton = null;
   }
 
   private tick = () => {

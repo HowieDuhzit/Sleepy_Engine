@@ -9,28 +9,33 @@ if (!container) throw new Error('Missing #app');
 
 let app: { start: () => void; stop: () => void } | null = null;
 
+const showMainMenu = () => {
+  app?.stop();
+  container.innerHTML = '';
+  const menu = createMenu((choice, gameId, scene) => {
+    container.innerHTML = '';
+    splash.remove();
+    if (choice === 'game') startGame(scene, gameId);
+    if (choice === 'editor') startEditor(gameId);
+  });
+  container.appendChild(menu);
+};
+
 const startGame = (scene?: string, gameId?: string) => {
   app?.stop();
-  app = new GameApp(container, scene, gameId);
+  app = new GameApp(container, scene, gameId, showMainMenu);
   app.start();
 };
 
 const startEditor = (gameId?: string) => {
   app?.stop();
-  app = new EditorApp(container, gameId);
+  app = new EditorApp(container, gameId, showMainMenu);
   app.start();
 };
 
-const menu = createMenu((choice, gameId, scene) => {
-  container.innerHTML = '';
-  splash.remove();
-  if (choice === 'game') startGame(scene, gameId);
-  if (choice === 'editor') startEditor(gameId);
-});
-
 const splash = createSplash();
 document.body.appendChild(splash);
-container.appendChild(menu);
+showMainMenu();
 
 const dismissSplash = () => {
   if (!document.body.contains(splash)) return;

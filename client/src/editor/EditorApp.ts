@@ -172,6 +172,7 @@ export class EditorApp {
   private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
   private refreshClipsFunction: (() => Promise<void>) | null = null;
   private refreshScenesFunction: (() => Promise<void>) | null = null;
+  private onBackToMenu: (() => void) | null = null;
 
   private closestPointOnLineToRay(line: THREE.Line3, ray: THREE.Ray, target: THREE.Vector3) {
     const p1 = line.start;
@@ -471,10 +472,15 @@ export class EditorApp {
     >,
   };
 
-  constructor(container: HTMLElement | null, initialGameId: string | null = null) {
+  constructor(
+    container: HTMLElement | null,
+    initialGameId: string | null = null,
+    onBackToMenu: (() => void) | null = null,
+  ) {
     if (!container) throw new Error('Missing #app container');
     this.container = container;
     this.initialGameId = initialGameId;
+    this.onBackToMenu = onBackToMenu;
     this.container.tabIndex = 0;
 
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -992,6 +998,7 @@ export class EditorApp {
     hud.innerHTML = [
       '<div class="editor-header">',
       '<div class="editor-title">Sleepy Engine Editor</div>',
+      '<button class="mode-back-button" data-back-menu>Back to Menu</button>',
       '<div class="editor-game-selector">',
       '<label style="display: flex; align-items: center; gap: 8px;">',
       '<span style="font-weight: 500;">Game:</span>',
@@ -1249,6 +1256,10 @@ export class EditorApp {
 
     const gameSelect = hud.querySelector('[data-game-select]') as HTMLSelectElement;
     const newGameBtn = hud.querySelector('[data-new-game]') as HTMLButtonElement;
+    const backMenuBtn = hud.querySelector('[data-back-menu]') as HTMLButtonElement;
+    backMenuBtn.addEventListener('click', () => {
+      this.onBackToMenu?.();
+    });
 
     // Fetch and populate games list
     const loadGamesList = async () => {
