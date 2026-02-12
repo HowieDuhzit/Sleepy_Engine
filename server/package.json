@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.0",
+    "@colyseus/redis-driver": "^0.15.1",
+    "@colyseus/redis-presence": "^0.15.1",
     "@sleepy/shared": "workspace:*",
     "colyseus": "^0.15.57",
     "express": "^4.18.2",

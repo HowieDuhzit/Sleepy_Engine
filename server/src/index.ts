@@ -6,11 +6,19 @@ import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
 import { closeDb, dbEnabled, dbHealth } from './db.js';
 import { cacheDel, cacheGet, cacheSet, closeRedis, redisEnabled, redisHealth } from './redis.js';
+import { RedisPresence } from '@colyseus/redis-presence';
+import { RedisDriver } from '@colyseus/redis-driver';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
+const redisUrl = process.env.REDIS_URL;
 const { Server } = colyseusPkg as typeof import('colyseus');
-const gameServer = new Server();
+const gameServer = redisUrl
+  ? new Server({
+      presence: new RedisPresence(redisUrl),
+      driver: new RedisDriver(redisUrl),
+    })
+  : new Server();
 
 gameServer.define('riot_room', RiotRoom).enableRealtimeListing();
 

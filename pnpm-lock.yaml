@@ -60,6 +60,12 @@ importers:
 
   server:
     dependencies:
+      '@colyseus/redis-driver':
+        specifier: ^0.15.1
+        version: 0.15.6(@colyseus/schema@2.0.37)
+      '@colyseus/redis-presence':
+        specifier: ^0.15.1
+        version: 0.15.6(@colyseus/schema@2.0.37)
       '@colyseus/schema':
         specifier: ^2.0.0
         version: 2.0.37

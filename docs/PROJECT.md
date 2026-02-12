@@ -47,7 +47,7 @@ Postgres is the recommended primary database for persistence and tooling. Config
 Redis is optional for fast ephemeral state or future multi-node coordination:
 - `REDIS_URL=redis://host:6379`
 
-When unset, the server runs without DB/Redis access. When enabled, Redis is used as a short-lived cache for project reads (animations/scenes/player), reducing disk IO and improving editor/game response times.
+When unset, the server runs without DB/Redis access. When enabled, Redis is used as a short-lived cache for project reads (animations/scenes/player) and also powers Colyseus presence/driver for multi-node readiness.
 
 ## Key Commands (pnpm)
 - `pnpm install`
