@@ -1,8 +1,10 @@
 import colyseusPkg from 'colyseus';
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
+import { z } from 'zod';
 import { RiotRoom } from './rooms/RiotRoom.js';
 import { closeDb, dbEnabled, dbHealth } from './db.js';
 import { cacheDel, cacheGet, cacheSet, closeRedis, redisEnabled, redisHealth } from './redis.js';
@@ -24,6 +26,71 @@ gameServer.define('riot_room', RiotRoom).enableRealtimeListing();
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
+const adminToken = process.env.ADMIN_TOKEN?.trim();
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const requestId = randomUUID();
+  const start = Date.now();
+  res.setHeader('x-request-id', requestId);
+  res.on('finish', () => {
+    const elapsedMs = Date.now() - start;
+    console.log(
+      JSON.stringify({
+        level: 'info',
+        type: 'http_request',
+        requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        elapsedMs,
+      }),
+    );
+  });
+  next();
+});
+
+const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+  if (!adminToken) {
+    next();
+    return;
+  }
+  if (req.header('x-admin-token') === adminToken) {
+    next();
+    return;
+  }
+  res.status(401).json({ error: 'unauthorized' });
+};
+
+const projectCreateSchema = z.object({
+  name: z.string().trim().min(1).max(64),
+  description: z.string().max(1024).optional().default(''),
+});
+
+const animationPayloadSchema = z.record(z.unknown());
+const playerPayloadSchema = z.record(z.unknown());
+const sceneObstacleSchema = z
+  .object({
+    id: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    z: z.number().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    depth: z.number().optional(),
+    position: z.object({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+    size: z.object({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+  })
+  .passthrough();
+const scenesPayloadSchema = z.object({
+  scenes: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(64),
+        obstacles: z.array(sceneObstacleSchema).optional(),
+      }),
+    )
+    .max(500),
+});
 
 app.get('/api/db/health', async (_req: Request, res: Response) => {
   const status = await dbHealth();
@@ -95,13 +162,14 @@ app.get('/api/projects', async (_req: Request, res: Response) => {
 });
 
 // Create new project
-app.post('/api/projects', async (req: Request, res: Response) => {
+app.post('/api/projects', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { name, description } = req.body;
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ error: 'missing_name' });
+    const parsed = projectCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
       return;
     }
+    const { name, description } = parsed.data;
 
     const projectId = safeProjectId(name);
     const projectPath = path.join(projectsDir, projectId);
@@ -119,7 +187,7 @@ app.post('/api/projects', async (req: Request, res: Response) => {
 
     const meta = {
       name,
-      description: description || '',
+      description,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -242,7 +310,7 @@ app.get('/api/projects/:projectId/player', async (req: Request, res: Response) =
 });
 
 // Save project player config
-app.post('/api/projects/:projectId/player', async (req: Request, res: Response) => {
+app.post('/api/projects/:projectId/player', requireAdmin, async (req: Request, res: Response) => {
   try {
     const projectId = safeProjectId(req.params.projectId ?? '');
     if (!projectId) {
@@ -250,9 +318,15 @@ app.post('/api/projects/:projectId/player', async (req: Request, res: Response) 
       return;
     }
 
+    const parsed = playerPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+
     await ensureProjectDir(projectId);
     const filePath = path.join(projectsDir, projectId, 'player.json');
-    const payload = JSON.stringify(req.body, null, 2);
+    const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
     await cacheSet(cacheKey('project', projectId, 'player'), payload);
     res.json({ ok: true, file: 'player.json' });
@@ -266,12 +340,12 @@ app.get('/api/player-config', async (_req: Request, res: Response) => {
   res.redirect('/api/projects/prototype/player');
 });
 
-app.post('/api/player-config', async (req: Request, res: Response) => {
+app.post('/api/player-config', requireAdmin, async (req: Request, res: Response) => {
   res.redirect(307, '/api/projects/prototype/player');
 });
 
 // Save project animation
-app.post('/api/projects/:projectId/animations/:name', async (req: Request, res: Response) => {
+app.post('/api/projects/:projectId/animations/:name', requireAdmin, async (req: Request, res: Response) => {
   try {
     const projectId = safeProjectId(req.params.projectId ?? '');
     const rawName = req.params.name ?? '';
@@ -280,10 +354,16 @@ app.post('/api/projects/:projectId/animations/:name', async (req: Request, res: 
       return;
     }
 
+    const parsed = animationPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+
     await ensureProjectDir(projectId);
     const filename = safeName(rawName);
     const filePath = path.join(projectsDir, projectId, 'animations', filename);
-    const payload = JSON.stringify(req.body, null, 2);
+    const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
     await cacheSet(cacheKey('project', projectId, 'animations', filename), payload);
     await cacheDel(cacheKey('project', projectId, 'animations', 'list'));
@@ -339,7 +419,7 @@ app.get('/api/projects/:projectId/scenes', async (req: Request, res: Response) =
 });
 
 // Save project scenes
-app.post('/api/projects/:projectId/scenes', async (req: Request, res: Response) => {
+app.post('/api/projects/:projectId/scenes', requireAdmin, async (req: Request, res: Response) => {
   try {
     const projectId = safeProjectId(req.params.projectId ?? '');
     if (!projectId) {
@@ -347,9 +427,15 @@ app.post('/api/projects/:projectId/scenes', async (req: Request, res: Response) 
       return;
     }
 
+    const parsed = scenesPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+
     await ensureProjectDir(projectId);
     const filePath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
-    const payload = JSON.stringify(req.body, null, 2);
+    const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
     await cacheSet(cacheKey('project', projectId, 'scenes'), payload);
 
