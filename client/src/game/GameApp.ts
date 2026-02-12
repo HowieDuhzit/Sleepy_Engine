@@ -1805,7 +1805,7 @@ export class GameApp {
 
   private async loadPlayerConfig() {
     try {
-      const res = await fetch('/config/player.json', { cache: 'no-store' });
+      const res = await fetch(`/api/projects/${this.projectId}/player`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = (await res.json()) as Partial<typeof this.playerConfig>;
       this.playerConfig = { ...this.playerConfig, ...data };

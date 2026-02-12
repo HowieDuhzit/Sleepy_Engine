@@ -19,6 +19,7 @@ Think of it as a development console: a game engine that runs in \"console mode\
 - `server/` - Colyseus + Express server, project APIs, and game rooms.
 - `shared/` - Shared constants/types for client + server.
 - `server/projects/` - Project data (animations, scenes, avatars, configs).
+ - Database: Postgres (optional, for persistence and tooling).
 
 ## Runtime Flow
 1. Splash screen boot
@@ -39,6 +40,12 @@ Project APIs:
 - `GET/POST /api/projects/:projectId/animations/:name`
 - `GET/POST /api/projects/:projectId/scenes`
 
+## Database
+Postgres is the recommended primary database for persistence and tooling. Configure it with:
+- `DATABASE_URL=postgres://user:pass@host:5432/db`
+
+When unset, the server runs without a database.
+
 ## Key Commands (pnpm)
 - `pnpm install`
 - `pnpm dev` (client on http://localhost:5173)
@@ -56,8 +63,6 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
 - Container listens on **port 80** (Nginx).
 - Game server listens on **port 2567** internally.
 - Required persistent paths:
-  - `/app/animations`
-  - `/app/config`
   - `/app/data`
   - `/app/projects` (project data)
 
@@ -65,6 +70,7 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
 - Container port: **80**
 - Environment: set `GAME_PORT=2567`
 - Volumes: map the paths above
+ - Add `DATABASE_URL` if you attach Postgres
 
 ## Rendering Presets
 PSX-style rendering is integrated in both game and editor. Presets, post-processing, and color adjustments are managed via the shared settings system.

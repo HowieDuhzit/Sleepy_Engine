@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
+import { closeDb, dbEnabled, dbHealth } from './db.js';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
@@ -14,6 +15,11 @@ gameServer.define('riot_room', RiotRoom).enableRealtimeListing();
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
+
+app.get('/api/db/health', async (_req: Request, res: Response) => {
+  const status = await dbHealth();
+  res.json(status);
+});
 
 // Helper function for sanitizing file names
 const safeName = (name: string) => {
@@ -174,6 +180,52 @@ app.get('/api/projects/:projectId/animations/:name', async (req: Request, res: R
   }
 });
 
+// Get project player config
+app.get('/api/projects/:projectId/player', async (req: Request, res: Response) => {
+  try {
+    const projectId = safeProjectId(req.params.projectId ?? '');
+    if (!projectId) {
+      res.status(400).json({ error: 'missing_project_id' });
+      return;
+    }
+
+    await ensureProjectDir(projectId);
+    const filePath = path.join(projectsDir, projectId, 'player.json');
+    const raw = await fs.readFile(filePath, 'utf8');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(raw);
+  } catch (err) {
+    res.status(404).json({ error: 'not_found', detail: String(err) });
+  }
+});
+
+// Save project player config
+app.post('/api/projects/:projectId/player', async (req: Request, res: Response) => {
+  try {
+    const projectId = safeProjectId(req.params.projectId ?? '');
+    if (!projectId) {
+      res.status(400).json({ error: 'missing_project_id' });
+      return;
+    }
+
+    await ensureProjectDir(projectId);
+    const filePath = path.join(projectsDir, projectId, 'player.json');
+    await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+    res.json({ ok: true, file: 'player.json' });
+  } catch (err) {
+    res.status(500).json({ error: 'failed_to_save', detail: String(err) });
+  }
+});
+
+// Legacy player config endpoint (prototype project)
+app.get('/api/player-config', async (_req: Request, res: Response) => {
+  res.redirect('/api/projects/prototype/player');
+});
+
+app.post('/api/player-config', async (req: Request, res: Response) => {
+  res.redirect(307, '/api/projects/prototype/player');
+});
+
 // Save project animation
 app.post('/api/projects/:projectId/animations/:name', async (req: Request, res: Response) => {
   try {
@@ -262,12 +314,19 @@ gameServer.attach({ server: httpServer });
 ensureProjectsDir().then(() => {
   httpServer.listen(port);
   console.log(`Game server listening on ws://localhost:${port}`);
+  if (dbEnabled) {
+    console.log('Database enabled via DATABASE_URL');
+  }
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
+  await closeDb();
   gameServer.gracefullyShutdown();
+  process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
+  await closeDb();
   gameServer.gracefullyShutdown();
+  process.exit(0);
 });

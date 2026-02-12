@@ -12,14 +12,27 @@ services:
       - "5173:80"
     environment:
       NODE_ENV: production
-      ANIMATIONS_DIR: /app/animations
-      CONFIG_DIR: /app/config
+      PROJECTS_DIR: /app/projects
+      DATABASE_URL: postgres://sleepy:sleepy@db:5432/sleepy_engine
     volumes:
-      - ./client/public/animations:/app/animations
-      - ./client/public/config:/app/config
+      - ./server/projects:/app/projects
+    depends_on:
+      - db
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sleepy
+      POSTGRES_PASSWORD: sleepy
+      POSTGRES_DB: sleepy_engine
+    volumes:
+      - local-db:/var/lib/postgresql/data
+
+volumes:
+  local-db:

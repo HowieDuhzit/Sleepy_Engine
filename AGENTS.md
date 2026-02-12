@@ -51,3 +51,6 @@ Projects are served from `server/projects/<projectId>/` and accessed via:
 - `/api/projects/:projectId/scenes`
 
 When editing animations/scenes, ensure the project ID is set in the console menu or editor.
+
+## Database
+Postgres is supported via `DATABASE_URL` (optional). When unset, the server runs without DB access. For local docker, `docker-compose.local.yml` provisions Postgres.

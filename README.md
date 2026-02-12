@@ -36,6 +36,9 @@ The client connects to `ws://localhost:2567` by default.
 - `docs/PROJECT.md` consolidated project notes
 - `server/projects/` project data (animations, scenes, avatars, configs)
 
+## Database
+Postgres is recommended for persistence and tooling. Configure with `DATABASE_URL` (see `docs/PROJECT.md`).
+
 ## Docker (Local Test / Deployment)
 
 ### Single container (client + server)

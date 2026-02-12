@@ -1007,7 +1007,7 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Notes</div>',
-      '<div class="clip-status">Edit values above, then Save to write /config/player.json for the game.</div>',
+      '<div class="clip-status">Edit values above, then Save to write the project player.json.</div>',
       '</div>',
       '</div>',
       '</div>',
@@ -1796,7 +1796,8 @@ export class EditorApp {
 
     playerLoadButton?.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!this.currentProjectId) throw new Error('No project selected');
+        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, { cache: 'no-store' });
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
@@ -1810,7 +1811,8 @@ export class EditorApp {
     playerSaveButton?.addEventListener('click', async () => {
       try {
         readPlayerInputs();
-        const res = await fetch('/api/player-config', {
+        if (!this.currentProjectId) throw new Error('No project selected');
+        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.playerConfig),
@@ -1968,7 +1970,8 @@ export class EditorApp {
     });
     void (async () => {
       try {
-        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!this.currentProjectId) throw new Error('No project selected');
+        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
