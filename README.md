@@ -28,7 +28,7 @@ The client connects to `ws://localhost:2567` by default.
 - `client/` Three.js + Vite frontend
 - `server/` Colyseus authoritative backend
 - `shared/` protocol/types shared between client/server
-- `docs/PLAN.md` implementation plan
+- `docs/PROJECT.md` consolidated project notes
 
 ## Docker (Local Test / Deployment)
 

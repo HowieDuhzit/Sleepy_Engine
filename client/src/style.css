@@ -46,10 +46,12 @@ body,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 10px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(8, 10, 16, 0.85);
   backdrop-filter: blur(10px);
+  flex-wrap: wrap;
 }
 
 .editor-title {
@@ -58,6 +60,57 @@ body,
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.85);
+}
+
+.editor-project-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-project-selector select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 24, 34, 0.8);
+  color: #e6ebf2;
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 200px;
+  cursor: pointer;
+}
+
+.editor-project-selector select:hover {
+  border-color: rgba(90, 136, 255, 0.4);
+}
+
+.editor-project-selector select:focus {
+  outline: none;
+  border-color: rgba(90, 136, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(90, 136, 255, 0.1);
+}
+
+.editor-project-selector button {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(90, 136, 255, 0.15);
+  color: #e9f0ff;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-project-selector button:hover {
+  background: rgba(90, 136, 255, 0.25);
+  border-color: rgba(90, 136, 255, 0.4);
+}
+
+.editor-project-selector button:active {
+  transform: scale(0.97);
 }
 
 .editor-tabs {

@@ -1,0 +1,12 @@
+{
+  "scenes": [
+    {
+      "name": "prototype",
+      "obstacles": [
+        { "x": 0, "y": 0, "z": 0, "width": 2, "height": 2, "depth": 2 },
+        { "x": 5, "y": 0, "z": 0, "width": 1, "height": 3, "depth": 1 },
+        { "x": -5, "y": 0, "z": 0, "width": 1, "height": 3, "depth": 1 }
+      ]
+    }
+  ]
+}

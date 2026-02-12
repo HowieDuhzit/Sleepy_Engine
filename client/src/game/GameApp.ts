@@ -5,6 +5,10 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
+import { PSXRenderer } from '../rendering/PSXRenderer';
+import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
+import { PSXMaterial } from '../materials/PSXMaterial';
+import { psxSettings } from '../settings/PSXSettings';
 import { buildAnimationClipFromData, isClipData, mirrorClipData, parseClipPayload, type ClipData } from './clip';
 import { retargetMixamoClip } from './retarget';
 import {
@@ -31,6 +35,7 @@ import {
 
 export class GameApp {
   private sceneName: string;
+  private projectId: string;
   private obstacles = OBSTACLES;
   private obstacleGroup: THREE.Group | null = null;
   private playerConfig = {
@@ -59,6 +64,8 @@ export class GameApp {
   };
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
+  private psxRenderer: PSXRenderer | null = null;
+  private psxPostProcessor: PSXPostProcessor | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private orbitYaw = 0;
@@ -231,12 +238,13 @@ export class GameApp {
   };
   private inputDebugTimer = 0;
 
-  constructor(container: HTMLElement | null, sceneName = 'prototype') {
+  constructor(container: HTMLElement | null, sceneName = 'prototype', projectId = 'prototype') {
     if (!container) {
       throw new Error('Missing #app container');
     }
     this.container = container;
     this.sceneName = sceneName;
+    this.projectId = projectId;
     this.container.tabIndex = 0;
     this.container.addEventListener('click', () => this.container.focus());
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -253,6 +261,42 @@ export class GameApp {
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 300);
     this.camera.position.set(0, 4, 6);
     this.camera.lookAt(0, 0, 0);
+
+    // Initialize PSX rendering system
+    const psxRes = psxSettings.getResolution();
+    this.psxRenderer = new PSXRenderer(this.renderer, {
+      baseWidth: psxRes.width,
+      baseHeight: psxRes.height,
+      enabled: psxSettings.config.enabled,
+      pixelated: psxSettings.config.pixelated,
+    });
+
+    this.psxPostProcessor = new PSXPostProcessor(
+      this.renderer,
+      this.scene,
+      this.camera,
+      {
+        enabled: psxSettings.config.enabled,
+        blur: psxSettings.config.blur,
+        blurStrength: psxSettings.config.blurStrength,
+        colorQuantization: psxSettings.config.colorQuantization,
+        colorBits: psxSettings.config.colorBits,
+        dithering: psxSettings.config.dithering,
+        ditherStrength: psxSettings.config.ditherStrength,
+        crtEffects: psxSettings.config.crtEffects,
+        scanlineIntensity: psxSettings.config.scanlineIntensity,
+        curvature: psxSettings.config.curvature,
+        vignette: psxSettings.config.vignette,
+        brightness: psxSettings.config.brightness,
+        chromaticAberration: psxSettings.config.chromaticAberration,
+        chromaticOffset: psxSettings.config.chromaticOffset,
+        contrast: psxSettings.config.contrast,
+        saturation: psxSettings.config.saturation,
+        gamma: psxSettings.config.gamma,
+        exposure: psxSettings.config.exposure,
+      }
+    );
+
     this.orbitRadius = this.playerConfig.cameraDistance ?? this.orbitRadius;
     this.cameraSensitivity = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
     this.cameraSmoothing = this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
@@ -327,7 +371,34 @@ export class GameApp {
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
 
     window.addEventListener('resize', this.handleResize);
+
+    // Listen for global PSX settings changes
+    window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
   }
+
+  private handlePSXSettingsChange = () => {
+    // Update PSX renderers when settings change globally
+    if (this.psxRenderer) {
+      const res = psxSettings.getResolution();
+      this.psxRenderer.setEnabled(psxSettings.config.enabled);
+      this.psxRenderer.setResolution(res.width, res.height);
+      this.psxRenderer.setPixelated(psxSettings.config.pixelated);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
+      this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
+      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
+      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
+      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
+      this.psxPostProcessor.setContrast(psxSettings.config.contrast);
+      this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
+      this.psxPostProcessor.setGamma(psxSettings.config.gamma);
+      this.psxPostProcessor.setExposure(psxSettings.config.exposure);
+    }
+  };
 
   start() {
     if (this.animationId !== null) return;
@@ -343,6 +414,7 @@ export class GameApp {
       this.animationId = null;
     }
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
   }
 
   private tick = () => {
@@ -383,7 +455,24 @@ export class GameApp {
 
     // Apply visual offset for rendering (hides network corrections)
     this.localPlayer.position.add(this.localVisualOffset);
-    this.renderer.render(this.scene, this.camera);
+
+    // Update PSX material resolutions before rendering
+    if (psxSettings.config.enabled && this.psxRenderer) {
+      const res = this.psxRenderer.getResolution();
+      this.scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
+          obj.material.updateResolution(res.width, res.height);
+        }
+      });
+    }
+
+    // Render with PSX effects or standard
+    if (psxSettings.config.enabled && this.psxPostProcessor) {
+      this.psxPostProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     // Restore physics position
     this.localPlayer.position.sub(this.localVisualOffset);
 
@@ -396,6 +485,16 @@ export class GameApp {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
+
+    // Update PSX resolution
+    if (this.psxRenderer) {
+      const psxRes = psxSettings.getResolution();
+      this.psxRenderer.setResolution(psxRes.width, psxRes.height);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setSize(innerWidth, innerHeight);
+    }
   };
 
   private createLights() {
@@ -836,6 +935,44 @@ export class GameApp {
     menu.innerHTML = `
       <h2 style="margin-top: 0;">Settings (ESC to close)</h2>
 
+      <h3>Console Graphics</h3>
+      <label style="display: block; margin: 10px 0;">
+        Console Preset:
+        <select id="console-preset" style="width: 100%; padding: 5px;">
+          <option value="ps1" ${psxSettings.config.consolePreset === 'ps1' ? 'selected' : ''}>PlayStation 1 (1994)</option>
+          <option value="n64" ${psxSettings.config.consolePreset === 'n64' ? 'selected' : ''}>Nintendo 64 (1996)</option>
+          <option value="dreamcast" ${psxSettings.config.consolePreset === 'dreamcast' ? 'selected' : ''}>Sega Dreamcast (1998)</option>
+          <option value="xbox" ${psxSettings.config.consolePreset === 'xbox' ? 'selected' : ''}>Xbox (2001)</option>
+          <option value="modern" ${psxSettings.config.consolePreset === 'modern' ? 'selected' : ''}>Modern (No Effects)</option>
+        </select>
+      </label>
+
+      <h3>Color & Lighting</h3>
+      <label style="display: block; margin: 10px 0;">
+        Brightness: <span id="brightness-value">${psxSettings.config.brightness.toFixed(2)}</span>
+        <input type="range" id="brightness" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.brightness}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Contrast: <span id="contrast-value">${psxSettings.config.contrast.toFixed(2)}</span>
+        <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.contrast}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Saturation: <span id="saturation-value">${psxSettings.config.saturation.toFixed(2)}</span>
+        <input type="range" id="saturation" min="0.0" max="2.0" step="0.05" value="${psxSettings.config.saturation}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Gamma: <span id="gamma-value">${psxSettings.config.gamma.toFixed(2)}</span>
+        <input type="range" id="gamma" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.gamma}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Exposure: <span id="exposure-value">${psxSettings.config.exposure.toFixed(2)}</span>
+        <input type="range" id="exposure" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.exposure}" style="width: 100%;">
+      </label>
+
       <h3>Camera</h3>
       <label style="display: block; margin: 10px 0;">
         Camera Distance: <span id="camera-distance-value">6.0</span>m
@@ -858,12 +995,7 @@ export class GameApp {
       </label>
 
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #666;">
-        <small>Tips: If movement feels jittery, try:</small>
-        <ul style="font-size: 12px; margin: 5px 0;">
-          <li>Set smoothing to 0% (instant camera)</li>
-          <li>Increase camera distance</li>
-          <li>Try first-person mode</li>
-        </ul>
+        <small>Tips: Choose between PS1, N64, Dreamcast, Xbox, or Modern rendering styles!</small>
       </div>
     `;
 
@@ -895,6 +1027,71 @@ export class GameApp {
 
     firstPersonToggle.addEventListener('change', () => {
       this.firstPersonMode = firstPersonToggle.checked;
+    });
+
+    // Console Preset Settings
+    const consolePreset = menu.querySelector('#console-preset') as HTMLSelectElement;
+    const brightnessSlider = menu.querySelector('#brightness') as HTMLInputElement;
+    const brightnessValue = menu.querySelector('#brightness-value') as HTMLElement;
+    const contrastSlider = menu.querySelector('#contrast') as HTMLInputElement;
+    const contrastValue = menu.querySelector('#contrast-value') as HTMLElement;
+    const saturationSlider = menu.querySelector('#saturation') as HTMLInputElement;
+    const saturationValue = menu.querySelector('#saturation-value') as HTMLElement;
+    const gammaSlider = menu.querySelector('#gamma') as HTMLInputElement;
+    const gammaValue = menu.querySelector('#gamma-value') as HTMLElement;
+    const exposureSlider = menu.querySelector('#exposure') as HTMLInputElement;
+    const exposureValue = menu.querySelector('#exposure-value') as HTMLElement;
+
+    consolePreset.addEventListener('change', () => {
+      psxSettings.applyConsolePreset(consolePreset.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
+      // Update UI to reflect preset values
+      brightnessSlider.value = psxSettings.config.brightness.toString();
+      brightnessValue.textContent = psxSettings.config.brightness.toFixed(2);
+      contrastSlider.value = psxSettings.config.contrast.toString();
+      contrastValue.textContent = psxSettings.config.contrast.toFixed(2);
+      saturationSlider.value = psxSettings.config.saturation.toString();
+      saturationValue.textContent = psxSettings.config.saturation.toFixed(2);
+      gammaSlider.value = psxSettings.config.gamma.toString();
+      gammaValue.textContent = psxSettings.config.gamma.toFixed(2);
+      exposureSlider.value = psxSettings.config.exposure.toString();
+      exposureValue.textContent = psxSettings.config.exposure.toFixed(2);
+      // Trigger update via event
+      window.dispatchEvent(new CustomEvent('psx-settings-changed'));
+    });
+
+    brightnessSlider.addEventListener('input', () => {
+      const value = parseFloat(brightnessSlider.value);
+      brightnessValue.textContent = value.toFixed(2);
+      psxSettings.update({ brightness: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setBrightness(value);
+    });
+
+    contrastSlider.addEventListener('input', () => {
+      const value = parseFloat(contrastSlider.value);
+      contrastValue.textContent = value.toFixed(2);
+      psxSettings.update({ contrast: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setContrast(value);
+    });
+
+    saturationSlider.addEventListener('input', () => {
+      const value = parseFloat(saturationSlider.value);
+      saturationValue.textContent = value.toFixed(2);
+      psxSettings.update({ saturation: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setSaturation(value);
+    });
+
+    gammaSlider.addEventListener('input', () => {
+      const value = parseFloat(gammaSlider.value);
+      gammaValue.textContent = value.toFixed(2);
+      psxSettings.update({ gamma: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setGamma(value);
+    });
+
+    exposureSlider.addEventListener('input', () => {
+      const value = parseFloat(exposureSlider.value);
+      exposureValue.textContent = value.toFixed(2);
+      psxSettings.update({ exposure: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setExposure(value);
     });
 
     // ESC to toggle menu
@@ -1632,18 +1829,41 @@ export class GameApp {
 
   private async loadSceneConfig() {
     try {
-      const res = await fetch('/config/scenes.json', { cache: 'no-store' });
-      if (!res.ok) return;
+      const res = await fetch(`/api/projects/${this.projectId}/scenes`, { cache: 'no-store' });
+      if (!res.ok) {
+        console.warn('Failed to load scenes from project API');
+        return;
+      }
       const data = (await res.json()) as {
-        scenes?: { name: string; obstacles?: typeof OBSTACLES }[];
+        scenes?: { name: string; obstacles?: any[] }[];
       };
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
       if (scene?.obstacles) {
-        this.obstacles = scene.obstacles;
+        // Convert editor format {x, y, z, width, height, depth} to game format
+        this.obstacles = scene.obstacles.map((obs: any, index: number) => {
+          // If already in game format (has position and size), use as-is
+          if (obs.position && obs.size) {
+            return obs;
+          }
+          // Convert from editor format
+          return {
+            id: obs.id || `obstacle_${index}`,
+            position: {
+              x: obs.x ?? 0,
+              y: obs.y ?? 0,
+              z: obs.z ?? 0,
+            },
+            size: {
+              x: obs.width ?? 1,
+              y: obs.height ?? 1,
+              z: obs.depth ?? 1,
+            },
+          };
+        });
         this.rebuildObstacleMeshes();
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Failed to load scene config:', err);
     }
   }
 
@@ -1698,14 +1918,20 @@ export class GameApp {
       return base;
     };
 
+    // Load animations from project API
     let manifest: string[] | null = null;
     try {
-      const res = await fetch('/animations/manifest.json', { cache: 'no-store' });
+      const animationsPath = `/api/projects/${this.projectId}/animations`;
+      console.log('Loading animations from project:', animationsPath);
+      const res = await fetch(animationsPath, { cache: 'no-store' });
       if (res.ok) {
         const data = (await res.json()) as { files?: string[] };
         if (Array.isArray(data.files)) {
           manifest = data.files;
+          console.log('Found', data.files.length, 'animation files');
         }
+      } else {
+        console.warn('Failed to load animations from project:', res.status);
       }
     } catch (error) {
       console.warn('Failed to load animations manifest:', error);
@@ -1715,10 +1941,13 @@ export class GameApp {
       (name) => name.toLowerCase().endsWith('.json') && !name.toLowerCase().startsWith('none'),
     );
 
+    console.log('Loading', jsonEntries.length, 'animations from project');
+
     await Promise.all(
       jsonEntries.map(async (name) => {
         try {
-          const res = await fetch(`/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
+          const animPath = `/api/projects/${this.projectId}/animations/${encodeURIComponent(name)}`;
+          const res = await fetch(animPath, { cache: 'no-store' });
           if (!res.ok) return;
           const payload = (await res.json()) as unknown;
           const data = parseClipPayload(payload);

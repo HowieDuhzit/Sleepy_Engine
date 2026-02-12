@@ -5,6 +5,10 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { PSXRenderer } from '../rendering/PSXRenderer';
+import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
+import { PSXMaterial } from '../materials/PSXMaterial';
+import { psxSettings } from '../settings/PSXSettings';
 import { retargetMixamoClip } from '../game/retarget';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
 import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
@@ -41,7 +45,19 @@ type RagdollBone = {
 export class EditorApp {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
-  private scene: THREE.Scene;
+  private psxRenderer: PSXRenderer | null = null;
+  private psxPostProcessor: PSXPostProcessor | null = null;
+
+  // Separate scenes for each tab
+  private characterScene: THREE.Scene; // Shared by animation and player tabs
+  private levelScene: THREE.Scene;
+  private settingsScene: THREE.Scene;
+
+  // Legacy scene reference (points to current active scene)
+  private get scene(): THREE.Scene {
+    return this.getActiveScene();
+  }
+
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls | null = null;
   private viewport: HTMLDivElement | null = null;
@@ -122,6 +138,12 @@ export class EditorApp {
   private ragdollHandleLine = new THREE.Line3();
   private ragdollHandleTemp = new THREE.Vector3();
   private ragdollHandleTemp2 = new THREE.Vector3();
+
+  // Project management
+  private currentProjectId: string | null = null;
+  private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
+  private refreshClipsFunction: (() => Promise<void>) | null = null;
+  private refreshScenesFunction: (() => Promise<void>) | null = null;
 
   private closestPointOnLineToRay(line: THREE.Line3, ray: THREE.Ray, target: THREE.Vector3) {
     const p1 = line.start;
@@ -371,7 +393,8 @@ export class EditorApp {
   };
   private boneVisualsVisible = true;
   private overrideMode = false;
-  private currentTab: 'animation' | 'player' | 'level' = 'animation';
+  private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
+  public updateLevelVisualization: (obstacles: any[]) => void = () => {};
   private readonly ragdollDefs: { name: string; parent?: string }[] = [
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
@@ -432,12 +455,55 @@ export class EditorApp {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(0x0b0c12, 1);
 
-    this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+    // Initialize scenes
+    this.characterScene = new THREE.Scene();
+    this.characterScene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+
+    this.levelScene = new THREE.Scene();
+    this.levelScene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+
+    this.settingsScene = new THREE.Scene();
+    this.settingsScene.background = new THREE.Color(0x1a1a1a);
 
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
     this.camera.position.set(0, 1.6, -4.2);
     this.camera.lookAt(0, 1.4, 0);
+
+    // Initialize PSX rendering system
+    const psxRes = psxSettings.getResolution();
+    this.psxRenderer = new PSXRenderer(this.renderer, {
+      baseWidth: psxRes.width,
+      baseHeight: psxRes.height,
+      enabled: psxSettings.config.enabled,
+      pixelated: psxSettings.config.pixelated,
+    });
+
+    this.psxPostProcessor = new PSXPostProcessor(
+      this.renderer,
+      this.scene,
+      this.camera,
+      {
+        enabled: psxSettings.config.enabled,
+        blur: psxSettings.config.blur,
+        blurStrength: psxSettings.config.blurStrength,
+        colorQuantization: psxSettings.config.colorQuantization,
+        colorBits: psxSettings.config.colorBits,
+        dithering: psxSettings.config.dithering,
+        ditherStrength: psxSettings.config.ditherStrength,
+        crtEffects: psxSettings.config.crtEffects,
+        scanlineIntensity: psxSettings.config.scanlineIntensity,
+        curvature: psxSettings.config.curvature,
+        vignette: psxSettings.config.vignette,
+        brightness: psxSettings.config.brightness,
+        chromaticAberration: psxSettings.config.chromaticAberration,
+        chromaticOffset: psxSettings.config.chromaticOffset,
+        contrast: psxSettings.config.contrast,
+        saturation: psxSettings.config.saturation,
+        gamma: psxSettings.config.gamma,
+        exposure: psxSettings.config.exposure,
+      }
+    );
+
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -447,12 +513,17 @@ export class EditorApp {
     this.controls.maxDistance = 20;
 
     this.ragdollTransform = new TransformControls(this.camera, this.renderer.domElement);
-    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+    this.ragdollTransform.visible = false;
     this.ragdollTransform.setMode('translate');
     this.ragdollTransform.addEventListener('dragging-changed', (event) => {
       if (this.controls) this.controls.enabled = !event.value;
     });
-    this.scene.add(this.ragdollTransform as unknown as THREE.Object3D);
+    // Add TransformControls internal root to scene
+    // @ts-expect-error - TransformControls has internal _root property
+    if (this.ragdollTransform._root) {
+      // @ts-expect-error
+      this.characterScene.add(this.ragdollTransform._root);
+    }
 
     this.hud = this.createHud();
     this.viewport?.appendChild(this.renderer.domElement);
@@ -475,6 +546,7 @@ export class EditorApp {
     this.renderer.domElement.addEventListener('pointercancel', this.handleGestureEnd);
 
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
         this.resizeRenderer();
@@ -484,6 +556,30 @@ export class EditorApp {
     }
     this.loadVrm();
   }
+
+  private handlePSXSettingsChange = () => {
+    // Update PSX renderers when settings change globally
+    if (this.psxRenderer) {
+      const res = psxSettings.getResolution();
+      this.psxRenderer.setEnabled(psxSettings.config.enabled);
+      this.psxRenderer.setResolution(res.width, res.height);
+      this.psxRenderer.setPixelated(psxSettings.config.pixelated);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
+      this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
+      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
+      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
+      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
+      this.psxPostProcessor.setContrast(psxSettings.config.contrast);
+      this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
+      this.psxPostProcessor.setGamma(psxSettings.config.gamma);
+      this.psxPostProcessor.setExposure(psxSettings.config.exposure);
+    }
+  };
 
   start() {
     if (this.animationId !== null) return;
@@ -497,6 +593,7 @@ export class EditorApp {
       this.animationId = null;
     }
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
     window.removeEventListener('pointermove', this.handleRagdollDrag);
     window.removeEventListener('pointerup', this.handleRagdollDragEnd);
@@ -523,7 +620,148 @@ export class EditorApp {
     this.resizeRenderer();
     this.resizeTimeline();
     this.fitCameraToVrm();
+
+    // Update PSX resolution
+    if (this.psxRenderer) {
+      const psxRes = psxSettings.getResolution();
+      this.psxRenderer.setResolution(psxRes.width, psxRes.height);
+    }
+
+    if (this.psxPostProcessor) {
+      const { innerWidth, innerHeight } = window;
+      this.psxPostProcessor.setSize(innerWidth, innerHeight);
+    }
   };
+
+  private getActiveScene(): THREE.Scene {
+    switch (this.currentTab) {
+      case 'animation':
+      case 'player':
+        return this.characterScene;
+      case 'level':
+        return this.levelScene;
+      case 'settings':
+        return this.settingsScene;
+      default:
+        return this.characterScene;
+    }
+  }
+
+  private switchToTab(tab: 'animation' | 'player' | 'level' | 'settings') {
+    this.currentTab = tab;
+
+    // VRM stays in character scene for both animation and player tabs
+    // No need to move it between scenes anymore since they're consolidated
+
+    // Update PSX post-processor to use the new scene
+    if (this.psxPostProcessor) {
+      // We need to recreate the post-processor with the new scene
+      this.psxPostProcessor.dispose();
+      this.psxPostProcessor = new PSXPostProcessor(
+        this.renderer,
+        this.getActiveScene(),
+        this.camera,
+        {
+          enabled: psxSettings.config.enabled,
+          blur: psxSettings.config.blur,
+          blurStrength: psxSettings.config.blurStrength,
+          colorQuantization: psxSettings.config.colorQuantization,
+          colorBits: psxSettings.config.colorBits,
+          dithering: psxSettings.config.dithering,
+          ditherStrength: psxSettings.config.ditherStrength,
+          crtEffects: psxSettings.config.crtEffects,
+          scanlineIntensity: psxSettings.config.scanlineIntensity,
+          curvature: psxSettings.config.curvature,
+          vignette: psxSettings.config.vignette,
+          brightness: psxSettings.config.brightness,
+          chromaticAberration: psxSettings.config.chromaticAberration,
+          chromaticOffset: psxSettings.config.chromaticOffset,
+          contrast: psxSettings.config.contrast,
+          saturation: psxSettings.config.saturation,
+          gamma: psxSettings.config.gamma,
+          exposure: psxSettings.config.exposure,
+        }
+      );
+    }
+
+    // Adjust camera for different tabs
+    if (tab === 'level') {
+      this.camera.position.set(0, 5, 10);
+      if (this.controls) {
+        this.controls.target.set(0, 0, 0);
+      }
+    } else if (tab === 'settings') {
+      // Minimal camera setup for settings
+      this.camera.position.set(0, 2, 5);
+      if (this.controls) {
+        this.controls.target.set(0, 1, 0);
+      }
+    } else {
+      // Animation and player tabs
+      this.camera.position.set(0, 1.6, -4.2);
+      if (this.controls) {
+        this.controls.target.set(0, 1.2, 0);
+      }
+    }
+  }
+
+  // Get API path for animations (project-scoped only)
+  private getAnimationsPath(): string | null {
+    if (this.currentProjectId) {
+      return `/api/projects/${this.currentProjectId}/animations`;
+    }
+    return null; // No project selected
+  }
+
+  // Get API path for scenes (project-scoped only)
+  private getScenesPath(): string | null {
+    if (this.currentProjectId) {
+      return `/api/projects/${this.currentProjectId}/scenes`;
+    }
+    return null; // No project selected
+  }
+
+  // Load assets for current project (triggers refresh of animations and scenes)
+  private async loadProjectAssets(retryCount = 0) {
+    console.log('Loading assets for project:', this.currentProjectId, `(attempt ${retryCount + 1})`);
+    console.log('refreshClipsFunction available:', !!this.refreshClipsFunction);
+    console.log('refreshScenesFunction available:', !!this.refreshScenesFunction);
+
+    // If functions aren't ready yet, retry after a delay (max 5 retries)
+    if ((!this.refreshClipsFunction || !this.refreshScenesFunction) && retryCount < 5) {
+      console.log('Refresh functions not ready, retrying in 200ms...');
+      setTimeout(() => {
+        this.loadProjectAssets(retryCount + 1);
+      }, 200);
+      return;
+    }
+
+    // Trigger refresh of animations list
+    if (this.refreshClipsFunction) {
+      console.log('Calling refreshClipsFunction...');
+      try {
+        await this.refreshClipsFunction();
+        console.log('✓ Animations loaded successfully');
+      } catch (err) {
+        console.error('✗ Failed to load animations:', err);
+      }
+    } else {
+      console.error('✗ refreshClipsFunction not available after retries');
+    }
+
+    // Trigger refresh of scenes
+    if (this.refreshScenesFunction) {
+      console.log('Calling refreshScenesFunction...');
+      try {
+        await this.refreshScenesFunction();
+        console.log('✓ Scenes loaded successfully');
+      } catch (err) {
+        console.error('✗ Failed to load scenes:', err);
+      }
+    } else {
+      console.error('✗ refreshScenesFunction not available after retries');
+    }
+  }
 
   private tick = () => {
     const delta = this.clock.getDelta();
@@ -552,7 +790,24 @@ export class EditorApp {
     this.updateBoneMarkers();
     this.updateBoneGizmos();
     this.drawAxisWidget();
-    this.renderer.render(this.scene, this.camera);
+
+    // Update PSX material resolutions before rendering
+    if (psxSettings.config.enabled && this.psxRenderer) {
+      const res = this.psxRenderer.getResolution();
+      this.scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
+          obj.material.updateResolution(res.width, res.height);
+        }
+      });
+    }
+
+    // Render with PSX effects or standard
+    if (psxSettings.config.enabled && this.psxPostProcessor) {
+      this.psxPostProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     this.animationId = requestAnimationFrame(this.tick);
   };
 
@@ -562,10 +817,20 @@ export class EditorApp {
     hud.innerHTML = [
       '<div class="editor-header">',
       '<div class="editor-title">Sleepy Engine Editor</div>',
+      '<div class="editor-project-selector">',
+      '<label style="display: flex; align-items: center; gap: 8px;">',
+      '<span style="font-weight: 500;">Game Project:</span>',
+      '<select data-project-select style="padding: 5px 10px; border-radius: 4px; border: 1px solid #444; background: #2a2a2a; color: #fff; min-width: 200px;">',
+      '<option value="">-- Select Project --</option>',
+      '</select>',
+      '<button data-new-project style="padding: 5px 12px; border-radius: 4px; border: 1px solid #444; background: #3a3a3a; color: #fff; cursor: pointer;">New Project</button>',
+      '</label>',
+      '</div>',
       '<div class="editor-tabs">',
       '<button class="editor-tab active" data-tab="animation">Animation</button>',
       '<button class="editor-tab" data-tab="player">Player</button>',
       '<button class="editor-tab" data-tab="level">Level</button>',
+      '<button class="editor-tab" data-tab="settings">Settings</button>',
       '</div>',
       '</div>',
       '<div class="editor-shell">',
@@ -621,6 +886,7 @@ export class EditorApp {
       '<button data-rig-reset>Reset Rig</button>',
       '</div>',
       '</div>',
+      '</div>',
       '<div class="editor-left" data-tab-panel="level" style="display:none;">',
       '<div class="panel">',
       '<div class="panel-title">Scene</div>',
@@ -636,8 +902,7 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Obstacles JSON</div>',
-      '<textarea data-scene-obstacles rows="12"></textarea>',
-      '</div>',
+      '<textarea data-scene-obstacles rows="12" style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>',
       '</div>',
       '</div>',
       '<div class="editor-view" data-viewport>',
@@ -749,16 +1014,195 @@ export class EditorApp {
       '<div class="editor-bottom player-bottom" data-tab-panel="level" style="display:none;">',
       '<div class="player-bottom-grid">',
       '<div class="panel">',
-      '<div class="panel-title">Scene JSON</div>',
-      '<textarea data-scene-json rows="10"></textarea>',
+      '<div class="panel-title">Scene JSON (Read-only)</div>',
+      '<textarea data-scene-json rows="10" readonly style="width: 100%; font-family: monospace; font-size: 12px; background: #1a1a1a; color: #ddd;"></textarea>',
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Tips</div>',
-      '<div class="clip-status">Edit obstacles as an array of boxes. Save to write /config/scenes.json.</div>',
+      '<div class="clip-status">Edit obstacles in the Obstacles JSON panel above. Changes are automatically synced to Scene JSON. Click Save to write to /api/scenes.</div>',
       '</div>',
+      '</div>',
+      '</div>',
+      '<div class="editor-left" data-tab-panel="settings" style="display:none;">',
+      '<div class="panel">',
+      '<div class="panel-title">Console Graphics</div>',
+      '<label class="field">',
+      '<span>Console Preset</span>',
+      '<select data-console-preset style="width: 100%;">',
+      '<option value="ps1">PlayStation 1 (1994)</option>',
+      '<option value="n64">Nintendo 64 (1996)</option>',
+      '<option value="dreamcast">Sega Dreamcast (1998)</option>',
+      '<option value="xbox">Xbox (2001)</option>',
+      '<option value="modern">Modern (No Effects)</option>',
+      '</select>',
+      '</label>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Color & Lighting</div>',
+      '<label class="field">',
+      '<span>Brightness: <strong data-brightness-val>1.00</strong></span>',
+      '<input data-brightness type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Contrast: <strong data-contrast-val>1.00</strong></span>',
+      '<input data-contrast type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Saturation: <strong data-saturation-val>1.00</strong></span>',
+      '<input data-saturation type="range" min="0.0" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Gamma: <strong data-gamma-val>1.00</strong></span>',
+      '<input data-gamma type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Exposure: <strong data-exposure-val>1.00</strong></span>',
+      '<input data-exposure type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
       '</div>',
       '</div>',
     ].join('');
+
+    // ============================================================================
+    // PROJECT MANAGEMENT
+    // ============================================================================
+
+    const projectSelect = hud.querySelector('[data-project-select]') as HTMLSelectElement;
+    const newProjectBtn = hud.querySelector('[data-new-project]') as HTMLButtonElement;
+
+    // Fetch and populate projects list
+    const loadProjectsList = async () => {
+      try {
+        const res = await fetch('/api/projects');
+        if (!res.ok) {
+          console.warn('Failed to fetch projects list');
+          return;
+        }
+        const data = (await res.json()) as { projects: Array<{ id: string; name: string }> };
+        projectSelect.innerHTML = '<option value="">-- Select Project --</option>';
+        for (const project of data.projects) {
+          const option = document.createElement('option');
+          option.value = project.id;
+          option.textContent = project.name;
+          projectSelect.appendChild(option);
+        }
+
+        // Load saved project from localStorage, or default to prototype
+        const savedProjectId = localStorage.getItem('editorProjectId');
+        const prototypeProject = data.projects.find(p => p.id === 'prototype');
+
+        if (savedProjectId && data.projects.find(p => p.id === savedProjectId)) {
+          // Saved project exists, use it
+          this.currentProjectId = savedProjectId;
+          projectSelect.value = savedProjectId;
+        } else if (prototypeProject) {
+          // No saved project, default to prototype
+          this.currentProjectId = 'prototype';
+          projectSelect.value = 'prototype';
+          localStorage.setItem('editorProjectId', 'prototype');
+          console.log('Defaulting to prototype project');
+        }
+
+        // Schedule asset loading (will retry if functions not ready yet)
+        if (this.currentProjectId) {
+          // First verify API endpoints are working
+          setTimeout(async () => {
+            console.log('=== Editor Initialization Debug ===');
+            console.log('Selected project:', this.currentProjectId);
+
+            // Test animations endpoint
+            try {
+              const animPath = `/api/projects/${this.currentProjectId}/animations`;
+              console.log('Testing:', animPath);
+              const res = await fetch(animPath);
+              if (res.ok) {
+                const data = await res.json();
+                console.log('✓ Animations API response:', data);
+              } else {
+                console.error('✗ Animations API failed:', res.status);
+              }
+            } catch (err) {
+              console.error('✗ Animations API error:', err);
+            }
+
+            // Test scenes endpoint
+            try {
+              const scenesPath = `/api/projects/${this.currentProjectId}/scenes`;
+              console.log('Testing:', scenesPath);
+              const res = await fetch(scenesPath);
+              if (res.ok) {
+                const data = await res.json();
+                console.log('✓ Scenes API response:', data);
+              } else {
+                console.error('✗ Scenes API failed:', res.status);
+              }
+            } catch (err) {
+              console.error('✗ Scenes API error:', err);
+            }
+
+            console.log('Starting asset loading...');
+            this.loadProjectAssets(0);
+          }, 100);
+        }
+      } catch (err) {
+        console.error('Error loading projects list:', err);
+      }
+    };
+
+    // Project selection handler
+    projectSelect.addEventListener('change', async () => {
+      const projectId = projectSelect.value;
+      if (!projectId) {
+        this.currentProjectId = null;
+        localStorage.removeItem('editorProjectId');
+        return;
+      }
+      this.currentProjectId = projectId;
+      localStorage.setItem('editorProjectId', projectId);
+      // Reload assets for this project
+      await this.loadProjectAssets();
+    });
+
+    // New project handler
+    newProjectBtn.addEventListener('click', async () => {
+      const name = prompt('Enter project name:');
+      if (!name) return;
+
+      const description = prompt('Enter project description (optional):') || '';
+
+      try {
+        const res = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description }),
+        });
+
+        if (!res.ok) {
+          const error = await res.json();
+          alert(`Failed to create project: ${error.error || 'Unknown error'}`);
+          return;
+        }
+
+        const data = (await res.json()) as { id: string; name: string };
+        this.currentProjectId = data.id;
+        localStorage.setItem('editorProjectId', data.id);
+
+        // Refresh projects list
+        await loadProjectsList();
+        projectSelect.value = data.id;
+
+        // Load empty assets for new project
+        await this.loadProjectAssets();
+
+        alert(`Project "${data.name}" created successfully!`);
+      } catch (err) {
+        console.error('Error creating project:', err);
+        alert(`Error creating project: ${String(err)}`);
+      }
+    });
+
+    // Load projects list on startup
+    loadProjectsList();
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
@@ -793,11 +1237,12 @@ export class EditorApp {
     }
     tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        const tab = button.dataset.tab as 'animation' | 'player' | 'level';
-        this.currentTab = tab;
+        const tab = button.dataset.tab as 'animation' | 'player' | 'level' | 'settings';
+        this.switchToTab(tab);
         hud.classList.toggle('mode-animation', tab === 'animation');
         hud.classList.toggle('mode-player', tab === 'player');
         hud.classList.toggle('mode-level', tab === 'level');
+        hud.classList.toggle('mode-settings', tab === 'settings');
         for (const btn of tabButtons) {
           btn.classList.toggle('active', btn.dataset.tab === tab);
         }
@@ -915,6 +1360,19 @@ export class EditorApp {
     const sceneObstacles = hud.querySelector('[data-scene-obstacles]') as HTMLTextAreaElement;
     const sceneJson = hud.querySelector('[data-scene-json]') as HTMLTextAreaElement;
 
+    // Settings tab controls
+    const consolePresetSelect = hud.querySelector('[data-console-preset]') as HTMLSelectElement;
+    const brightnessInput = hud.querySelector('[data-brightness]') as HTMLInputElement;
+    const brightnessVal = hud.querySelector('[data-brightness-val]') as HTMLElement;
+    const contrastInput = hud.querySelector('[data-contrast]') as HTMLInputElement;
+    const contrastVal = hud.querySelector('[data-contrast-val]') as HTMLElement;
+    const saturationInput = hud.querySelector('[data-saturation]') as HTMLInputElement;
+    const saturationVal = hud.querySelector('[data-saturation-val]') as HTMLElement;
+    const gammaInput = hud.querySelector('[data-gamma]') as HTMLInputElement;
+    const gammaVal = hud.querySelector('[data-gamma-val]') as HTMLElement;
+    const exposureInput = hud.querySelector('[data-exposure]') as HTMLInputElement;
+    const exposureVal = hud.querySelector('[data-exposure-val]') as HTMLElement;
+
     const sceneState = { scenes: [] as { name: string; obstacles?: any[] }[] };
     const setSceneStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
       sceneStatus.textContent = text;
@@ -938,36 +1396,132 @@ export class EditorApp {
       sceneNameInput.value = entry.name;
       sceneObstacles.value = JSON.stringify(entry.obstacles ?? [], null, 2);
       syncSceneJson();
+      // Update level scene visualization
+      this.updateLevelVisualization(entry.obstacles ?? []);
+    };
+
+    // Method to update level scene with obstacles
+    this.updateLevelVisualization = (obstacles: any[]) => {
+      // Clear existing obstacle meshes from level scene
+      const toRemove: THREE.Object3D[] = [];
+      this.levelScene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.geometry instanceof THREE.BoxGeometry) {
+          // Check if it's an obstacle mesh (not the grid or other objects)
+          if (obj.material instanceof THREE.MeshStandardMaterial) {
+            toRemove.push(obj);
+          }
+        }
+      });
+      toRemove.forEach((obj) => this.levelScene.remove(obj));
+
+      // Add new obstacle meshes
+      for (const obstacle of obstacles) {
+        const geometry = new THREE.BoxGeometry(
+          obstacle.width || 1,
+          obstacle.height || 1,
+          obstacle.depth || 1
+        );
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x666666,
+          roughness: 0.8,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+          obstacle.x || 0,
+          (obstacle.y || 0) + (obstacle.height || 1) / 2, // Center the box
+          obstacle.z || 0
+        );
+        this.levelScene.add(mesh);
+      }
     };
     const loadScenes = async () => {
+      const scenesPath = this.getScenesPath();
+      if (!scenesPath) {
+        setSceneStatus('No project selected', 'warn');
+        sceneState.scenes = [];
+        syncSceneSelect();
+        return;
+      }
       try {
-        const res = await fetch('/api/scenes', { cache: 'no-store' });
-        if (!res.ok) throw new Error(await res.text());
+        const res = await fetch(scenesPath, { cache: 'no-store' });
+        if (!res.ok) {
+          // API not available, use default with sample obstacles
+          sceneState.scenes = [{
+            name: 'prototype',
+            obstacles: [
+              { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
+              { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+              { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+            ]
+          }];
+          syncSceneSelect();
+          loadSceneFromState('prototype');
+          setSceneStatus('Using default scene (API unavailable)', 'ok');
+          return;
+        }
+
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          // Not JSON, use default with sample obstacles
+          sceneState.scenes = [{
+            name: 'prototype',
+            obstacles: [
+              { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
+              { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+              { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+            ]
+          }];
+          syncSceneSelect();
+          loadSceneFromState('prototype');
+          setSceneStatus('Using default scene', 'ok');
+          return;
+        }
+
         const data = (await res.json()) as { scenes?: { name: string; obstacles?: any[] }[] };
         sceneState.scenes = data.scenes ?? [{ name: 'prototype', obstacles: [] }];
         syncSceneSelect();
         loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
         setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
       } catch (err) {
-        sceneState.scenes = [{ name: 'prototype', obstacles: [] }];
+        sceneState.scenes = [{
+          name: 'prototype',
+          obstacles: [
+            { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
+            { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+            { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
+          ]
+        }];
         syncSceneSelect();
         loadSceneFromState('prototype');
-        setSceneStatus(`Load failed: ${String(err)}`, 'warn');
+        setSceneStatus('Using default scene', 'ok');
       }
     };
     const saveScenes = async () => {
+      const scenesPath = this.getScenesPath();
+      if (!scenesPath) {
+        setSceneStatus('Please select a project first', 'warn');
+        return;
+      }
       try {
-        const res = await fetch('/api/scenes', {
+        const res = await fetch(scenesPath, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(sceneState),
         });
         if (!res.ok) throw new Error(await res.text());
-        setSceneStatus('Saved scenes.json', 'ok');
+        setSceneStatus(`Saved to project "${this.currentProjectId}"`, 'ok');
       } catch (err) {
         setSceneStatus(`Save failed: ${String(err)}`, 'warn');
       }
     };
+
+    // Store reference for external access
+    this.refreshScenesFunction = loadScenes;
+
+    // Add custom event listener to trigger refresh from outside
+    sceneList.addEventListener('refreshScenes', () => {
+      loadScenes();
+    });
 
     sceneLoadBtn?.addEventListener('click', () => loadSceneFromState(sceneList.value));
     sceneList?.addEventListener('change', () => loadSceneFromState(sceneList.value));
@@ -1000,6 +1554,8 @@ export class EditorApp {
       syncSceneSelect();
       sceneList.value = name;
       syncSceneJson();
+      // Update level visualization
+      this.updateLevelVisualization(obstacles);
       await saveScenes();
     });
     sceneDeleteBtn?.addEventListener('click', async () => {
@@ -1014,6 +1570,92 @@ export class EditorApp {
       await saveScenes();
     });
     void loadScenes();
+
+    // Settings tab initialization and handlers
+    if (consolePresetSelect) {
+      consolePresetSelect.value = psxSettings.config.consolePreset;
+      consolePresetSelect.addEventListener('change', () => {
+        psxSettings.applyConsolePreset(consolePresetSelect.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
+        // Update sliders and displays to reflect preset values
+        if (brightnessInput) {
+          brightnessInput.value = psxSettings.config.brightness.toString();
+          if (brightnessVal) brightnessVal.textContent = psxSettings.config.brightness.toFixed(2);
+        }
+        if (contrastInput) {
+          contrastInput.value = psxSettings.config.contrast.toString();
+          if (contrastVal) contrastVal.textContent = psxSettings.config.contrast.toFixed(2);
+        }
+        if (saturationInput) {
+          saturationInput.value = psxSettings.config.saturation.toString();
+          if (saturationVal) saturationVal.textContent = psxSettings.config.saturation.toFixed(2);
+        }
+        if (gammaInput) {
+          gammaInput.value = psxSettings.config.gamma.toString();
+          if (gammaVal) gammaVal.textContent = psxSettings.config.gamma.toFixed(2);
+        }
+        if (exposureInput) {
+          exposureInput.value = psxSettings.config.exposure.toString();
+          if (exposureVal) exposureVal.textContent = psxSettings.config.exposure.toFixed(2);
+        }
+        window.dispatchEvent(new CustomEvent('psx-settings-changed'));
+      });
+    }
+
+    if (brightnessInput) {
+      brightnessInput.value = psxSettings.config.brightness.toString();
+      if (brightnessVal) brightnessVal.textContent = psxSettings.config.brightness.toFixed(2);
+      brightnessInput.addEventListener('input', () => {
+        const value = parseFloat(brightnessInput.value);
+        if (brightnessVal) brightnessVal.textContent = value.toFixed(2);
+        psxSettings.update({ brightness: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setBrightness(value);
+      });
+    }
+
+    if (contrastInput) {
+      contrastInput.value = psxSettings.config.contrast.toString();
+      if (contrastVal) contrastVal.textContent = psxSettings.config.contrast.toFixed(2);
+      contrastInput.addEventListener('input', () => {
+        const value = parseFloat(contrastInput.value);
+        if (contrastVal) contrastVal.textContent = value.toFixed(2);
+        psxSettings.update({ contrast: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setContrast(value);
+      });
+    }
+
+    if (saturationInput) {
+      saturationInput.value = psxSettings.config.saturation.toString();
+      if (saturationVal) saturationVal.textContent = psxSettings.config.saturation.toFixed(2);
+      saturationInput.addEventListener('input', () => {
+        const value = parseFloat(saturationInput.value);
+        if (saturationVal) saturationVal.textContent = value.toFixed(2);
+        psxSettings.update({ saturation: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setSaturation(value);
+      });
+    }
+
+    if (gammaInput) {
+      gammaInput.value = psxSettings.config.gamma.toString();
+      if (gammaVal) gammaVal.textContent = psxSettings.config.gamma.toFixed(2);
+      gammaInput.addEventListener('input', () => {
+        const value = parseFloat(gammaInput.value);
+        if (gammaVal) gammaVal.textContent = value.toFixed(2);
+        psxSettings.update({ gamma: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setGamma(value);
+      });
+    }
+
+    if (exposureInput) {
+      exposureInput.value = psxSettings.config.exposure.toString();
+      if (exposureVal) exposureVal.textContent = psxSettings.config.exposure.toFixed(2);
+      exposureInput.addEventListener('input', () => {
+        const value = parseFloat(exposureInput.value);
+        if (exposureVal) exposureVal.textContent = value.toFixed(2);
+        psxSettings.update({ exposure: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setExposure(value);
+      });
+    }
+
     this.timelineHeader = timelineHeader;
     this.timelineWrap = timelineWrap;
     const viewport = hud.querySelector('[data-viewport]') as HTMLDivElement;
@@ -1595,30 +2237,73 @@ export class EditorApp {
 
     const refreshEngineClips = async () => {
       try {
-        const res = await fetch('/api/animations', { cache: 'no-store' });
-        if (!res.ok) {
-          setClipStatus(`List failed (${res.status})`, 'warn');
+        const animPath = this.getAnimationsPath();
+        if (!animPath) {
+          setClipStatus('No project selected', 'warn');
+          clipSelect.innerHTML = '<option value="">-- Select a project first --</option>';
           return;
         }
+        console.log('Fetching animations from', animPath, '...');
+        const res = await fetch(animPath, { cache: 'no-store' });
+        console.log('Response status:', res.status, 'Content-Type:', res.headers.get('content-type'));
+
+        if (!res.ok) {
+          console.warn('Failed to fetch animations:', res.status, res.statusText);
+          setClipStatus(`API error: ${res.status}`, 'warn');
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          return;
+        }
+
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.warn('Non-JSON response from /api/animations');
+          const text = await res.text();
+          console.log('Response preview:', text.substring(0, 200));
+          setClipStatus('API returned non-JSON', 'warn');
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          return;
+        }
+
         const data = (await res.json()) as { files?: string[] };
+        console.log('Received animation files:', data);
         const files = (data.files ?? []).filter((name) => name.toLowerCase().endsWith('.json'));
         clipSelect.innerHTML = '';
-        for (const file of files) {
-          const opt = document.createElement('option');
-          opt.value = file;
-          opt.textContent = file;
-          clipSelect.appendChild(opt);
+        if (files.length === 0) {
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          setClipStatus('No clips found', 'warn');
+        } else {
+          for (const file of files) {
+            const opt = document.createElement('option');
+            opt.value = file;
+            opt.textContent = file;
+            clipSelect.appendChild(opt);
+          }
+          setClipStatus(`Files: ${files.length}`, 'ok');
         }
-        setClipStatus(`Files: ${files.length}`, 'ok');
       } catch (err) {
-        setClipStatus(`List failed: ${String(err)}`, 'warn');
+        console.error('Error loading clips:', err);
+        setClipStatus(`Error: ${String(err)}`, 'warn');
+        clipSelect.innerHTML = '<option value="">-- No clips --</option>';
       }
     };
 
+    // Store reference for external access
+    this.refreshClipsFunction = refreshEngineClips;
+
+    // Add custom event listener to trigger refresh from outside
+    clipSelect.addEventListener('refreshClips', () => {
+      refreshEngineClips();
+    });
+
     saveBtn.addEventListener('click', async () => {
       const name = clipNameInput.value.trim() || this.retargetedName || 'clip';
+      const animPath = this.getAnimationsPath();
+      if (!animPath) {
+        setClipStatus('Please select a project first', 'warn');
+        return;
+      }
       try {
-        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, {
+        const res = await fetch(`${animPath}/${encodeURIComponent(name)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, clip: this.clip }),
@@ -1646,8 +2331,13 @@ export class EditorApp {
         setClipStatus('Load failed: no file selected', 'warn');
         return;
       }
+      const animPath = this.getAnimationsPath();
+      if (!animPath) {
+        setClipStatus('Please select a project first', 'warn');
+        return;
+      }
       try {
-        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
+        const res = await fetch(`${animPath}/${encodeURIComponent(name)}`, { cache: 'no-store' });
         if (!res.ok) {
           let detail = '';
           try {
@@ -2109,89 +2799,168 @@ export class EditorApp {
       (err) => console.warn('VRM load failed', err),
     );
 
-    this.createStudioSet();
+    // Create character scene (used by both animation and player tabs)
+    this.createCharacterScene();
+
+    // Create level scene environment
+    this.createLevelScene();
+
+    // Create settings scene (minimal)
+    this.createSettingsScene();
 
     // Axis widget is rendered as UI overlay instead of in-world axes.
   }
 
-  private createStudioSet() {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 0.55);
-    hemi.position.set(0, 20, 0);
-    this.scene.add(hemi);
+  private createCharacterScene() {
+    // Simple lighting - clean and functional
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    this.characterScene.add(ambient);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.0);
-    key.position.set(6, 8, 4);
-    this.scene.add(key);
+    const key = new THREE.DirectionalLight(0xffffff, 0.8);
+    key.position.set(5, 10, 5);
+    this.characterScene.add(key);
 
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
-    fill.position.set(-6, 4, -2);
-    this.scene.add(fill);
+    const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
+    fill.position.set(-5, 5, -5);
+    this.characterScene.add(fill);
 
-    const rim = new THREE.DirectionalLight(0xffffff, 0.35);
-    rim.position.set(0, 6, -8);
-    this.scene.add(rim);
-
+    // Simple floor
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 30),
+      new THREE.PlaneGeometry(50, 50),
       new THREE.MeshStandardMaterial({
-        color: 0x1a202c,
+        color: 0x2a2a2a,
         roughness: 0.9,
-        metalness: 0.05,
+        metalness: 0.0,
       }),
     );
     floor.rotation.x = -Math.PI / 2;
-    this.scene.add(floor);
+    this.characterScene.add(floor);
 
-    const floorTex = this.createStudioTexture();
-    if (floorTex) {
-      (floor.material as THREE.MeshStandardMaterial).map = floorTex;
-      (floor.material as THREE.MeshStandardMaterial).needsUpdate = true;
-    }
+    // Add subtle grid
+    const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
+    this.characterScene.add(gridHelper);
+  }
 
-    const cyclo = new THREE.Mesh(
-      new THREE.CylinderGeometry(12, 12, 8, 64, 1, true),
-      new THREE.MeshStandardMaterial({
-        color: 0x0f141d,
-        side: THREE.DoubleSide,
-        roughness: 0.95,
-      }),
-    );
-    cyclo.position.set(0, 4, 0);
-    cyclo.rotation.y = Math.PI / 4;
-    this.scene.add(cyclo);
+  private createLevelScene() {
+    // Add basic lighting for level viewing
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    this.levelScene.add(ambient);
 
-    const backWall = new THREE.Mesh(
-      new THREE.PlaneGeometry(26, 12),
-      new THREE.MeshStandardMaterial({
-        color: 0x0b0f18,
-        roughness: 0.95,
-      }),
-    );
-    backWall.position.set(0, 6, -10);
-    this.scene.add(backWall);
+    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+    directional.position.set(5, 10, 5);
+    this.levelScene.add(directional);
 
-    const softboxMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      emissive: 0xffffff,
-      emissiveIntensity: 0.35,
-      roughness: 0.3,
+    // Add ground plane (matching game's ground)
+    const groundGeo = new THREE.PlaneGeometry(100, 100);
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a,
+      roughness: 0.9,
+      metalness: 0.1
     });
-    const softbox1 = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 0.2), softboxMat);
-    softbox1.position.set(5, 4.5, 3);
-    softbox1.rotation.y = -0.6;
-    this.scene.add(softbox1);
-    const softbox2 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 0.2), softboxMat);
-    softbox2.position.set(-5, 3.8, 2.5);
-    softbox2.rotation.y = 0.7;
-    this.scene.add(softbox2);
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = 0; // GROUND_Y from game
+    ground.receiveShadow = true;
+    this.levelScene.add(ground);
 
-    const cStandMat = new THREE.MeshStandardMaterial({ color: 0x2b313c, roughness: 0.7 });
-    const stand1 = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.2, 10), cStandMat);
-    stand1.position.set(4.6, 1.6, 3.2);
-    this.scene.add(stand1);
-    const stand2 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.8, 10), cStandMat);
-    stand2.position.set(-4.6, 1.4, 2.6);
-    this.scene.add(stand2);
+    // Add a grid for reference
+    const gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x222222);
+    gridHelper.position.y = 0.01; // Slightly above ground to prevent z-fighting
+    this.levelScene.add(gridHelper);
+
+    // Add player spawn marker
+    const playerMarkerGeo = new THREE.CylinderGeometry(0.6, 0.6, 2, 16);
+    const playerMarkerMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff00,
+      emissive: 0x00ff00,
+      emissiveIntensity: 0.3,
+      transparent: true,
+      opacity: 0.7
+    });
+    const playerMarker = new THREE.Mesh(playerMarkerGeo, playerMarkerMat);
+    playerMarker.position.set(0, 1, 0); // Player spawn at origin
+    this.levelScene.add(playerMarker);
+
+    // Add label for player spawn
+    const playerLabel = document.createElement('div');
+    playerLabel.textContent = 'Player Spawn';
+    playerLabel.style.cssText = 'position: absolute; color: #00ff00; font-size: 12px; pointer-events: none;';
+    // Note: Label positioning would need to be updated in render loop for proper 3D->2D projection
+
+    // Load level geometry from config (if exists)
+    this.loadLevelGeometry();
+  }
+
+  private createSettingsScene() {
+    // Minimal scene for settings preview
+    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+    this.settingsScene.add(ambient);
+
+    // Add a simple preview cube for graphics settings testing
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({ color: 0x4488ff, roughness: 0.5 });
+    const cube = new THREE.Mesh(geometry, material);
+    cube.position.set(0, 1, 0);
+    this.settingsScene.add(cube);
+
+    // Add floor
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.MeshStandardMaterial({ color: 0x333333 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    this.settingsScene.add(floor);
+  }
+
+  private async loadLevelGeometry() {
+    const scenesPath = this.getScenesPath();
+    if (!scenesPath) {
+      console.log('No project selected, skipping level geometry load');
+      return;
+    }
+    try {
+      const res = await fetch(scenesPath, { cache: 'no-store' });
+      if (!res.ok) {
+        console.log('Level geometry API not available (404 expected in dev)');
+        return;
+      }
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.log('Level geometry API returned non-JSON response');
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.scenes || !Array.isArray(data.scenes)) return;
+
+      // Load the first scene's obstacles
+      const scene = data.scenes[0];
+      if (!scene || !scene.obstacles) return;
+
+      // Create meshes for obstacles
+      for (const obstacle of scene.obstacles) {
+        const geometry = new THREE.BoxGeometry(
+          obstacle.width || 1,
+          obstacle.height || 1,
+          obstacle.depth || 1
+        );
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x666666,
+          roughness: 0.8,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+          obstacle.x || 0,
+          obstacle.y || 0,
+          obstacle.z || 0
+        );
+        this.levelScene.add(mesh);
+      }
+    } catch (err) {
+      // Silently fail - level geometry is optional during development
+      console.log('Level geometry not loaded (optional)');
+    }
   }
 
   private createStudioTexture() {
@@ -2239,27 +3008,29 @@ export class EditorApp {
     }
     const vrm = gltf.userData?.vrm as VRM | undefined;
     if (!vrm) return;
+
+    // Remove old VRM from character scene
     if (this.vrm) {
-      this.scene.remove(this.vrm.scene);
+      this.characterScene.remove(this.vrm.scene);
       this.vrm = null;
     }
     if (this.skeletonHelper) {
-      this.scene.remove(this.skeletonHelper);
+      this.characterScene.remove(this.skeletonHelper);
       this.skeletonHelper = null;
     }
     if (this.boneGizmoGroup) {
-      this.scene.remove(this.boneGizmoGroup);
+      this.characterScene.remove(this.boneGizmoGroup);
       this.boneGizmoGroup = null;
       this.boneGizmos.clear();
     }
+
     this.vrm = vrm;
     vrm.humanoid.autoUpdateHumanBones = false;
     vrm.scene.position.set(0, 0, 0);
-    this.scene.add(vrm.scene);
-    if (this.skeletonHelper) {
-      this.scene.remove(this.skeletonHelper);
-      this.skeletonHelper = null;
-    }
+
+    // Add VRM to character scene
+    this.characterScene.add(vrm.scene);
+
     requestAnimationFrame(() => {
       this.resizeRenderer();
       this.fitCameraToVrm(true);
