@@ -794,6 +794,50 @@ export class EditorApp {
     };
   }
 
+  private createEditorConcreteTexture() {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.wrapS = THREE.RepeatWrapping;
+      fallback.wrapT = THREE.RepeatWrapping;
+      fallback.repeat.set(12, 12);
+      return fallback;
+    }
+    ctx.fillStyle = '#4a4f57';
+    ctx.fillRect(0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const n = (Math.random() * 0.2 - 0.1) * 255;
+      data[i] = Math.min(255, Math.max(0, data[i]! + n));
+      data[i + 1] = Math.min(255, Math.max(0, data[i + 1]! + n));
+      data[i + 2] = Math.min(255, Math.max(0, data[i + 2]! + n));
+    }
+    ctx.putImageData(imageData, 0, 0);
+    ctx.globalAlpha = 0.1;
+    ctx.strokeStyle = '#2f343b';
+    for (let i = 0; i < size; i += 32) {
+      ctx.beginPath();
+      ctx.moveTo(i, 0);
+      ctx.lineTo(i, size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i);
+      ctx.lineTo(size, i);
+      ctx.stroke();
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(12, 12);
+    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    return texture;
+  }
+
   private getCurrentLevelSceneEntry() {
     const sceneState = this.levelSceneStateRef;
     const sceneList = this.levelSceneListEl;
@@ -841,9 +885,16 @@ export class EditorApp {
       this.levelGroundMesh = null;
     }
     if (ground) {
+      const concreteTexture = this.createEditorConcreteTexture();
+      concreteTexture.repeat.set(ground.textureRepeat, ground.textureRepeat);
       this.levelGroundMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(ground.width, ground.depth),
-        new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.95, metalness: 0.05 }),
+        new THREE.MeshStandardMaterial({
+          map: concreteTexture,
+          roughness: 0.95,
+          metalness: 0.05,
+          color: 0xffffff,
+        }),
       );
       this.levelGroundMesh.rotation.x = -Math.PI / 2;
       this.levelGroundMesh.position.y = ground.y;
