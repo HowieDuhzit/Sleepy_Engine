@@ -27,14 +27,14 @@ The client connects to `ws://localhost:2567` by default.
 ## Console Flow
 1) Splash screen boot
 2) Console menu (play, editor, settings)
-3) Load project + scene
+3) Load game + start scene
 
 ## Workspace Layout
 - `client/` Three.js + Vite frontend
 - `server/` Colyseus authoritative backend
 - `shared/` protocol/types shared between client/server
 - `docs/PROJECT.md` consolidated project notes
-- `server/projects/` project data (animations, scenes, avatars, configs)
+- `server/projects/` game data (animations, scenes, avatars, configs, logic, assets)
 
 ## Database
 Postgres is recommended for persistence and tooling. Redis is optional for fast ephemeral state. Configure with `DATABASE_URL` and `REDIS_URL` (see `docs/PROJECT.md`).

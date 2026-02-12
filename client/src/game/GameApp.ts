@@ -5,7 +5,13 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
-import { getProjectAnimation, getProjectPlayer, getProjectScenes, listProjectAnimations } from '../services/project-api';
+import {
+  getGameAnimation,
+  getGameAvatarUrl,
+  getGamePlayer,
+  getGameScenes,
+  listGameAnimations,
+} from '../services/game-api';
 import { PSXRenderer } from '../rendering/PSXRenderer';
 import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
 import { PSXMaterial } from '../materials/PSXMaterial';
@@ -36,7 +42,7 @@ import {
 
 export class GameApp {
   private sceneName: string;
-  private projectId: string;
+  private gameId: string;
   private obstacles = OBSTACLES;
   private obstacleGroup: THREE.Group | null = null;
   private playerConfig = {
@@ -116,7 +122,7 @@ export class GameApp {
   private gltfLoader = new GLTFLoader();
   private fbxLoader = new FBXLoader();
   private vrms: VRM[] = [];
-  private readonly vrmUrl = '/avatars/default.vrm';
+  private readonly localAvatarName = 'default.vrm';
   private mixamoClips: Record<string, { clip: THREE.AnimationClip; rig: THREE.Object3D }> = {};
   private jsonClips: Record<string, ClipData> = {};
   private mixamoReady: Promise<void>;
@@ -178,7 +184,7 @@ export class GameApp {
     debug?: { idleTracks: number; walkTracks: number; idleName?: string; walkName?: string };
   }> = [];
   private crowdTemplate: VRM | null = null;
-  private readonly crowdVrmUrl = '/avatars/crowd.vrm';
+  private readonly crowdAvatarName = 'crowd.vrm';
   private localPlayer: THREE.Object3D;
   private localVelocityY = 0;
   private localVelocityX = 0;
@@ -268,13 +274,13 @@ export class GameApp {
     this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
   };
 
-  constructor(container: HTMLElement | null, sceneName = 'prototype', projectId = 'prototype') {
+  constructor(container: HTMLElement | null, sceneName = 'main', gameId = 'prototype') {
     if (!container) {
       throw new Error('Missing #app container');
     }
     this.container = container;
     this.sceneName = sceneName;
-    this.projectId = projectId;
+    this.gameId = gameId;
     this.container.tabIndex = 0;
     this.container.addEventListener('click', this.handleContainerClick);
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -670,6 +676,10 @@ export class GameApp {
     return group;
   }
 
+  private getAvatarUrl(name: string) {
+    return getGameAvatarUrl(this.gameId, name);
+  }
+
   private computeVrmGroundOffset(vrm: VRM) {
     vrm.scene.updateMatrixWorld(true);
     const footBones = [
@@ -698,8 +708,9 @@ export class GameApp {
   }
 
   private async loadCrowdTemplate(group: THREE.Group) {
+    const crowdUrl = this.getAvatarUrl(this.crowdAvatarName);
     this.gltfLoader.load(
-      this.crowdVrmUrl,
+      crowdUrl,
       async (gltf) => {
         const vrm = gltf.userData.vrm as VRM | undefined;
         if (!vrm) {
@@ -920,7 +931,7 @@ export class GameApp {
       '<div>Objective: ignite 3 hotspots</div>',
       '<div>WASD move, Shift sprint, Space jump, C/Ctrl crouch, F attack</div>',
       '<div>Attack: short-range knockback + damage (server-authoritative)</div>',
-      '<div>VRM: place a model at /avatars/default.vrm</div>',
+      `<div>VRM: /api/games/${this.gameId}/avatars/${this.localAvatarName}</div>`,
       '<div>Press H to toggle HUD</div>',
     ].join('');
     return hud;
@@ -1130,7 +1141,7 @@ export class GameApp {
 
   private async connect() {
     try {
-      await this.roomClient.connect({ projectId: this.projectId, sceneName: this.sceneName });
+      await this.roomClient.connect({ gameId: this.gameId, sceneName: this.sceneName });
       this.localId = this.roomClient.getSessionId();
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
@@ -1751,7 +1762,7 @@ export class GameApp {
   }
 
   private async loadVrmInto(group: THREE.Group, actorId: string) {
-    const url = this.vrmUrl;
+    const url = this.getAvatarUrl(this.localAvatarName);
     this.gltfLoader.load(
       url,
       async (gltf) => {
@@ -1824,7 +1835,7 @@ export class GameApp {
 
   private async loadPlayerConfig() {
     try {
-      const data = await getProjectPlayer<Partial<typeof this.playerConfig>>(this.projectId);
+      const data = await getGamePlayer<Partial<typeof this.playerConfig>>(this.gameId);
       this.playerConfig = { ...this.playerConfig, ...data };
       if (typeof this.playerConfig.cameraDistance === 'number') {
         this.orbitRadius = this.playerConfig.cameraDistance;
@@ -1846,7 +1857,7 @@ export class GameApp {
 
   private async loadSceneConfig() {
     try {
-      const data = await getProjectScenes(this.projectId);
+      const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
       if (scene?.obstacles) {
         // Convert editor format {x, y, z, width, height, depth} to game format
@@ -1928,11 +1939,11 @@ export class GameApp {
       return base;
     };
 
-    // Load animations from project API
+    // Load animations from game API
     let manifest: string[] | null = null;
     try {
-      console.log('Loading animations from project:', this.projectId);
-      const data = await listProjectAnimations(this.projectId);
+      console.log('Loading animations from game:', this.gameId);
+      const data = await listGameAnimations(this.gameId);
       if (Array.isArray(data.files)) {
         manifest = data.files;
         console.log('Found', data.files.length, 'animation files');
@@ -1945,12 +1956,12 @@ export class GameApp {
       (name) => name.toLowerCase().endsWith('.json') && !name.toLowerCase().startsWith('none'),
     );
 
-    console.log('Loading', jsonEntries.length, 'animations from project');
+    console.log('Loading', jsonEntries.length, 'animations from game');
 
     await Promise.all(
       jsonEntries.map(async (name) => {
         try {
-          const payload = await getProjectAnimation(this.projectId, name);
+          const payload = await getGameAnimation(this.gameId, name);
           const data = parseClipPayload(payload);
           if (!data) return;
           const key = resolveKey(name);

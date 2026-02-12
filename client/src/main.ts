@@ -9,23 +9,23 @@ if (!container) throw new Error('Missing #app');
 
 let app: { start: () => void; stop: () => void } | null = null;
 
-const startGame = (scene?: string, projectId?: string) => {
+const startGame = (scene?: string, gameId?: string) => {
   app?.stop();
-  app = new GameApp(container, scene, projectId);
+  app = new GameApp(container, scene, gameId);
   app.start();
 };
 
-const startEditor = () => {
+const startEditor = (gameId?: string) => {
   app?.stop();
-  app = new EditorApp(container);
+  app = new EditorApp(container, gameId);
   app.start();
 };
 
-const menu = createMenu((choice, scene, projectId) => {
+const menu = createMenu((choice, gameId, scene) => {
   container.innerHTML = '';
   splash.remove();
-  if (choice === 'game') startGame(scene, projectId);
-  if (choice === 'editor') startEditor();
+  if (choice === 'game') startGame(scene, gameId);
+  if (choice === 'editor') startEditor(gameId);
 });
 
 const splash = createSplash();

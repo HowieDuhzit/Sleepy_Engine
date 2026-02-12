@@ -40,7 +40,7 @@ type Client = import('colyseus').Client;
 
 type NavCell = { i: number; j: number };
 type RoomOptions = {
-  projectId?: string;
+  gameId?: string;
   sceneName?: string;
 };
 

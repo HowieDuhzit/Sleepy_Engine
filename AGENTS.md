@@ -3,14 +3,14 @@
 ## Project Structure & Module Organization
 This repo is a pnpm workspace with three packages:
 - `client/`: Three.js + Vite app (console UI, game runtime, editor).
-- `server/`: Colyseus + Express backend (project APIs, rooms, tick loop).
+- `server/`: Colyseus + Express backend (game APIs, rooms, tick loop).
 - `shared/`: Protocol/types shared by client and server.
 
 Supporting directories:
 - `assets/`: art, audio, VFX, and glTF content.
 - `tests/`: future integration/unit tests (keep deterministic, server-focused).
 - `docs/`: consolidated notes in `docs/PROJECT.md`.
-- `server/projects/`: project data (animations, scenes, avatars, configs).
+- `server/projects/`: game data (animations, scenes, avatars, configs, logic, assets).
 
 ## Build, Test, and Development Commands
 Use pnpm from the repo root:
@@ -45,12 +45,12 @@ PRs should include a concise summary, test steps (commands + expected output), a
 Use `.env` files for local config. Never commit secrets. Document required variables in `README.md` once they exist.
 
 ## Project Data & APIs
-Projects are served from `server/projects/<projectId>/` and accessed via:
-- `/api/projects` (list/create)
-- `/api/projects/:projectId/animations/*`
-- `/api/projects/:projectId/scenes`
+Games are served from `server/projects/<gameId>/` and accessed via:
+- `/api/games` (list/create)
+- `/api/games/:gameId/animations/*`
+- `/api/games/:gameId/scenes`
 
-When editing animations/scenes, ensure the project ID is set in the console menu or editor.
+When editing animations/scenes, ensure the game ID is set in the console menu or editor.
 
 ## Database
 Postgres is supported via `DATABASE_URL` (optional) and Redis via `REDIS_URL` (optional). When unset, the server runs without DB/Redis access. For local docker, `docker-compose.local.yml` provisions both.

@@ -2,7 +2,7 @@
 
 ## Overview
 Sleepy Engine is a retro-console style game engine with a built-in editor. It boots with a splash screen, then enters a console-style main menu where you can:
-- Launch games/scenes
+- Launch a game (starting at its first scene)
 - Open the integrated game editor
 - Adjust global engine settings
 
@@ -16,29 +16,31 @@ Think of it as a development console: a game engine that runs in \"console mode\
 
 ## Repo Layout
 - `client/` - Three.js + Vite app (game runtime + editor UI + PSX renderer).
-- `server/` - Colyseus + Express server, project APIs, and game rooms.
+- `server/` - Colyseus + Express server, game APIs, and game rooms.
 - `shared/` - Shared constants/types for client + server.
-- `server/projects/` - Project data (animations, scenes, avatars, configs).
+- `server/projects/` - Game data (animations, scenes, avatars, configs, logic, assets).
  - Database: Postgres (optional, for persistence and tooling).
 
 ## Runtime Flow
 1. Splash screen boot
 2. Console menu (play, editor, settings)
-3. Load a project + scene
+3. Load a game + start scene
 
-## Projects
-Projects live in `server/projects/<projectId>/`:
-- `project.json` - metadata
+## Games
+Games live in `server/projects/<gameId>/`:
+- `game.json` - metadata (`project.json` still read for backward compatibility)
 - `player.json` - player controller config
 - `animations/` - JSON clips
 - `scenes/` - `scenes.json`
 - `avatars/` - VRM models
+- `logic/` - game-specific scripts/data
+- `assets/` - game-specific non-avatar assets
 
-Project APIs:
-- `GET /api/projects` (list)
-- `POST /api/projects` (create)
-- `GET/POST /api/projects/:projectId/animations/:name`
-- `GET/POST /api/projects/:projectId/scenes`
+Game APIs:
+- `GET /api/games` (list)
+- `POST /api/games` (create)
+- `GET/POST /api/games/:gameId/animations/:name`
+- `GET/POST /api/games/:gameId/scenes`
 
 ## Database
 Postgres is the recommended primary database for persistence and tooling. Configure it with:
@@ -47,7 +49,7 @@ Postgres is the recommended primary database for persistence and tooling. Config
 Redis is optional for fast ephemeral state or future multi-node coordination:
 - `REDIS_URL=redis://host:6379`
 
-When unset, the server runs without DB/Redis access. When enabled, Redis is used as a short-lived cache for project reads (animations/scenes/player) and also powers Colyseus presence/driver for multi-node readiness.
+When unset, the server runs without DB/Redis access. When enabled, Redis is used as a short-lived cache for game reads (animations/scenes/player) and also powers Colyseus presence/driver for multi-node readiness.
 
 ## Key Commands (pnpm)
 - `pnpm install`
@@ -67,7 +69,7 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
 - Game server listens on **port 2567** internally.
 - Required persistent paths:
   - `/app/data`
-  - `/app/projects` (project data)
+  - `/app/projects` (game data)
 
 **Coolify (Dockerfile build):**
 - Container port: **80**
@@ -79,4 +81,4 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
 PSX-style rendering is integrated in both game and editor. Presets, post-processing, and color adjustments are managed via the shared settings system.
 
 ## Editor Tools
-The editor includes animation, player, and scene editing with project-scoped APIs. Scene definitions are stored in `server/projects/<projectId>/scenes/scenes.json` and are loaded through the same backend used by the game runtime.
+The editor includes animation, player, and scene editing with game-scoped APIs. Scene definitions are stored in `server/projects/<gameId>/scenes/scenes.json` and are loaded through the same backend used by the game runtime.

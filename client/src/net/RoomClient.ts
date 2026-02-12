@@ -10,7 +10,7 @@ export class RoomClient {
     this.client = new Client(endpoint);
   }
 
-  async connect(options?: { projectId?: string; sceneName?: string }) {
+  async connect(options?: { gameId?: string; sceneName?: string }) {
     this.room = await this.client.joinOrCreate('riot_room', options);
     this.sessionId = this.room.sessionId;
   }

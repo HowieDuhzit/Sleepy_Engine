@@ -12,7 +12,10 @@ import { RedisPresence } from '@colyseus/redis-presence';
 import { RedisDriver } from '@colyseus/redis-driver';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
-const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
+const gamesDir =
+  process.env.GAMES_DIR ??
+  process.env.PROJECTS_DIR ??
+  path.join(process.cwd(), 'server', 'projects');
 const redisUrl = process.env.REDIS_URL;
 const { Server } = colyseusPkg as typeof import('colyseus');
 const gameServer = redisUrl
@@ -61,7 +64,7 @@ const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
   res.status(401).json({ error: 'unauthorized' });
 };
 
-const projectCreateSchema = z.object({
+const gameCreateSchema = z.object({
   name: z.string().trim().min(1).max(64),
   description: z.string().max(1024).optional().default(''),
 });
@@ -109,81 +112,97 @@ const safeName = (name: string) => {
   return cleaned.toLowerCase().endsWith('.json') ? cleaned : `${cleaned}.json`;
 };
 
-// ============================================================================
-// PROJECT MANAGEMENT API
-// All assets are managed per-project via /api/projects/:projectId/*
-// ============================================================================
-
-const ensureProjectDir = async (projectId: string) => {
-  await fs.mkdir(path.join(projectsDir, projectId), { recursive: true });
-  await fs.mkdir(path.join(projectsDir, projectId, 'animations'), { recursive: true });
-  await fs.mkdir(path.join(projectsDir, projectId, 'scenes'), { recursive: true });
-  await fs.mkdir(path.join(projectsDir, projectId, 'assets'), { recursive: true });
+const safeAssetName = (name: string) => {
+  const base = path.basename(name);
+  return base.replace(/[^a-z0-9._-]/gi, '_');
 };
 
-const safeProjectId = (id: string) => {
+// ============================================================================
+// GAME MANAGEMENT API
+// All assets are managed per-game via /api/games/:gameId/*
+// ============================================================================
+
+const ensureGameDir = async (gameId: string) => {
+  await fs.mkdir(path.join(gamesDir, gameId), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'animations'), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'scenes'), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'avatars'), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'assets'), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'logic'), { recursive: true });
+};
+
+const safeGameId = (id: string) => {
   return id.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
 };
 
 const cacheKey = (...parts: string[]) => `sleepy:${parts.join(':')}`;
-
-// List all projects
-app.get('/api/projects', async (_req: Request, res: Response) => {
+const readGameMeta = async (gameId: string) => {
+  const gameMetaPath = path.join(gamesDir, gameId, 'game.json');
+  const legacyMetaPath = path.join(gamesDir, gameId, 'project.json');
   try {
-    await fs.mkdir(projectsDir, { recursive: true });
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    const projects = [];
+    const raw = await fs.readFile(gameMetaPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    const raw = await fs.readFile(legacyMetaPath, 'utf8');
+    return JSON.parse(raw);
+  }
+};
+
+// List all games
+app.get('/api/games', async (_req: Request, res: Response) => {
+  try {
+    await fs.mkdir(gamesDir, { recursive: true });
+    const entries = await fs.readdir(gamesDir, { withFileTypes: true });
+    const games = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const projectId = entry.name;
-      const metaPath = path.join(projectsDir, projectId, 'project.json');
+      const gameId = entry.name;
 
       try {
-        const metaRaw = await fs.readFile(metaPath, 'utf8');
-        const meta = JSON.parse(metaRaw);
-        projects.push({ id: projectId, ...meta });
+        const meta = await readGameMeta(gameId);
+        games.push({ id: gameId, ...meta });
       } catch {
         // No metadata, create default
-        projects.push({
-          id: projectId,
-          name: projectId,
+        games.push({
+          id: gameId,
+          name: gameId,
           description: '',
           createdAt: new Date().toISOString(),
         });
       }
     }
 
-    res.json({ projects });
+    res.json({ games });
   } catch (err) {
-    console.error('List projects failed', err);
+    console.error('List games failed', err);
     res.status(500).json({ error: 'failed_to_list', detail: String(err) });
   }
 });
 
-// Create new project
-app.post('/api/projects', requireAdmin, async (req: Request, res: Response) => {
+// Create new game
+app.post('/api/games', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const parsed = projectCreateSchema.safeParse(req.body);
+    const parsed = gameCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
       return;
     }
     const { name, description } = parsed.data;
 
-    const projectId = safeProjectId(name);
-    const projectPath = path.join(projectsDir, projectId);
+    const gameId = safeGameId(name);
+    const gamePath = path.join(gamesDir, gameId);
 
     // Check if exists
     try {
-      await fs.access(projectPath);
-      res.status(409).json({ error: 'project_exists' });
+      await fs.access(gamePath);
+      res.status(409).json({ error: 'game_exists' });
       return;
     } catch {
       // Doesn't exist, good
     }
 
-    await ensureProjectDir(projectId);
+    await ensureGameDir(gameId);
 
     const meta = {
       name,
@@ -193,47 +212,45 @@ app.post('/api/projects', requireAdmin, async (req: Request, res: Response) => {
     };
 
     await fs.writeFile(
-      path.join(projectPath, 'project.json'),
+      path.join(gamePath, 'game.json'),
       JSON.stringify(meta, null, 2)
     );
 
-    res.json({ ok: true, id: projectId, ...meta });
+    res.json({ ok: true, id: gameId, ...meta });
   } catch (err) {
-    console.error('Create project failed', err);
-    res.status(500).json({ error: 'failed_to_create', detail: String(err) });
+    console.error('Create game failed', err);
+    res.status(500).json({ error: 'failed_to_create_game', detail: String(err) });
   }
 });
 
-// Get project details
-app.get('/api/projects/:projectId', async (req: Request, res: Response) => {
+// Get game details
+app.get('/api/games/:gameId', async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
       return;
     }
 
-    const metaPath = path.join(projectsDir, projectId, 'project.json');
-    const metaRaw = await fs.readFile(metaPath, 'utf8');
-    const meta = JSON.parse(metaRaw);
+    const meta = await readGameMeta(gameId);
 
-    res.json({ id: projectId, ...meta });
+    res.json({ id: gameId, ...meta });
   } catch (err) {
     res.status(404).json({ error: 'not_found', detail: String(err) });
   }
 });
 
-// List project animations
-app.get('/api/projects/:projectId/animations', async (req: Request, res: Response) => {
+// List game animations
+app.get('/api/games/:gameId/animations', async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
       return;
     }
 
-    await ensureProjectDir(projectId);
-    const listKey = cacheKey('project', projectId, 'animations', 'list');
+    await ensureGameDir(gameId);
+    const listKey = cacheKey('game', gameId, 'animations', 'list');
     const cached = await cacheGet(listKey);
     if (cached) {
       res.setHeader('Content-Type', 'application/json');
@@ -241,7 +258,7 @@ app.get('/api/projects/:projectId/animations', async (req: Request, res: Respons
       return;
     }
 
-    const animDir = path.join(projectsDir, projectId, 'animations');
+    const animDir = path.join(gamesDir, gameId, 'animations');
     const entries = await fs.readdir(animDir);
     const files = entries.filter((file) => file.toLowerCase().endsWith('.json'));
 
@@ -249,30 +266,30 @@ app.get('/api/projects/:projectId/animations', async (req: Request, res: Respons
     await cacheSet(listKey, payload);
     res.json({ files });
   } catch (err) {
-    console.error('List project animations failed', err);
+    console.error('List game animations failed', err);
     res.status(500).json({ error: 'failed_to_list', detail: String(err) });
   }
 });
 
-// Get project animation
-app.get('/api/projects/:projectId/animations/:name', async (req: Request, res: Response) => {
+// Get game animation
+app.get('/api/games/:gameId/animations/:name', async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
+    const gameId = safeGameId(req.params.gameId ?? '');
     const rawName = req.params.name ?? '';
-    if (!projectId || !rawName) {
+    if (!gameId || !rawName) {
       res.status(400).json({ error: 'missing_params' });
       return;
     }
 
     const filename = safeName(rawName);
-    const fileKey = cacheKey('project', projectId, 'animations', filename);
+    const fileKey = cacheKey('game', gameId, 'animations', filename);
     const cached = await cacheGet(fileKey);
     if (cached) {
       res.setHeader('Content-Type', 'application/json');
       res.send(cached);
       return;
     }
-    const filePath = path.join(projectsDir, projectId, 'animations', filename);
+    const filePath = path.join(gamesDir, gameId, 'animations', filename);
     const raw = await fs.readFile(filePath, 'utf8');
     await cacheSet(fileKey, raw);
     res.setHeader('Content-Type', 'application/json');
@@ -282,24 +299,48 @@ app.get('/api/projects/:projectId/animations/:name', async (req: Request, res: R
   }
 });
 
-// Get project player config
-app.get('/api/projects/:projectId/player', async (req: Request, res: Response) => {
+// Get game avatar asset
+app.get('/api/games/:gameId/avatars/:name', async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    const rawName = req.params.name ?? '';
+    if (!gameId || !rawName) {
+      res.status(400).json({ error: 'missing_params' });
       return;
     }
 
-    await ensureProjectDir(projectId);
-    const fileKey = cacheKey('project', projectId, 'player');
+    const filename = safeAssetName(rawName);
+    const filePath = path.join(gamesDir, gameId, 'avatars', filename);
+    const buffer = await fs.readFile(filePath);
+    if (filename.toLowerCase().endsWith('.vrm') || filename.toLowerCase().endsWith('.glb')) {
+      res.setHeader('Content-Type', 'model/gltf-binary');
+    } else {
+      res.setHeader('Content-Type', 'application/octet-stream');
+    }
+    res.send(buffer);
+  } catch (err) {
+    res.status(404).json({ error: 'not_found', detail: String(err) });
+  }
+});
+
+// Get game player config
+app.get('/api/games/:gameId/player', async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
+      return;
+    }
+
+    await ensureGameDir(gameId);
+    const fileKey = cacheKey('game', gameId, 'player');
     const cached = await cacheGet(fileKey);
     if (cached) {
       res.setHeader('Content-Type', 'application/json');
       res.send(cached);
       return;
     }
-    const filePath = path.join(projectsDir, projectId, 'player.json');
+    const filePath = path.join(gamesDir, gameId, 'player.json');
     const raw = await fs.readFile(filePath, 'utf8');
     await cacheSet(fileKey, raw);
     res.setHeader('Content-Type', 'application/json');
@@ -309,12 +350,12 @@ app.get('/api/projects/:projectId/player', async (req: Request, res: Response) =
   }
 });
 
-// Save project player config
-app.post('/api/projects/:projectId/player', requireAdmin, async (req: Request, res: Response) => {
+// Save game player config
+app.post('/api/games/:gameId/player', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
       return;
     }
 
@@ -324,32 +365,32 @@ app.post('/api/projects/:projectId/player', requireAdmin, async (req: Request, r
       return;
     }
 
-    await ensureProjectDir(projectId);
-    const filePath = path.join(projectsDir, projectId, 'player.json');
+    await ensureGameDir(gameId);
+    const filePath = path.join(gamesDir, gameId, 'player.json');
     const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
-    await cacheSet(cacheKey('project', projectId, 'player'), payload);
+    await cacheSet(cacheKey('game', gameId, 'player'), payload);
     res.json({ ok: true, file: 'player.json' });
   } catch (err) {
     res.status(500).json({ error: 'failed_to_save', detail: String(err) });
   }
 });
 
-// Legacy player config endpoint (prototype project)
+// Legacy player config endpoint (prototype game)
 app.get('/api/player-config', async (_req: Request, res: Response) => {
-  res.redirect('/api/projects/prototype/player');
+  res.redirect('/api/games/prototype/player');
 });
 
 app.post('/api/player-config', requireAdmin, async (req: Request, res: Response) => {
-  res.redirect(307, '/api/projects/prototype/player');
+  res.redirect(307, '/api/games/prototype/player');
 });
 
-// Save project animation
-app.post('/api/projects/:projectId/animations/:name', requireAdmin, async (req: Request, res: Response) => {
+// Save game animation
+app.post('/api/games/:gameId/animations/:name', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
+    const gameId = safeGameId(req.params.gameId ?? '');
     const rawName = req.params.name ?? '';
-    if (!projectId || !rawName) {
+    if (!gameId || !rawName) {
       res.status(400).json({ error: 'missing_params' });
       return;
     }
@@ -360,13 +401,13 @@ app.post('/api/projects/:projectId/animations/:name', requireAdmin, async (req: 
       return;
     }
 
-    await ensureProjectDir(projectId);
+    await ensureGameDir(gameId);
     const filename = safeName(rawName);
-    const filePath = path.join(projectsDir, projectId, 'animations', filename);
+    const filePath = path.join(gamesDir, gameId, 'animations', filename);
     const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
-    await cacheSet(cacheKey('project', projectId, 'animations', filename), payload);
-    await cacheDel(cacheKey('project', projectId, 'animations', 'list'));
+    await cacheSet(cacheKey('game', gameId, 'animations', filename), payload);
+    await cacheDel(cacheKey('game', gameId, 'animations', 'list'));
 
     res.json({ ok: true, file: filename });
   } catch (err) {
@@ -374,24 +415,24 @@ app.post('/api/projects/:projectId/animations/:name', requireAdmin, async (req: 
   }
 });
 
-// Get project scenes
-app.get('/api/projects/:projectId/scenes', async (req: Request, res: Response) => {
+// Get game scenes
+app.get('/api/games/:gameId/scenes', async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
       return;
     }
 
-    await ensureProjectDir(projectId);
-    const fileKey = cacheKey('project', projectId, 'scenes');
+    await ensureGameDir(gameId);
+    const fileKey = cacheKey('game', gameId, 'scenes');
     const cached = await cacheGet(fileKey);
     if (cached) {
       res.setHeader('Content-Type', 'application/json');
       res.send(cached);
       return;
     }
-    const filePath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
+    const filePath = path.join(gamesDir, gameId, 'scenes', 'scenes.json');
 
     try {
       const raw = await fs.readFile(filePath, 'utf8');
@@ -403,12 +444,8 @@ app.get('/api/projects/:projectId/scenes', async (req: Request, res: Response) =
       res.json({
         scenes: [
           {
-            name: 'prototype',
-            obstacles: [
-              { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
-              { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-              { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-            ],
+            name: 'main',
+            obstacles: [],
           },
         ],
       });
@@ -418,12 +455,12 @@ app.get('/api/projects/:projectId/scenes', async (req: Request, res: Response) =
   }
 });
 
-// Save project scenes
-app.post('/api/projects/:projectId/scenes', requireAdmin, async (req: Request, res: Response) => {
+// Save game scenes
+app.post('/api/games/:gameId/scenes', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const projectId = safeProjectId(req.params.projectId ?? '');
-    if (!projectId) {
-      res.status(400).json({ error: 'missing_project_id' });
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
       return;
     }
 
@@ -433,11 +470,11 @@ app.post('/api/projects/:projectId/scenes', requireAdmin, async (req: Request, r
       return;
     }
 
-    await ensureProjectDir(projectId);
-    const filePath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
+    await ensureGameDir(gameId);
+    const filePath = path.join(gamesDir, gameId, 'scenes', 'scenes.json');
     const payload = JSON.stringify(parsed.data, null, 2);
     await fs.writeFile(filePath, payload);
-    await cacheSet(cacheKey('project', projectId, 'scenes'), payload);
+    await cacheSet(cacheKey('game', gameId, 'scenes'), payload);
 
     res.json({ ok: true, file: 'scenes.json' });
   } catch (err) {
@@ -445,16 +482,23 @@ app.post('/api/projects/:projectId/scenes', requireAdmin, async (req: Request, r
   }
 });
 
-// Ensure projects directory exists on startup
-const ensureProjectsDir = async () => {
-  await fs.mkdir(projectsDir, { recursive: true });
+// Ensure games directory exists on startup
+const ensureGamesDir = async () => {
+  await fs.mkdir(gamesDir, { recursive: true });
 };
+
+// Backward compatibility: legacy projects routes redirect to games routes.
+app.use('/api/projects', (req: Request, res: Response) => {
+  const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const pathname = req.url.split('?')[0] ?? '';
+  res.redirect(307, `/api/games${pathname}${query}`);
+});
 
 const httpServer = createServer(app);
 gameServer.attach({ server: httpServer });
 
-// Ensure projects directory exists before starting server
-ensureProjectsDir().then(() => {
+// Ensure games directory exists before starting server
+ensureGamesDir().then(() => {
   httpServer.listen(port);
   console.log(`Game server listening on ws://localhost:${port}`);
   if (dbEnabled) {

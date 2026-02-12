@@ -62,13 +62,13 @@ body,
   color: rgba(255, 255, 255, 0.85);
 }
 
-.editor-project-selector {
+.editor-game-selector {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.editor-project-selector select {
+.editor-game-selector select {
   padding: 8px 12px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -80,17 +80,17 @@ body,
   cursor: pointer;
 }
 
-.editor-project-selector select:hover {
+.editor-game-selector select:hover {
   border-color: rgba(90, 136, 255, 0.4);
 }
 
-.editor-project-selector select:focus {
+.editor-game-selector select:focus {
   outline: none;
   border-color: rgba(90, 136, 255, 0.6);
   box-shadow: 0 0 0 3px rgba(90, 136, 255, 0.1);
 }
 
-.editor-project-selector button {
+.editor-game-selector button {
   padding: 8px 14px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -104,12 +104,12 @@ body,
   transition: all 0.15s ease;
 }
 
-.editor-project-selector button:hover {
+.editor-game-selector button:hover {
   background: rgba(90, 136, 255, 0.25);
   border-color: rgba(90, 136, 255, 0.4);
 }
 
-.editor-project-selector button:active {
+.editor-game-selector button:active {
   transform: scale(0.97);
 }
 

@@ -14,9 +14,12 @@ type SceneObstacle = {
   size?: { x: number; y: number; z: number };
 };
 
-const defaultProjectId = 'prototype';
-const defaultSceneName = 'prototype';
-const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
+const defaultGameId = 'prototype';
+const defaultSceneName = 'main';
+const gamesDir =
+  process.env.GAMES_DIR ??
+  process.env.PROJECTS_DIR ??
+  path.join(process.cwd(), 'server', 'projects');
 
 const safeSegment = (value: string) => value.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
 const asNumber = (value: unknown, fallback: number) =>
@@ -54,10 +57,10 @@ const toObstacle = (input: SceneObstacle, index: number): Obstacle => {
   };
 };
 
-export const loadSceneObstacles = async (options?: { projectId?: string; sceneName?: string }) => {
-  const projectId = safeSegment(options?.projectId ?? defaultProjectId) || defaultProjectId;
+export const loadSceneObstacles = async (options?: { gameId?: string; sceneName?: string }) => {
+  const gameId = safeSegment(options?.gameId ?? defaultGameId) || defaultGameId;
   const sceneName = String(options?.sceneName ?? defaultSceneName);
-  const scenesPath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
+  const scenesPath = path.join(gamesDir, gameId, 'scenes', 'scenes.json');
 
   try {
     const raw = await fs.readFile(scenesPath, 'utf8');

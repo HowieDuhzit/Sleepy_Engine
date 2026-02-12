@@ -1,91 +1,72 @@
 import { PSXSettingsPanel } from './PSXSettingsPanel';
-import { getProjectScenes, listProjects } from '../services/project-api';
+import { getGameScenes, listGames } from '../services/game-api';
 
-type SceneOption = { name: string };
-
-export function createMenu(onSelect: (choice: 'game' | 'editor', scene?: string, projectId?: string) => void) {
+export function createMenu(onSelect: (choice: 'game' | 'editor', gameId?: string, scene?: string) => void) {
   const menu = document.createElement('div');
   menu.className = 'menu';
   menu.innerHTML = [
     '<div class="menu-card">',
     '<h1>Sleepy Engine</h1>',
-    '<p>Choose a game project</p>',
-    '<label class="menu-field"><span>Project</span><select data-project></select></label>',
-    '<label class="menu-field"><span>Scene</span><select data-scene></select></label>',
-    '<button data-game>Play Scene</button>',
+    '<p>Choose a game</p>',
+    '<label class="menu-field"><span>Game</span><select data-game-id></select></label>',
+    '<button data-play>Play</button>',
     '<button data-editor>Editor</button>',
     '<button data-settings>Settings</button>',
     '</div>',
     '<div class="menu-settings" style="display: none;"></div>',
   ].join('');
 
-  const gameBtn = menu.querySelector('[data-game]') as HTMLButtonElement;
+  const playBtn = menu.querySelector('[data-play]') as HTMLButtonElement;
   const editorBtn = menu.querySelector('[data-editor]') as HTMLButtonElement;
   const settingsBtn = menu.querySelector('[data-settings]') as HTMLButtonElement;
-  const projectSelect = menu.querySelector('[data-project]') as HTMLSelectElement;
-  const sceneSelect = menu.querySelector('[data-scene]') as HTMLSelectElement;
+  const gameSelect = menu.querySelector('[data-game-id]') as HTMLSelectElement;
   const settingsContainer = menu.querySelector('.menu-settings') as HTMLElement;
 
-  let currentProjectId: string | null = null;
+  let currentGameId: string | null = null;
+  let currentStartScene = 'main';
 
-  const loadProjects = async () => {
+  const loadGames = async () => {
     try {
-      const projects = await listProjects();
-      projectSelect.innerHTML = '';
-      for (const project of projects) {
+      const games = await listGames();
+      gameSelect.innerHTML = '';
+      for (const game of games) {
         const opt = document.createElement('option');
-        opt.value = project.id;
-        opt.textContent = project.name;
-        projectSelect.appendChild(opt);
+        opt.value = game.id;
+        opt.textContent = game.name;
+        gameSelect.appendChild(opt);
       }
       // Auto-select prototype if available
-      if (projects.find((p) => p.id === 'prototype')) {
-        projectSelect.value = 'prototype';
-        currentProjectId = 'prototype';
-      } else if (projects.length > 0) {
-        currentProjectId = projects[0]?.id ?? null;
+      if (games.find((g) => g.id === 'prototype')) {
+        gameSelect.value = 'prototype';
+        currentGameId = 'prototype';
+      } else if (games.length > 0) {
+        currentGameId = games[0]?.id ?? null;
       }
-      await loadScenes();
+      await loadStartScene();
     } catch (err) {
-      console.error('Failed to load projects:', err);
-      const opt = document.createElement('option');
-      opt.value = 'prototype';
-      opt.textContent = 'prototype';
-      projectSelect.appendChild(opt);
-      currentProjectId = 'prototype';
+      console.error('Failed to load games:', err);
+      currentGameId = null;
+      currentStartScene = 'main';
     }
   };
 
-  const loadScenes = async () => {
-    if (!currentProjectId) {
-      sceneSelect.innerHTML = '<option value="">-- Select project first --</option>';
-      return;
-    }
+  const loadStartScene = async () => {
+    if (!currentGameId) return;
     try {
-      const data = await getProjectScenes(currentProjectId);
-      const scenes = data.scenes?.length ? data.scenes : [{ name: 'prototype' }];
-      sceneSelect.innerHTML = '';
-      for (const scene of scenes) {
-        const opt = document.createElement('option');
-        opt.value = scene.name;
-        opt.textContent = scene.name;
-        sceneSelect.appendChild(opt);
-      }
+      const data = await getGameScenes(currentGameId);
+      currentStartScene = data.scenes?.[0]?.name ?? 'main';
     } catch (err) {
-      console.error('Failed to load scenes:', err);
-      const opt = document.createElement('option');
-      opt.value = 'prototype';
-      opt.textContent = 'prototype';
-      sceneSelect.appendChild(opt);
+      console.error('Failed to load game scenes:', err);
+      currentStartScene = 'main';
     }
   };
 
-  projectSelect.addEventListener('change', () => {
-    currentProjectId = projectSelect.value;
-    void loadScenes();
+  gameSelect.addEventListener('change', () => {
+    currentGameId = gameSelect.value;
+    void loadStartScene();
   });
 
-  void loadProjects();
+  void loadGames();
 
   // Create PSX settings panel
   const psxPanel = new PSXSettingsPanel();
@@ -94,8 +75,14 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', scene?: string,
   // Menu navigation
   const menuCard = menu.querySelector('.menu-card') as HTMLElement;
 
-  gameBtn.addEventListener('click', () => onSelect('game', sceneSelect.value || 'prototype', currentProjectId || 'prototype'));
-  editorBtn.addEventListener('click', () => onSelect('editor'));
+  playBtn.addEventListener('click', () => {
+    if (!currentGameId) return;
+    onSelect('game', currentGameId, currentStartScene);
+  });
+  editorBtn.addEventListener('click', () => {
+    if (!currentGameId) return;
+    onSelect('editor', currentGameId, currentStartScene);
+  });
 
   settingsBtn.addEventListener('click', () => {
     menuCard.style.display = 'none';

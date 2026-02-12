@@ -10,7 +10,15 @@ import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
 import { PSXMaterial } from '../materials/PSXMaterial';
 import { psxSettings } from '../settings/PSXSettings';
 import { retargetMixamoClip } from '../game/retarget';
-import { createProject, getProjectAnimation, getProjectScenes, listProjects, saveProjectAnimation, saveProjectScenes } from '../services/project-api';
+import {
+  createGame,
+  getGameAnimation,
+  getGameAvatarUrl,
+  getGameScenes,
+  listGames,
+  saveGameAnimation,
+  saveGameScenes,
+} from '../services/game-api';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
 import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
 
@@ -140,8 +148,9 @@ export class EditorApp {
   private ragdollHandleTemp = new THREE.Vector3();
   private ragdollHandleTemp2 = new THREE.Vector3();
 
-  // Project management
-  private currentProjectId: string | null = null;
+  // Game management
+  private currentGameId: string | null = null;
+  private initialGameId: string | null = null;
   private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
   private refreshClipsFunction: (() => Promise<void>) | null = null;
   private refreshScenesFunction: (() => Promise<void>) | null = null;
@@ -444,9 +453,10 @@ export class EditorApp {
     >,
   };
 
-  constructor(container: HTMLElement | null) {
+  constructor(container: HTMLElement | null, initialGameId: string | null = null) {
     if (!container) throw new Error('Missing #app container');
     this.container = container;
+    this.initialGameId = initialGameId;
     this.container.tabIndex = 0;
 
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -554,7 +564,9 @@ export class EditorApp {
       });
       this.viewportObserver.observe(this.viewport);
     }
-    this.loadVrm();
+    this.createCharacterScene();
+    this.createLevelScene();
+    this.createSettingsScene();
   }
 
   private handlePSXSettingsChange = () => {
@@ -705,33 +717,34 @@ export class EditorApp {
     }
   }
 
-  // Get API path for animations (project-scoped only)
+  // Get API path for animations (game-scoped only)
   private getAnimationsPath(): string | null {
-    if (this.currentProjectId) {
-      return `/api/projects/${this.currentProjectId}/animations`;
+    if (this.currentGameId) {
+      return `/api/games/${this.currentGameId}/animations`;
     }
-    return null; // No project selected
+    return null; // No game selected
   }
 
-  // Get API path for scenes (project-scoped only)
+  // Get API path for scenes (game-scoped only)
   private getScenesPath(): string | null {
-    if (this.currentProjectId) {
-      return `/api/projects/${this.currentProjectId}/scenes`;
+    if (this.currentGameId) {
+      return `/api/games/${this.currentGameId}/scenes`;
     }
-    return null; // No project selected
+    return null; // No game selected
   }
 
-  // Load assets for current project (triggers refresh of animations and scenes)
-  private async loadProjectAssets(retryCount = 0) {
-    console.log('Loading assets for project:', this.currentProjectId, `(attempt ${retryCount + 1})`);
+  // Load assets for current game (triggers refresh of animations and scenes)
+  private async loadGameAssets(retryCount = 0) {
+    console.log('Loading assets for game:', this.currentGameId, `(attempt ${retryCount + 1})`);
     console.log('refreshClipsFunction available:', !!this.refreshClipsFunction);
     console.log('refreshScenesFunction available:', !!this.refreshScenesFunction);
+    this.loadVrm();
 
     // If functions aren't ready yet, retry after a delay (max 5 retries)
     if ((!this.refreshClipsFunction || !this.refreshScenesFunction) && retryCount < 5) {
       console.log('Refresh functions not ready, retrying in 200ms...');
       setTimeout(() => {
-        this.loadProjectAssets(retryCount + 1);
+        this.loadGameAssets(retryCount + 1);
       }, 200);
       return;
     }
@@ -817,13 +830,13 @@ export class EditorApp {
     hud.innerHTML = [
       '<div class="editor-header">',
       '<div class="editor-title">Sleepy Engine Editor</div>',
-      '<div class="editor-project-selector">',
+      '<div class="editor-game-selector">',
       '<label style="display: flex; align-items: center; gap: 8px;">',
-      '<span style="font-weight: 500;">Game Project:</span>',
-      '<select data-project-select style="padding: 5px 10px; border-radius: 4px; border: 1px solid #444; background: #2a2a2a; color: #fff; min-width: 200px;">',
-      '<option value="">-- Select Project --</option>',
+      '<span style="font-weight: 500;">Game:</span>',
+      '<select data-game-select style="padding: 5px 10px; border-radius: 4px; border: 1px solid #444; background: #2a2a2a; color: #fff; min-width: 200px;">',
+      '<option value="">-- Select Game --</option>',
       '</select>',
-      '<button data-new-project style="padding: 5px 12px; border-radius: 4px; border: 1px solid #444; background: #3a3a3a; color: #fff; cursor: pointer;">New Project</button>',
+      '<button data-new-game style="padding: 5px 12px; border-radius: 4px; border: 1px solid #444; background: #3a3a3a; color: #fff; cursor: pointer;">New Game</button>',
       '</label>',
       '</div>',
       '<div class="editor-tabs">',
@@ -891,7 +904,7 @@ export class EditorApp {
       '<div class="panel">',
       '<div class="panel-title">Scene</div>',
       '<label class="field"><span>Scenes</span><select data-scene-list></select></label>',
-      '<label class="field"><span>Name</span><input data-scene-name type="text" placeholder="prototype" /></label>',
+      '<label class="field"><span>Name</span><input data-scene-name type="text" placeholder="main" /></label>',
       '<div class="panel-actions">',
       '<button data-scene-new>New</button>',
       '<button data-scene-load>Load</button>',
@@ -1007,7 +1020,7 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Notes</div>',
-      '<div class="clip-status">Edit values above, then Save to write the project player.json.</div>',
+      '<div class="clip-status">Edit values above, then Save to write the game player.json.</div>',
       '</div>',
       '</div>',
       '</div>',
@@ -1019,7 +1032,7 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Tips</div>',
-      '<div class="clip-status">Edit obstacles in the Obstacles JSON panel above. Changes are automatically synced to Scene JSON. Click Save to write to /api/scenes.</div>',
+      '<div class="clip-status">Edit obstacles in the Obstacles JSON panel above. Changes are automatically synced to Scene JSON. Click Save to write to the selected game.</div>',
       '</div>',
       '</div>',
       '</div>',
@@ -1064,50 +1077,59 @@ export class EditorApp {
     ].join('');
 
     // ============================================================================
-    // PROJECT MANAGEMENT
+    // GAME MANAGEMENT
     // ============================================================================
 
-    const projectSelect = hud.querySelector('[data-project-select]') as HTMLSelectElement;
-    const newProjectBtn = hud.querySelector('[data-new-project]') as HTMLButtonElement;
+    const gameSelect = hud.querySelector('[data-game-select]') as HTMLSelectElement;
+    const newGameBtn = hud.querySelector('[data-new-game]') as HTMLButtonElement;
 
-    // Fetch and populate projects list
-    const loadProjectsList = async () => {
+    // Fetch and populate games list
+    const loadGamesList = async () => {
       try {
-        const projects = await listProjects();
-        projectSelect.innerHTML = '<option value="">-- Select Project --</option>';
-        for (const project of projects) {
+        const games = await listGames();
+        gameSelect.innerHTML = '<option value="">-- Select Game --</option>';
+        for (const game of games) {
           const option = document.createElement('option');
-          option.value = project.id;
-          option.textContent = project.name;
-          projectSelect.appendChild(option);
+          option.value = game.id;
+          option.textContent = game.name;
+          gameSelect.appendChild(option);
         }
 
-        // Load saved project from localStorage, or default to prototype
-        const savedProjectId = localStorage.getItem('editorProjectId');
-        const prototypeProject = projects.find((p) => p.id === 'prototype');
+        // Load saved game from localStorage, or default to prototype
+        const savedGameId = localStorage.getItem('editorGameId');
+        const prototypeGame = games.find((p) => p.id === 'prototype');
+        const initialGameExists = this.initialGameId && games.find((p) => p.id === this.initialGameId);
 
-        if (savedProjectId && projects.find((p) => p.id === savedProjectId)) {
-          // Saved project exists, use it
-          this.currentProjectId = savedProjectId;
-          projectSelect.value = savedProjectId;
-        } else if (prototypeProject) {
-          // No saved project, default to prototype
-          this.currentProjectId = 'prototype';
-          projectSelect.value = 'prototype';
-          localStorage.setItem('editorProjectId', 'prototype');
-          console.log('Defaulting to prototype project');
+        if (initialGameExists && this.initialGameId) {
+          // Main menu launch selection takes precedence
+          this.currentGameId = this.initialGameId;
+          gameSelect.value = this.initialGameId;
+          localStorage.setItem('editorGameId', this.initialGameId);
+        } else if (savedGameId && games.find((p) => p.id === savedGameId)) {
+          // Saved game exists, use it
+          this.currentGameId = savedGameId;
+          gameSelect.value = savedGameId;
+        } else if (prototypeGame) {
+          // No saved game, fall back to prototype if it exists
+          this.currentGameId = 'prototype';
+          gameSelect.value = 'prototype';
+          localStorage.setItem('editorGameId', 'prototype');
+        } else if (games[0]) {
+          this.currentGameId = games[0].id;
+          gameSelect.value = games[0].id;
+          localStorage.setItem('editorGameId', games[0].id);
         }
 
         // Schedule asset loading (will retry if functions not ready yet)
-        if (this.currentProjectId) {
+        if (this.currentGameId) {
           // First verify API endpoints are working
           setTimeout(async () => {
             console.log('=== Editor Initialization Debug ===');
-            console.log('Selected project:', this.currentProjectId);
+            console.log('Selected game:', this.currentGameId);
 
             // Test animations endpoint
             try {
-              const animPath = `/api/projects/${this.currentProjectId}/animations`;
+              const animPath = `/api/games/${this.currentGameId}/animations`;
               console.log('Testing:', animPath);
               const res = await fetch(animPath);
               if (res.ok) {
@@ -1122,7 +1144,7 @@ export class EditorApp {
 
             // Test scenes endpoint
             try {
-              const scenesPath = `/api/projects/${this.currentProjectId}/scenes`;
+              const scenesPath = `/api/games/${this.currentGameId}/scenes`;
               console.log('Testing:', scenesPath);
               const res = await fetch(scenesPath);
               if (res.ok) {
@@ -1136,56 +1158,56 @@ export class EditorApp {
             }
 
             console.log('Starting asset loading...');
-            this.loadProjectAssets(0);
+            this.loadGameAssets(0);
           }, 100);
         }
       } catch (err) {
-        console.error('Error loading projects list:', err);
+        console.error('Error loading games list:', err);
       }
     };
 
-    // Project selection handler
-    projectSelect.addEventListener('change', async () => {
-      const projectId = projectSelect.value;
-      if (!projectId) {
-        this.currentProjectId = null;
-        localStorage.removeItem('editorProjectId');
+    // Game selection handler
+    gameSelect.addEventListener('change', async () => {
+      const gameId = gameSelect.value;
+      if (!gameId) {
+        this.currentGameId = null;
+        localStorage.removeItem('editorGameId');
         return;
       }
-      this.currentProjectId = projectId;
-      localStorage.setItem('editorProjectId', projectId);
-      // Reload assets for this project
-      await this.loadProjectAssets();
+      this.currentGameId = gameId;
+      localStorage.setItem('editorGameId', gameId);
+      // Reload assets for this game
+      await this.loadGameAssets();
     });
 
-    // New project handler
-    newProjectBtn.addEventListener('click', async () => {
-      const name = prompt('Enter project name:');
+    // New game handler
+    newGameBtn.addEventListener('click', async () => {
+      const name = prompt('Enter game name:');
       if (!name) return;
 
-      const description = prompt('Enter project description (optional):') || '';
+      const description = prompt('Enter game description (optional):') || '';
 
       try {
-        const data = await createProject({ name, description });
-        this.currentProjectId = data.id;
-        localStorage.setItem('editorProjectId', data.id);
+        const data = await createGame({ name, description });
+        this.currentGameId = data.id;
+        localStorage.setItem('editorGameId', data.id);
 
-        // Refresh projects list
-        await loadProjectsList();
-        projectSelect.value = data.id;
+        // Refresh games list
+        await loadGamesList();
+        gameSelect.value = data.id;
 
-        // Load empty assets for new project
-        await this.loadProjectAssets();
+        // Load empty assets for new game
+        await this.loadGameAssets();
 
-        alert(`Project "${data.name}" created successfully!`);
+        alert(`Game "${data.name}" created successfully!`);
       } catch (err) {
-        console.error('Error creating project:', err);
-        alert(`Error creating project: ${String(err)}`);
+        console.error('Error creating game:', err);
+        alert(`Error creating game: ${String(err)}`);
       }
     });
 
-    // Load projects list on startup
-    loadProjectsList();
+    // Load games list on startup
+    loadGamesList();
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
@@ -1420,40 +1442,38 @@ export class EditorApp {
     const loadScenes = async () => {
       const scenesPath = this.getScenesPath();
       if (!scenesPath) {
-        setSceneStatus('No project selected', 'warn');
+        setSceneStatus('No game selected', 'warn');
         sceneState.scenes = [];
         syncSceneSelect();
         return;
       }
       try {
-        const data = await getProjectScenes(this.currentProjectId ?? 'prototype');
-        sceneState.scenes = data.scenes ?? [{ name: 'prototype', obstacles: [] }];
+        if (!this.currentGameId) throw new Error('No game selected');
+        const data = await getGameScenes(this.currentGameId);
+        sceneState.scenes = data.scenes ?? [{ name: 'main', obstacles: [] }];
         syncSceneSelect();
-        loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
+        loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
         setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
       } catch (err) {
         sceneState.scenes = [{
-          name: 'prototype',
-          obstacles: [
-            { x: 0, y: 0, z: 0, width: 2, height: 2, depth: 2 },
-            { x: 5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-            { x: -5, y: 0, z: 0, width: 1, height: 3, depth: 1 },
-          ]
+          name: 'main',
+          obstacles: [],
         }];
         syncSceneSelect();
-        loadSceneFromState('prototype');
-        setSceneStatus('Using default scene', 'ok');
+        loadSceneFromState('main');
+        setSceneStatus('Initialized default scene', 'ok');
       }
     };
     const saveScenes = async () => {
       const scenesPath = this.getScenesPath();
       if (!scenesPath) {
-        setSceneStatus('Please select a project first', 'warn');
+        setSceneStatus('Please select a game first', 'warn');
         return;
       }
       try {
-        await saveProjectScenes(this.currentProjectId ?? 'prototype', sceneState);
-        setSceneStatus(`Saved to project "${this.currentProjectId}"`, 'ok');
+        if (!this.currentGameId) throw new Error('No game selected');
+        await saveGameScenes(this.currentGameId, sceneState);
+        setSceneStatus(`Saved to game "${this.currentGameId}"`, 'ok');
       } catch (err) {
         setSceneStatus(`Save failed: ${String(err)}`, 'warn');
       }
@@ -1481,7 +1501,7 @@ export class EditorApp {
       loadSceneFromState(name);
     });
     sceneSaveBtn?.addEventListener('click', async () => {
-      const name = (sceneNameInput.value || '').trim() || sceneList.value || 'prototype';
+      const name = (sceneNameInput.value || '').trim() || sceneList.value || 'main';
       let obstacles: any[] = [];
       try {
         obstacles = JSON.parse(sceneObstacles.value || '[]');
@@ -1506,10 +1526,10 @@ export class EditorApp {
       const name = sceneList.value;
       sceneState.scenes = sceneState.scenes.filter((s) => s.name !== name);
       if (sceneState.scenes.length === 0) {
-        sceneState.scenes.push({ name: 'prototype', obstacles: [] });
+        sceneState.scenes.push({ name: 'main', obstacles: [] });
       }
       syncSceneSelect();
-      loadSceneFromState(sceneState.scenes[0]?.name ?? 'prototype');
+      loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
       syncSceneJson();
       await saveScenes();
     });
@@ -1740,8 +1760,8 @@ export class EditorApp {
 
     playerLoadButton?.addEventListener('click', async () => {
       try {
-        if (!this.currentProjectId) throw new Error('No project selected');
-        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, { cache: 'no-store' });
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
@@ -1755,8 +1775,8 @@ export class EditorApp {
     playerSaveButton?.addEventListener('click', async () => {
       try {
         readPlayerInputs();
-        if (!this.currentProjectId) throw new Error('No project selected');
-        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, {
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.playerConfig),
@@ -1914,8 +1934,8 @@ export class EditorApp {
     });
     void (async () => {
       try {
-        if (!this.currentProjectId) throw new Error('No project selected');
-        const res = await fetch(`/api/projects/${this.currentProjectId}/player`, { cache: 'no-store' });
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
@@ -2186,8 +2206,8 @@ export class EditorApp {
       try {
         const animPath = this.getAnimationsPath();
         if (!animPath) {
-          setClipStatus('No project selected', 'warn');
-          clipSelect.innerHTML = '<option value="">-- Select a project first --</option>';
+          setClipStatus('No game selected', 'warn');
+          clipSelect.innerHTML = '<option value="">-- select a game first --</option>';
           return;
         }
         console.log('Fetching animations from', animPath, '...');
@@ -2246,11 +2266,12 @@ export class EditorApp {
       const name = clipNameInput.value.trim() || this.retargetedName || 'clip';
       const animPath = this.getAnimationsPath();
       if (!animPath) {
-        setClipStatus('Please select a project first', 'warn');
+        setClipStatus('Please select a game first', 'warn');
         return;
       }
       try {
-        await saveProjectAnimation(this.currentProjectId ?? 'prototype', name, { name, clip: this.clip });
+        if (!this.currentGameId) throw new Error('No game selected');
+        await saveGameAnimation(this.currentGameId, name, { name, clip: this.clip });
         setClipStatus(`Saved ${name}.json`, 'ok');
         await refreshEngineClips();
       } catch (err) {
@@ -2265,11 +2286,12 @@ export class EditorApp {
       }
       const animPath = this.getAnimationsPath();
       if (!animPath) {
-        setClipStatus('Please select a project first', 'warn');
+        setClipStatus('Please select a game first', 'warn');
         return;
       }
       try {
-        const payload = await getProjectAnimation(this.currentProjectId ?? 'prototype', name);
+        if (!this.currentGameId) throw new Error('No game selected');
+        const payload = await getGameAnimation(this.currentGameId, name);
         const data = parseClipPayload(payload);
         if (!data) return;
         this.clip = data;
@@ -2709,7 +2731,8 @@ export class EditorApp {
   }
 
   private loadVrm() {
-    const url = '/avatars/default.vrm';
+    if (!this.currentGameId) return;
+    const url = getGameAvatarUrl(this.currentGameId, 'default.vrm');
     this.gltfLoader.load(
       url,
       (gltf) => {
@@ -2718,17 +2741,6 @@ export class EditorApp {
       undefined,
       (err) => console.warn('VRM load failed', err),
     );
-
-    // Create character scene (used by both animation and player tabs)
-    this.createCharacterScene();
-
-    // Create level scene environment
-    this.createLevelScene();
-
-    // Create settings scene (minimal)
-    this.createSettingsScene();
-
-    // Axis widget is rendered as UI overlay instead of in-world axes.
   }
 
   private createCharacterScene() {
@@ -2835,7 +2847,7 @@ export class EditorApp {
   private async loadLevelGeometry() {
     const scenesPath = this.getScenesPath();
     if (!scenesPath) {
-      console.log('No project selected, skipping level geometry load');
+      console.log('No game selected, skipping level geometry load');
       return;
     }
     try {
