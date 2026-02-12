@@ -783,13 +783,14 @@ export class EditorApp {
     };
   }
 
-  private normalizeLevelGround(ground: LevelGround | undefined): Required<LevelGround> {
+  private normalizeLevelGround(ground: LevelGround | undefined): Required<LevelGround> | null {
+    if (!ground) return null;
     return {
       type: 'concrete',
-      width: Math.max(1, Number(ground?.width ?? 120)),
-      depth: Math.max(1, Number(ground?.depth ?? 120)),
-      y: Number(ground?.y ?? 0),
-      textureRepeat: Math.max(1, Number(ground?.textureRepeat ?? 12)),
+      width: Math.max(1, Number(ground.width ?? 120)),
+      depth: Math.max(1, Number(ground.depth ?? 120)),
+      y: Number(ground.y ?? 0),
+      textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
     };
   }
 
@@ -839,13 +840,15 @@ export class EditorApp {
       if (this.levelGroundMesh.material instanceof THREE.Material) this.levelGroundMesh.material.dispose();
       this.levelGroundMesh = null;
     }
-    this.levelGroundMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(ground.width, ground.depth),
-      new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.95, metalness: 0.05 }),
-    );
-    this.levelGroundMesh.rotation.x = -Math.PI / 2;
-    this.levelGroundMesh.position.y = ground.y;
-    this.levelScene.add(this.levelGroundMesh);
+    if (ground) {
+      this.levelGroundMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(ground.width, ground.depth),
+        new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.95, metalness: 0.05 }),
+      );
+      this.levelGroundMesh.rotation.x = -Math.PI / 2;
+      this.levelGroundMesh.position.y = ground.y;
+      this.levelScene.add(this.levelGroundMesh);
+    }
 
     const crowdEnabled = scene?.crowd?.enabled === true;
     if (this.levelCrowdMarker) {
@@ -859,12 +862,12 @@ export class EditorApp {
         new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0x4a2a08, emissiveIntensity: 0.5 }),
       );
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = ground.y + 0.05;
+      ring.position.y = (ground?.y ?? 0) + 0.05;
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.25, 0.25, 2.5, 12),
         new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x4a2a08, emissiveIntensity: 0.35 }),
       );
-      pillar.position.set(0, ground.y + 1.25, 0);
+      pillar.position.set(0, (ground?.y ?? 0) + 1.25, 0);
       marker.add(ring, pillar);
       this.levelCrowdMarker = marker;
       this.levelScene.add(marker);
@@ -1687,7 +1690,7 @@ export class EditorApp {
           return {
             name: scene.name || `scene_${sceneIndex + 1}`,
             obstacles,
-            ground,
+            ground: ground ?? undefined,
             player: (scene as any).player ? { ...(scene as any).player } : undefined,
             crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
           };
@@ -1699,7 +1702,6 @@ export class EditorApp {
         sceneState.scenes = [{
           name: 'main',
           obstacles: [],
-          ground: this.normalizeLevelGround(undefined),
         }];
         syncSceneSelect();
         loadSceneFromState('main');
@@ -1737,7 +1739,7 @@ export class EditorApp {
         setSceneStatus('Scene already exists', 'warn');
         return;
       }
-      sceneState.scenes.push({ name, obstacles: [], ground: this.normalizeLevelGround(undefined) });
+      sceneState.scenes.push({ name, obstacles: [] });
       syncSceneSelect();
       sceneList.value = name;
       loadSceneFromState(name);
@@ -1755,7 +1757,7 @@ export class EditorApp {
       if (entry) {
         entry.obstacles = obstacles;
       } else {
-        sceneState.scenes.push({ name, obstacles, ground: this.normalizeLevelGround(undefined) });
+        sceneState.scenes.push({ name, obstacles });
       }
       syncSceneSelect();
       sceneList.value = name;
@@ -1768,7 +1770,7 @@ export class EditorApp {
       const name = sceneList.value;
       sceneState.scenes = sceneState.scenes.filter((s) => s.name !== name);
       if (sceneState.scenes.length === 0) {
-        sceneState.scenes.push({ name: 'main', obstacles: [], ground: this.normalizeLevelGround(undefined) });
+        sceneState.scenes.push({ name: 'main', obstacles: [] });
       }
       syncSceneSelect();
       loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
