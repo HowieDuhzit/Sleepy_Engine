@@ -2,10 +2,41 @@
   "scenes": [
     {
       "name": "prototype",
+      "ground": {
+        "type": "concrete",
+        "width": 120,
+        "depth": 120,
+        "y": 0,
+        "textureRepeat": 12
+      },
       "obstacles": [
-        { "x": 0, "y": 0, "z": 0, "width": 2, "height": 2, "depth": 2 },
-        { "x": 5, "y": 0, "z": 0, "width": 1, "height": 3, "depth": 1 },
-        { "x": -5, "y": 0, "z": 0, "width": 1, "height": 3, "depth": 1 }
+        {
+          "id": "obstacle_1",
+          "x": 0,
+          "y": 0,
+          "z": 7.5,
+          "width": 2,
+          "height": 2,
+          "depth": 2
+        },
+        {
+          "id": "obstacle_2",
+          "x": 5,
+          "y": 0,
+          "z": 0,
+          "width": 1,
+          "height": 3,
+          "depth": 1
+        },
+        {
+          "id": "obstacle_3",
+          "x": -5,
+          "y": 0,
+          "z": 0,
+          "width": 1,
+          "height": 3,
+          "depth": 1
+        }
       ]
     }
   ]

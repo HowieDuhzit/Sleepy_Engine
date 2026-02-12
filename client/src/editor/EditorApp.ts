@@ -47,6 +47,18 @@ type LevelObstacle = {
   height?: number;
   depth?: number;
 };
+type LevelGround = {
+  type?: 'concrete';
+  width?: number;
+  depth?: number;
+  y?: number;
+  textureRepeat?: number;
+};
+type LevelScene = {
+  name: string;
+  obstacles?: LevelObstacle[];
+  ground?: LevelGround;
+};
 
 type RagdollBone = {
   name: string;
@@ -158,13 +170,14 @@ export class EditorApp {
   private ragdollHandleTemp2 = new THREE.Vector3();
   private levelTransform: TransformControls | null = null;
   private levelObstacleGroup = new THREE.Group();
+  private levelGroundMesh: THREE.Mesh | null = null;
   private levelObstacleMeshes = new Map<string, THREE.Mesh>();
   private selectedLevelObstacleId: string | null = null;
   private levelSceneListEl: HTMLSelectElement | null = null;
   private levelSceneObstaclesEl: HTMLTextAreaElement | null = null;
   private levelSceneJsonEl: HTMLTextAreaElement | null = null;
   private levelObjectSelectEl: HTMLSelectElement | null = null;
-  private levelSceneStateRef: { scenes: Array<{ name: string; obstacles?: LevelObstacle[] }> } | null = null;
+  private levelSceneStateRef: { scenes: LevelScene[] } | null = null;
 
   // Game management
   private currentGameId: string | null = null;
@@ -767,6 +780,16 @@ export class EditorApp {
     };
   }
 
+  private normalizeLevelGround(ground: LevelGround | undefined): Required<LevelGround> {
+    return {
+      type: 'concrete',
+      width: Math.max(1, Number(ground?.width ?? 120)),
+      depth: Math.max(1, Number(ground?.depth ?? 120)),
+      y: Number(ground?.y ?? 0),
+      textureRepeat: Math.max(1, Number(ground?.textureRepeat ?? 12)),
+    };
+  }
+
   private getCurrentLevelSceneEntry() {
     const sceneState = this.levelSceneStateRef;
     const sceneList = this.levelSceneListEl;
@@ -805,6 +828,22 @@ export class EditorApp {
   }
 
   private updateLevelVisualizationFromState(obstacles: LevelObstacle[]) {
+    const scene = this.getCurrentLevelSceneEntry();
+    const ground = this.normalizeLevelGround(scene?.ground);
+    if (this.levelGroundMesh) {
+      this.levelScene.remove(this.levelGroundMesh);
+      this.levelGroundMesh.geometry.dispose();
+      if (this.levelGroundMesh.material instanceof THREE.Material) this.levelGroundMesh.material.dispose();
+      this.levelGroundMesh = null;
+    }
+    this.levelGroundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(ground.width, ground.depth),
+      new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.95, metalness: 0.05 }),
+    );
+    this.levelGroundMesh.rotation.x = -Math.PI / 2;
+    this.levelGroundMesh.position.y = ground.y;
+    this.levelScene.add(this.levelGroundMesh);
+
     this.levelObstacleMeshes.clear();
     this.levelObstacleGroup.clear();
 
@@ -1564,7 +1603,7 @@ export class EditorApp {
     const exposureInput = hud.querySelector('[data-exposure]') as HTMLInputElement;
     const exposureVal = hud.querySelector('[data-exposure-val]') as HTMLElement;
 
-    const sceneState = { scenes: [] as { name: string; obstacles?: LevelObstacle[] }[] };
+    const sceneState = { scenes: [] as LevelScene[] };
     this.levelSceneStateRef = sceneState;
     this.levelSceneListEl = sceneList;
     this.levelSceneObstaclesEl = sceneObstacles;
@@ -1617,9 +1656,11 @@ export class EditorApp {
           const obstacles = rawObstacles.map((item, obstacleIndex) =>
             this.normalizeLevelObstacle((item ?? {}) as LevelObstacle, obstacleIndex),
           );
+          const ground = this.normalizeLevelGround((scene.ground ?? undefined) as LevelGround | undefined);
           return {
             name: scene.name || `scene_${sceneIndex + 1}`,
             obstacles,
+            ground,
           };
         });
         syncSceneSelect();
@@ -1629,6 +1670,7 @@ export class EditorApp {
         sceneState.scenes = [{
           name: 'main',
           obstacles: [],
+          ground: this.normalizeLevelGround(undefined),
         }];
         syncSceneSelect();
         loadSceneFromState('main');
@@ -1666,7 +1708,7 @@ export class EditorApp {
         setSceneStatus('Scene already exists', 'warn');
         return;
       }
-      sceneState.scenes.push({ name, obstacles: [] });
+      sceneState.scenes.push({ name, obstacles: [], ground: this.normalizeLevelGround(undefined) });
       syncSceneSelect();
       sceneList.value = name;
       loadSceneFromState(name);
@@ -1684,7 +1726,7 @@ export class EditorApp {
       if (entry) {
         entry.obstacles = obstacles;
       } else {
-        sceneState.scenes.push({ name, obstacles });
+        sceneState.scenes.push({ name, obstacles, ground: this.normalizeLevelGround(undefined) });
       }
       syncSceneSelect();
       sceneList.value = name;
@@ -1697,7 +1739,7 @@ export class EditorApp {
       const name = sceneList.value;
       sceneState.scenes = sceneState.scenes.filter((s) => s.name !== name);
       if (sceneState.scenes.length === 0) {
-        sceneState.scenes.push({ name: 'main', obstacles: [] });
+        sceneState.scenes.push({ name: 'main', obstacles: [], ground: this.normalizeLevelGround(undefined) });
       }
       syncSceneSelect();
       loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
@@ -3030,19 +3072,6 @@ export class EditorApp {
     const directional = new THREE.DirectionalLight(0xffffff, 0.8);
     directional.position.set(5, 10, 5);
     this.levelScene.add(directional);
-
-    // Add ground plane (matching game's ground)
-    const groundGeo = new THREE.PlaneGeometry(100, 100);
-    const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x2a2a2a,
-      roughness: 0.9,
-      metalness: 0.1
-    });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0; // GROUND_Y from game
-    ground.receiveShadow = true;
-    this.levelScene.add(ground);
 
     // Add a grid for reference
     const gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x222222);

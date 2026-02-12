@@ -9,6 +9,7 @@ export type GameMeta = {
 export type SceneRecord = {
   name: string;
   obstacles?: unknown[];
+  ground?: unknown;
 };
 
 const readJson = async <T>(response: Response): Promise<T> => {

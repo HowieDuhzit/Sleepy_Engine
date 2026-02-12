@@ -22,7 +22,6 @@ import {
   PlayerSnapshot,
   PlayerInput,
   WorldSnapshot,
-  OBSTACLES,
   PLAYER_RADIUS,
   MOVE_SPEED,
   SPRINT_MULTIPLIER,
@@ -43,8 +42,9 @@ import {
 export class GameApp {
   private sceneName: string;
   private gameId: string;
-  private obstacles = OBSTACLES;
+  private obstacles: Array<{ id: string; position: { x: number; y: number; z: number }; size: { x: number; y: number; z: number } }> = [];
   private obstacleGroup: THREE.Group | null = null;
+  private groundMesh: THREE.Mesh | null = null;
   private playerConfig = {
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
@@ -276,6 +276,24 @@ export class GameApp {
     this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
   };
 
+  private parseSceneGround(input: unknown) {
+    if (!input || typeof input !== 'object') return null;
+    const ground = input as {
+      type?: string;
+      width?: number;
+      depth?: number;
+      y?: number;
+      textureRepeat?: number;
+    };
+    return {
+      type: ground.type === 'concrete' ? 'concrete' : 'concrete',
+      width: Math.max(1, Number(ground.width ?? 120)),
+      depth: Math.max(1, Number(ground.depth ?? 120)),
+      y: Number(ground.y ?? 0),
+      textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+    };
+  }
+
   constructor(
     container: HTMLElement | null,
     sceneName = 'main',
@@ -392,13 +410,7 @@ export class GameApp {
     this.container.focus();
     window.addEventListener('keydown', this.handleDebugKeyDown);
     this.obstacleGroup = this.createObstacles();
-    this.scene.add(
-      this.createLights(),
-      this.createGround(),
-      this.obstacleGroup,
-      this.localPlayer,
-      this.crowd,
-    );
+    this.scene.add(this.createLights(), this.obstacleGroup, this.localPlayer, this.crowd);
 
     this.renderer.domElement.addEventListener('mousedown', this.handleMouseDown);
     window.addEventListener('mousemove', this.handleMouseMove);
@@ -564,9 +576,10 @@ export class GameApp {
     return group;
   }
 
-  private createGround() {
-    const geometry = new THREE.PlaneGeometry(120, 120, 1, 1);
+  private createGround(config: { width: number; depth: number; y: number; textureRepeat: number }) {
+    const geometry = new THREE.PlaneGeometry(config.width, config.depth, 1, 1);
     const texture = this.createConcreteTexture();
+    texture.repeat.set(config.textureRepeat, config.textureRepeat);
     const material = new THREE.MeshStandardMaterial({
       map: texture,
       roughness: 0.95,
@@ -575,7 +588,7 @@ export class GameApp {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 0;
+    mesh.position.y = config.y;
     return mesh;
   }
 
@@ -1880,30 +1893,29 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
-      if (scene?.obstacles) {
-        // Convert editor format {x, y, z, width, height, depth} to game format
-        this.obstacles = scene.obstacles.map((obs: any, index: number) => {
-          // If already in game format (has position and size), use as-is
-          if (obs.position && obs.size) {
-            return obs;
-          }
-          // Convert from editor format
-          return {
-            id: obs.id || `obstacle_${index}`,
-            position: {
-              x: obs.x ?? 0,
-              y: obs.y ?? 0,
-              z: obs.z ?? 0,
-            },
-            size: {
-              x: obs.width ?? 1,
-              y: obs.height ?? 1,
-              z: obs.depth ?? 1,
-            },
-          };
-        });
-        this.rebuildObstacleMeshes();
-      }
+      this.rebuildGroundMesh(this.parseSceneGround((scene as any)?.ground));
+      // Convert editor format {x, y, z, width, height, depth} to game format
+      this.obstacles = (scene?.obstacles ?? []).map((obs: any, index: number) => {
+        // If already in game format (has position and size), use as-is
+        if (obs.position && obs.size) {
+          return obs;
+        }
+        // Convert from editor format
+        return {
+          id: obs.id || `obstacle_${index}`,
+          position: {
+            x: obs.x ?? 0,
+            y: obs.y ?? 0,
+            z: obs.z ?? 0,
+          },
+          size: {
+            x: obs.width ?? 1,
+            y: obs.height ?? 1,
+            z: obs.depth ?? 1,
+          },
+        };
+      });
+      this.rebuildObstacleMeshes();
     } catch (err) {
       console.error('Failed to load scene config:', err);
     }
@@ -1915,6 +1927,21 @@ export class GameApp {
     }
     this.obstacleGroup = this.createObstacles();
     this.scene.add(this.obstacleGroup);
+  }
+
+  private rebuildGroundMesh(groundConfig: { width: number; depth: number; y: number; textureRepeat: number } | null) {
+    if (this.groundMesh) {
+      this.scene.remove(this.groundMesh);
+      this.groundMesh.geometry.dispose();
+      if (this.groundMesh.material instanceof THREE.MeshStandardMaterial) {
+        this.groundMesh.material.map?.dispose();
+        this.groundMesh.material.dispose();
+      }
+      this.groundMesh = null;
+    }
+    if (!groundConfig) return;
+    this.groundMesh = this.createGround(groundConfig);
+    this.scene.add(this.groundMesh);
   }
 
   private updateVrms(delta: number) {

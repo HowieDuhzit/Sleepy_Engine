@@ -84,12 +84,22 @@ const sceneObstacleSchema = z
     size: z.object({ x: z.number(), y: z.number(), z: z.number() }).optional(),
   })
   .passthrough();
+const sceneGroundSchema = z
+  .object({
+    type: z.enum(['concrete']).optional(),
+    width: z.number().optional(),
+    depth: z.number().optional(),
+    y: z.number().optional(),
+    textureRepeat: z.number().optional(),
+  })
+  .passthrough();
 const scenesPayloadSchema = z.object({
   scenes: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(64),
         obstacles: z.array(sceneObstacleSchema).optional(),
+        ground: sceneGroundSchema.optional(),
       }),
     )
     .max(500),
