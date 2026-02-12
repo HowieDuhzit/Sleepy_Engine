@@ -1,6 +1,6 @@
 import colyseusPkg from 'colyseus';
 import { RiotState, PlayerState } from '../state/RiotState.js';
-import { loadSceneObstacles } from './scene-obstacle-loader.js';
+import { loadSceneConfig } from './scene-obstacle-loader.js';
 import {
   PROTOCOL,
   PlayerInput,
@@ -164,6 +164,7 @@ class NavGrid {
 export class RiotRoom extends Room {
   declare state: RiotState;
   private obstacles: Obstacle[] = OBSTACLES;
+  private crowdEnabled = false;
   private inputBuffer = new Map<string, PlayerInput>();
   private lastInputSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
@@ -207,7 +208,12 @@ export class RiotRoom extends Room {
   }
 
   private async loadRoomObstacles(options?: RoomOptions) {
-    this.obstacles = await loadSceneObstacles(options);
+    const sceneConfig = await loadSceneConfig(options);
+    this.obstacles = sceneConfig.obstacles;
+    this.crowdEnabled = sceneConfig.crowdEnabled;
+    if (!this.crowdEnabled) {
+      this.crowd = [];
+    }
   }
 
   private sanitizeInput(input: PlayerInput): PlayerInput {

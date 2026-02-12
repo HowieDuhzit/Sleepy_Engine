@@ -9,6 +9,13 @@
         "y": 0,
         "textureRepeat": 12
       },
+      "player": {
+        "avatar": "default.vrm"
+      },
+      "crowd": {
+        "enabled": true,
+        "avatar": "crowd.vrm"
+      },
       "obstacles": [
         {
           "id": "obstacle_1",

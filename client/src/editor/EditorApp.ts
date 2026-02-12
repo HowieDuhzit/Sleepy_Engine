@@ -58,6 +58,8 @@ type LevelScene = {
   name: string;
   obstacles?: LevelObstacle[];
   ground?: LevelGround;
+  player?: { avatar?: string };
+  crowd?: { enabled?: boolean; avatar?: string };
 };
 
 type RagdollBone = {
@@ -1661,6 +1663,8 @@ export class EditorApp {
             name: scene.name || `scene_${sceneIndex + 1}`,
             obstacles,
             ground,
+            player: (scene as any).player ? { ...(scene as any).player } : undefined,
+            crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
           };
         });
         syncSceneSelect();

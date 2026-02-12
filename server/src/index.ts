@@ -93,6 +93,17 @@ const sceneGroundSchema = z
     textureRepeat: z.number().optional(),
   })
   .passthrough();
+const scenePlayerSchema = z
+  .object({
+    avatar: z.string().trim().min(1).optional(),
+  })
+  .passthrough();
+const sceneCrowdSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    avatar: z.string().trim().min(1).optional(),
+  })
+  .passthrough();
 const scenesPayloadSchema = z.object({
   scenes: z
     .array(
@@ -100,6 +111,8 @@ const scenesPayloadSchema = z.object({
         name: z.string().trim().min(1).max(64),
         obstacles: z.array(sceneObstacleSchema).optional(),
         ground: sceneGroundSchema.optional(),
+        player: scenePlayerSchema.optional(),
+        crowd: sceneCrowdSchema.optional(),
       }),
     )
     .max(500),

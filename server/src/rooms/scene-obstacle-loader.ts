@@ -13,6 +13,11 @@ type SceneObstacle = {
   position?: { x: number; y: number; z: number };
   size?: { x: number; y: number; z: number };
 };
+type SceneConfig = {
+  name: string;
+  obstacles?: SceneObstacle[];
+  crowd?: { enabled?: boolean };
+};
 
 const defaultGameId = 'prototype';
 const defaultSceneName = 'main';
@@ -57,17 +62,24 @@ const toObstacle = (input: SceneObstacle, index: number): Obstacle => {
   };
 };
 
-export const loadSceneObstacles = async (options?: { gameId?: string; sceneName?: string }) => {
+export const loadSceneConfig = async (options?: { gameId?: string; sceneName?: string }) => {
   const gameId = safeSegment(options?.gameId ?? defaultGameId) || defaultGameId;
   const sceneName = String(options?.sceneName ?? defaultSceneName);
   const scenesPath = path.join(gamesDir, gameId, 'scenes', 'scenes.json');
 
   try {
     const raw = await fs.readFile(scenesPath, 'utf8');
-    const payload = JSON.parse(raw) as { scenes?: Array<{ name: string; obstacles?: SceneObstacle[] }> };
+    const payload = JSON.parse(raw) as { scenes?: SceneConfig[] };
     const scene = payload.scenes?.find((entry) => entry.name === sceneName) ?? payload.scenes?.[0];
-    return Array.isArray(scene?.obstacles) ? scene.obstacles.map((obs, index) => toObstacle(obs, index)) : [];
+    const obstacles = Array.isArray(scene?.obstacles) ? scene.obstacles.map((obs, index) => toObstacle(obs, index)) : [];
+    const crowdEnabled = scene?.crowd?.enabled === true;
+    return { obstacles, crowdEnabled };
   } catch {
-    return [];
+    return { obstacles: [], crowdEnabled: false };
   }
+};
+
+export const loadSceneObstacles = async (options?: { gameId?: string; sceneName?: string }) => {
+  const config = await loadSceneConfig(options);
+  return config.obstacles;
 };

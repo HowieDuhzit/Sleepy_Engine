@@ -122,7 +122,7 @@ export class GameApp {
   private gltfLoader = new GLTFLoader();
   private fbxLoader = new FBXLoader();
   private vrms: VRM[] = [];
-  private readonly localAvatarName = 'default.vrm';
+  private localAvatarName = 'default.vrm';
   private mixamoClips: Record<string, { clip: THREE.AnimationClip; rig: THREE.Object3D }> = {};
   private jsonClips: Record<string, ClipData> = {};
   private mixamoReady: Promise<void>;
@@ -184,8 +184,12 @@ export class GameApp {
     debug?: { idleTracks: number; walkTracks: number; idleName?: string; walkName?: string };
   }> = [];
   private crowdTemplate: VRM | null = null;
-  private readonly crowdAvatarName = 'crowd.vrm';
+  private crowdAvatarName = 'crowd.vrm';
+  private crowdEnabled = false;
+  private crowdLoaded = false;
   private localPlayer: THREE.Object3D;
+  private localAvatarLoaded = false;
+  private playerAvatarEnabled = false;
   private localVelocityY = 0;
   private localVelocityX = 0;
   private localVelocityZ = 0;
@@ -699,14 +703,12 @@ export class GameApp {
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     group.position.set(0, GROUND_Y, 0);
-    void this.loadVrmInto(group, 'local');
     return group;
   }
 
   private createCrowd() {
     const group = new THREE.Group();
     group.name = 'crowd';
-    void this.loadCrowdTemplate(group);
     return group;
   }
 
@@ -714,16 +716,7 @@ export class GameApp {
     return getGameAvatarUrl(this.gameId, name);
   }
 
-  private async assetExists(url: string) {
-    try {
-      const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private showCapsuleFallback(group: THREE.Group, color: number) {
+  private showCapsuleFallback(group: THREE.Object3D, color: number) {
     const capsule = group.userData.capsule as
       | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
       | undefined;
@@ -768,12 +761,6 @@ export class GameApp {
 
   private async loadCrowdTemplate(group: THREE.Group) {
     const crowdUrl = this.getAvatarUrl(this.crowdAvatarName);
-    if (!(await this.assetExists(crowdUrl))) {
-      this.statusLines.crowd = `crowd: missing ${this.crowdAvatarName}`;
-      const node = this.hud.querySelector('[data-hud-crowd]');
-      if (node) node.textContent = this.statusLines.crowd;
-      return;
-    }
     this.gltfLoader.load(
       crowdUrl,
       async (gltf) => {
@@ -784,6 +771,7 @@ export class GameApp {
         }
         vrm.humanoid.autoUpdateHumanBones = true;
         this.crowdTemplate = vrm;
+        this.crowdLoaded = true;
         await this.mixamoReady;
         const crowdPrefix = 'crowd_';
         const normalized = (vrm.humanoid.normalizedHumanBones ?? {}) as Record<
@@ -892,7 +880,11 @@ export class GameApp {
         }
       },
       undefined,
-      () => {},
+      () => {
+        this.statusLines.crowd = `crowd: missing ${this.crowdAvatarName}`;
+        const node = this.hud.querySelector('[data-hud-crowd]');
+        if (node) node.textContent = this.statusLines.crowd;
+      },
     );
   }
 
@@ -912,11 +904,16 @@ export class GameApp {
     mesh.visible = false; // Hide collider
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
-    void this.loadVrmInto(group, id);
+    if (this.playerAvatarEnabled) {
+      void this.loadVrmInto(group, id);
+    } else {
+      this.showCapsuleFallback(group, 0xff6b6b);
+    }
     return group;
   }
 
   private animateCrowd(time: number, delta: number) {
+    if (!this.crowdEnabled) return;
     if (this.crowdAvatars.length === 0) return;
     if (this.crowdAvatars[0]?.debug) {
       const dbg = this.crowdAvatars[0].debug!;
@@ -994,7 +991,7 @@ export class GameApp {
       '<div>Objective: ignite 3 hotspots</div>',
       '<div>WASD move, Shift sprint, Space jump, C/Ctrl crouch, F attack</div>',
       '<div>Attack: short-range knockback + damage (server-authoritative)</div>',
-      `<div>VRM: /api/games/${this.gameId}/avatars/${this.localAvatarName}</div>`,
+      `<div>VRM: ${this.playerAvatarEnabled ? `/api/games/${this.gameId}/avatars/${this.localAvatarName}` : 'none (capsule fallback)'}</div>`,
       '<div>Press H to toggle HUD</div>',
     ].join('');
     return hud;
@@ -1209,6 +1206,7 @@ export class GameApp {
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
       this.roomClient.onCrowd((snapshot) => {
+        if (!this.crowdEnabled) return;
         const now = performance.now() / 1000;
         // Update received agents
         for (const agent of snapshot.agents) {
@@ -1824,13 +1822,8 @@ export class GameApp {
     }
   }
 
-  private async loadVrmInto(group: THREE.Group, actorId: string) {
+  private async loadVrmInto(group: THREE.Object3D, actorId: string) {
     const url = this.getAvatarUrl(this.localAvatarName);
-    if (!(await this.assetExists(url))) {
-      const isLocal = actorId === 'local';
-      this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
-      return;
-    }
     this.gltfLoader.load(
       url,
       async (gltf) => {
@@ -1868,7 +1861,7 @@ export class GameApp {
     );
   }
 
-  private updateCapsuleToVrm(group: THREE.Group, vrm: VRM) {
+  private updateCapsuleToVrm(group: THREE.Object3D, vrm: VRM) {
     const capsule = group.userData.capsule as
       | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
       | undefined;
@@ -1930,6 +1923,35 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
+      const playerAvatar = typeof (scene as any)?.player?.avatar === 'string' ? String((scene as any).player.avatar) : '';
+      this.playerAvatarEnabled = playerAvatar.length > 0;
+      if (this.playerAvatarEnabled) {
+        this.localAvatarName = playerAvatar;
+        if (!this.localAvatarLoaded) {
+          this.localAvatarLoaded = true;
+          void this.loadVrmInto(this.localPlayer, 'local');
+        }
+      } else {
+        this.showCapsuleFallback(this.localPlayer, 0x6be9ff);
+      }
+
+      const crowdConfig = (scene as any)?.crowd as { enabled?: boolean; avatar?: string } | undefined;
+      this.crowdEnabled = crowdConfig?.enabled === true;
+      if (typeof crowdConfig?.avatar === 'string' && crowdConfig.avatar.length > 0) {
+        this.crowdAvatarName = crowdConfig.avatar;
+      }
+      if (this.crowdEnabled && !this.crowdLoaded) {
+        void this.loadCrowdTemplate(this.crowd);
+      }
+      if (!this.crowdEnabled) {
+        this.crowd.clear();
+        this.crowdAvatars = [];
+        this.crowdAgents.clear();
+        this.statusLines.crowd = 'crowd: off';
+        const crowdNode = this.hud.querySelector('[data-hud-crowd]');
+        if (crowdNode) crowdNode.textContent = this.statusLines.crowd;
+      }
+
       this.rebuildGroundMesh(this.parseSceneGround((scene as any)?.ground));
       // Convert editor format {x, y, z, width, height, depth} to game format
       this.obstacles = (scene?.obstacles ?? []).map((obs: any, index: number) => {
