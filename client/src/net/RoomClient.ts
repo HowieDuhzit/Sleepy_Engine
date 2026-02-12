@@ -65,4 +65,11 @@ export class RoomClient {
   getSessionId() {
     return this.sessionId;
   }
+
+  async disconnect() {
+    if (!this.room) return;
+    await this.room.leave();
+    this.room = null;
+    this.sessionId = null;
+  }
 }

@@ -237,6 +237,35 @@ export class GameApp {
     crowd: 'crowd: none',
   };
   private inputDebugTimer = 0;
+  private settingsMenu: HTMLDivElement | null = null;
+  private handleContainerClick = () => {
+    this.container.focus();
+  };
+  private handleDebugKeyDown = (event: KeyboardEvent) => {
+    const value = `raw: ${event.code || event.key}`;
+    this.statusLines.key = `key: ${value}`;
+    const node = this.hud.querySelector('[data-hud-key]');
+    if (node) node.textContent = `key: ${value}`;
+    if (event.code === 'KeyH') {
+      this.hudVisible = !this.hudVisible;
+      this.hud.style.display = this.hudVisible ? 'block' : 'none';
+    }
+    if (event.code === 'KeyP') {
+      this.perfVisible = !this.perfVisible;
+      this.perfHud.style.display = this.perfVisible ? 'block' : 'none';
+    }
+    if (event.code === 'KeyV') {
+      this.firstPersonMode = !this.firstPersonMode;
+      const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement | null;
+      if (toggle) toggle.checked = this.firstPersonMode;
+    }
+  };
+  private handleEscapeMenuKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !this.settingsMenu) return;
+    const isVisible = this.settingsMenu.style.display !== 'none';
+    this.settingsMenu.style.display = isVisible ? 'none' : 'block';
+    this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
+  };
 
   constructor(container: HTMLElement | null, sceneName = 'prototype', projectId = 'prototype') {
     if (!container) {
@@ -246,7 +275,7 @@ export class GameApp {
     this.sceneName = sceneName;
     this.projectId = projectId;
     this.container.tabIndex = 0;
-    this.container.addEventListener('click', () => this.container.focus());
+    this.container.addEventListener('click', this.handleContainerClick);
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
     this.mixamoReady = this.loadMixamoClips();
     void this.loadPlayerConfig();
@@ -335,25 +364,7 @@ export class GameApp {
     this.touchControls = this.createTouchControls();
     if (this.touchControls) this.container.appendChild(this.touchControls);
     this.container.focus();
-    window.addEventListener('keydown', (event) => {
-      const value = `raw: ${event.code || event.key}`;
-      this.statusLines.key = `key: ${value}`;
-      const node = this.hud.querySelector('[data-hud-key]');
-      if (node) node.textContent = `key: ${value}`;
-      if (event.code === 'KeyH') {
-        this.hudVisible = !this.hudVisible;
-        this.hud.style.display = this.hudVisible ? 'block' : 'none';
-      }
-      if (event.code === 'KeyP') {
-        this.perfVisible = !this.perfVisible;
-        this.perfHud.style.display = this.perfVisible ? 'block' : 'none';
-      }
-      if (event.code === 'KeyV') {
-        this.firstPersonMode = !this.firstPersonMode;
-        const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement;
-        if (toggle) toggle.checked = this.firstPersonMode;
-      }
-    });
+    window.addEventListener('keydown', this.handleDebugKeyDown);
     this.obstacleGroup = this.createObstacles();
     this.scene.add(
       this.createLights(),
@@ -413,8 +424,25 @@ export class GameApp {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
+    this.container.removeEventListener('click', this.handleContainerClick);
+    window.removeEventListener('keydown', this.handleDebugKeyDown);
+    window.removeEventListener('keydown', this.handleEscapeMenuKeyDown);
+    this.renderer.domElement.removeEventListener('mousedown', this.handleMouseDown);
+    window.removeEventListener('mousemove', this.handleMouseMove);
+    window.removeEventListener('mouseup', this.handleMouseUp);
+    this.renderer.domElement.removeEventListener('wheel', this.handleWheel);
+    this.renderer.domElement.removeEventListener('click', this.requestPointerLock);
+    document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
+    this.pointerLocked = false;
+    if (document.pointerLockElement === this.renderer.domElement) {
+      document.exitPointerLock();
+    }
+    this.input.dispose();
+    void this.roomClient.disconnect();
+    this.settingsMenu?.remove();
+    this.settingsMenu = null;
   }
 
   private tick = () => {
@@ -1000,6 +1028,7 @@ export class GameApp {
     `;
 
     document.body.appendChild(menu);
+    this.settingsMenu = menu;
 
     // Wire up settings
     const distanceSlider = menu.querySelector('#camera-distance') as HTMLInputElement;
@@ -1095,18 +1124,7 @@ export class GameApp {
     });
 
     // ESC to toggle menu
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const isVisible = menu.style.display !== 'none';
-        menu.style.display = isVisible ? 'none' : 'block';
-        if (!isVisible) {
-          // Pause gameplay when menu open
-          this.container.style.pointerEvents = 'none';
-        } else {
-          this.container.style.pointerEvents = 'auto';
-        }
-      }
-    });
+    window.addEventListener('keydown', this.handleEscapeMenuKeyDown);
   }
 
   private async connect() {

@@ -116,7 +116,9 @@ export class PSXPostProcessor {
   private setupPasses(): void {
     // Clear existing passes
     while (this.composer.passes.length > 0) {
-      this.composer.removePass(this.composer.passes[0])
+      const first = this.composer.passes[0]
+      if (!first) break
+      this.composer.removePass(first)
     }
 
     // Always start with render pass
@@ -149,7 +151,8 @@ export class PSXPostProcessor {
 
     // Last pass should render to screen
     if (this.composer.passes.length > 0) {
-      this.composer.passes[this.composer.passes.length - 1].renderToScreen = true
+      const last = this.composer.passes[this.composer.passes.length - 1]
+      if (last) last.renderToScreen = true
     }
   }
 
@@ -160,7 +163,8 @@ export class PSXPostProcessor {
         this.composer.renderer,
         this.composer.writeBuffer,
         this.composer.readBuffer,
-        deltaTime
+        deltaTime ?? 0,
+        false
       )
       return
     }

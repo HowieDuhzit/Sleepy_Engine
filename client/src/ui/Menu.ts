@@ -44,7 +44,7 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', scene?: string,
         projectSelect.value = 'prototype';
         currentProjectId = 'prototype';
       } else if (data.projects.length > 0) {
-        currentProjectId = data.projects[0].id;
+        currentProjectId = data.projects[0]?.id ?? null;
       }
       await loadScenes();
     } catch (err) {

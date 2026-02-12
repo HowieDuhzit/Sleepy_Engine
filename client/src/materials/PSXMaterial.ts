@@ -25,6 +25,9 @@ export interface PSXMaterialParameters {
 
 export class PSXMaterial extends THREE.ShaderMaterial {
   private _resolution: THREE.Vector2
+  private uniform<T>(key: string) {
+    return this.uniforms[key] as THREE.IUniform<T>
+  }
 
   constructor(parameters: PSXMaterialParameters = {}) {
     const defaultParams = {
@@ -72,74 +75,73 @@ export class PSXMaterial extends THREE.ShaderMaterial {
     })
 
     this._resolution = resolution
-    this.type = 'PSXMaterial'
   }
 
   // Getters and setters for convenience
   get map(): THREE.Texture | null {
-    return this.uniforms.map.value
+    return this.uniform<THREE.Texture | null>('map').value
   }
 
   set map(value: THREE.Texture | null) {
-    this.uniforms.map.value = value
+    this.uniform<THREE.Texture | null>('map').value = value
   }
 
   get color(): THREE.Color {
-    return this.uniforms.color.value
+    return this.uniform<THREE.Color>('color').value
   }
 
   set color(value: THREE.Color) {
-    this.uniforms.color.value = value
+    this.uniform<THREE.Color>('color').value = value
   }
 
   get jitterIntensity(): number {
-    return this.uniforms.uJitterIntensity.value
+    return this.uniform<number>('uJitterIntensity').value
   }
 
   set jitterIntensity(value: number) {
-    this.uniforms.uJitterIntensity.value = value
+    this.uniform<number>('uJitterIntensity').value = value
   }
 
   get useAffineMapping(): boolean {
-    return this.uniforms.useAffineMapping.value
+    return this.uniform<boolean>('useAffineMapping').value
   }
 
   set useAffineMapping(value: boolean) {
-    this.uniforms.useAffineMapping.value = value
+    this.uniform<boolean>('useAffineMapping').value = value
   }
 
   get useColorQuantization(): boolean {
-    return this.uniforms.useColorQuantization.value
+    return this.uniform<boolean>('useColorQuantization').value
   }
 
   set useColorQuantization(value: boolean) {
-    this.uniforms.useColorQuantization.value = value
+    this.uniform<boolean>('useColorQuantization').value = value
   }
 
   get colorDepth(): number {
-    return this.uniforms.colorDepth.value
+    return this.uniform<number>('colorDepth').value
   }
 
   set colorDepth(value: number) {
-    this.uniforms.colorDepth.value = value
+    this.uniform<number>('colorDepth').value = value
   }
 
   get useDithering(): boolean {
-    return this.uniforms.useDithering.value
+    return this.uniform<boolean>('useDithering').value
   }
 
   set useDithering(value: boolean) {
-    this.uniforms.useDithering.value = value
+    this.uniform<boolean>('useDithering').value = value
   }
 
   updateResolution(width: number, height: number): void {
     this._resolution.set(width, height)
-    this.uniforms.uResolution.value = this._resolution
+    this.uniform<THREE.Vector2>('uResolution').value = this._resolution
   }
 
   setLighting(ambient: THREE.Color, directionalColor: THREE.Color, directionalDirection: THREE.Vector3): void {
-    this.uniforms.ambientLight.value = ambient
-    this.uniforms.directionalLightColor.value = directionalColor
-    this.uniforms.directionalLightDirection.value = directionalDirection.normalize()
+    this.uniform<THREE.Color>('ambientLight').value = ambient
+    this.uniform<THREE.Color>('directionalLightColor').value = directionalColor
+    this.uniform<THREE.Vector3>('directionalLightDirection').value = directionalDirection.normalize()
   }
 }

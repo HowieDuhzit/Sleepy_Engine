@@ -393,7 +393,6 @@ export class EditorApp {
   };
   private boneVisualsVisible = true;
   private overrideMode = false;
-  private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
   public updateLevelVisualization: (obstacles: any[]) => void = () => {};
   private readonly ragdollDefs: { name: string; parent?: string }[] = [
     { name: 'hips' },
@@ -513,7 +512,7 @@ export class EditorApp {
     this.controls.maxDistance = 20;
 
     this.ragdollTransform = new TransformControls(this.camera, this.renderer.domElement);
-    this.ragdollTransform.visible = false;
+    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
     this.ragdollTransform.setMode('translate');
     this.ragdollTransform.addEventListener('dragging-changed', (event) => {
       if (this.controls) this.controls.enabled = !event.value;

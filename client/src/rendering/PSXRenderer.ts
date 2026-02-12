@@ -16,6 +16,9 @@ export class PSXRenderer {
   private blitMaterial: THREE.ShaderMaterial
 
   public settings: PSXRendererSettings
+  private uniform<T>(key: string) {
+    return this.blitMaterial.uniforms[key] as THREE.IUniform<T>
+  }
 
   constructor(renderer: THREE.WebGLRenderer, settings: Partial<PSXRendererSettings> = {}) {
     this.renderer = renderer
@@ -117,13 +120,13 @@ export class PSXRenderer {
     })
 
     // Update blit material
-    this.blitMaterial.uniforms.tDiffuse.value = this.lowResTarget.texture
-    this.blitMaterial.uniforms.resolution.value.set(width, height)
+    this.uniform<THREE.Texture>('tDiffuse').value = this.lowResTarget.texture
+    this.uniform<THREE.Vector2>('resolution').value.set(width, height)
   }
 
   setPixelated(pixelated: boolean): void {
     this.settings.pixelated = pixelated
-    this.blitMaterial.uniforms.pixelated.value = pixelated
+    this.uniform<boolean>('pixelated').value = pixelated
   }
 
   setEnabled(enabled: boolean): void {
