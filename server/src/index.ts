@@ -351,10 +351,17 @@ app.get('/api/games/:gameId/player', async (req: Request, res: Response) => {
       return;
     }
     const filePath = path.join(gamesDir, gameId, 'player.json');
-    const raw = await fs.readFile(filePath, 'utf8');
-    await cacheSet(fileKey, raw);
-    res.setHeader('Content-Type', 'application/json');
-    res.send(raw);
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      await cacheSet(fileKey, raw);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(raw);
+    } catch {
+      const fallback = '{}';
+      await cacheSet(fileKey, fallback);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(fallback);
+    }
   } catch (err) {
     res.status(404).json({ error: 'not_found', detail: String(err) });
   }

@@ -714,6 +714,31 @@ export class GameApp {
     return getGameAvatarUrl(this.gameId, name);
   }
 
+  private async assetExists(url: string) {
+    try {
+      const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private showCapsuleFallback(group: THREE.Group, color: number) {
+    const capsule = group.userData.capsule as
+      | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
+      | undefined;
+    if (!capsule) return;
+    const material = capsule.mesh.material;
+    if (material instanceof THREE.MeshStandardMaterial) {
+      material.color.set(color);
+      material.opacity = 0.85;
+      material.transparent = true;
+      material.emissive.set(color);
+      material.emissiveIntensity = 0.25;
+    }
+    capsule.mesh.visible = true;
+  }
+
   private computeVrmGroundOffset(vrm: VRM) {
     vrm.scene.updateMatrixWorld(true);
     const footBones = [
@@ -743,6 +768,12 @@ export class GameApp {
 
   private async loadCrowdTemplate(group: THREE.Group) {
     const crowdUrl = this.getAvatarUrl(this.crowdAvatarName);
+    if (!(await this.assetExists(crowdUrl))) {
+      this.statusLines.crowd = `crowd: missing ${this.crowdAvatarName}`;
+      const node = this.hud.querySelector('[data-hud-crowd]');
+      if (node) node.textContent = this.statusLines.crowd;
+      return;
+    }
     this.gltfLoader.load(
       crowdUrl,
       async (gltf) => {
@@ -861,9 +892,7 @@ export class GameApp {
         }
       },
       undefined,
-      (error) => {
-        console.warn('Crowd VRM load failed:', error);
-      },
+      () => {},
     );
   }
 
@@ -1797,6 +1826,11 @@ export class GameApp {
 
   private async loadVrmInto(group: THREE.Group, actorId: string) {
     const url = this.getAvatarUrl(this.localAvatarName);
+    if (!(await this.assetExists(url))) {
+      const isLocal = actorId === 'local';
+      this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
+      return;
+    }
     this.gltfLoader.load(
       url,
       async (gltf) => {
@@ -1808,7 +1842,8 @@ export class GameApp {
         }
     const vrm = gltf.userData.vrm as VRM | undefined;
     if (!vrm) {
-      console.warn('VRM load failed: no VRM in glTF');
+      const isLocal = actorId === 'local';
+      this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
       return;
     }
     vrm.humanoid.autoUpdateHumanBones = true;
@@ -1826,8 +1861,9 @@ export class GameApp {
         this.setupVrmActor(vrm, actorId);
       },
       undefined,
-      (error) => {
-        console.warn('VRM load failed:', error);
+      () => {
+        const isLocal = actorId === 'local';
+        this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
       },
     );
   }
@@ -1885,6 +1921,7 @@ export class GameApp {
         if (group) this.updateCapsuleToVrm(group, vrm);
       }
     } catch (error) {
+      if (error instanceof Error && error.message.includes('request_failed:404')) return;
       console.warn('Player config load failed', error);
     }
   }
@@ -2021,7 +2058,7 @@ export class GameApp {
     );
 
     if (Object.keys(this.jsonClips).length === 0) {
-      console.warn('JSON clips failed to load.');
+      console.log('No JSON clips found for this game yet.');
     }
 
     const maybeMirror = (leftKey: string, rightKey: string) => {
