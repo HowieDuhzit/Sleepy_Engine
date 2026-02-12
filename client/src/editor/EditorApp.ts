@@ -173,6 +173,7 @@ export class EditorApp {
   private levelTransform: TransformControls | null = null;
   private levelObstacleGroup = new THREE.Group();
   private levelGroundMesh: THREE.Mesh | null = null;
+  private levelCrowdMarker: THREE.Group | null = null;
   private levelObstacleMeshes = new Map<string, THREE.Mesh>();
   private selectedLevelObstacleId: string | null = null;
   private levelSceneListEl: HTMLSelectElement | null = null;
@@ -845,6 +846,29 @@ export class EditorApp {
     this.levelGroundMesh.rotation.x = -Math.PI / 2;
     this.levelGroundMesh.position.y = ground.y;
     this.levelScene.add(this.levelGroundMesh);
+
+    const crowdEnabled = scene?.crowd?.enabled === true;
+    if (this.levelCrowdMarker) {
+      this.levelScene.remove(this.levelCrowdMarker);
+      this.levelCrowdMarker = null;
+    }
+    if (crowdEnabled) {
+      const marker = new THREE.Group();
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(12, 0.12, 8, 48),
+        new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0x4a2a08, emissiveIntensity: 0.5 }),
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = ground.y + 0.05;
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 2.5, 12),
+        new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x4a2a08, emissiveIntensity: 0.35 }),
+      );
+      pillar.position.set(0, ground.y + 1.25, 0);
+      marker.add(ring, pillar);
+      this.levelCrowdMarker = marker;
+      this.levelScene.add(marker);
+    }
 
     this.levelObstacleMeshes.clear();
     this.levelObstacleGroup.clear();
@@ -1630,6 +1654,7 @@ export class EditorApp {
     const loadSceneFromState = (name: string) => {
       const entry = sceneState.scenes.find((s) => s.name === name);
       if (!entry) return;
+      sceneList.value = entry.name;
       sceneNameInput.value = entry.name;
       sceneObstacles.value = JSON.stringify(entry.obstacles ?? [], null, 2);
       syncSceneJson();
