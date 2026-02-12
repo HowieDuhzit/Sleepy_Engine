@@ -1,13 +1,37 @@
 # Sleepy Engine - Project Notes
 
 ## Overview
-Sleepy Engine is a session-based multiplayer urban riot sandbox prototype with an authoritative Colyseus server and a Three.js + Vite client. The server simulates players, combat, and crowds; the client handles rendering, input, and UI (including the animation/editor tools).
+Sleepy Engine is a retro-console style game engine with a built-in editor. It boots with a splash screen, then enters a console-style main menu where you can:
+- Launch games/scenes
+- Open the integrated game editor
+- Adjust global engine settings
+
+Think of it as a development console: a game engine that runs in "console mode" but ships with full creator tools.
+
+## Core Goals
+- **Console feel**: boot splash, menu, and fast load into games.
+- **Retro aesthetic**: PSX/retro rendering pipeline with adjustable presets.
+- **Editor-first**: animation, player, scene/level editing inside the same runtime.
+- **Authoritative multiplayer**: Colyseus server with shared protocol for live testing.
 
 ## Repo Layout
-- `client/` - Three.js + Vite app, game + editor UI, assets, PSX render settings.
-- `server/` - Colyseus + Express server, rooms, snapshots, REST endpoints.
-- `shared/` - Shared constants/protocol types for client + server.
-- `docs/PROJECT.md` - Consolidated documentation (this file).
+- `client/` - Three.js + Vite app (game runtime + editor UI + PSX renderer).
+- `server/` - Colyseus + Express server, project APIs, and game rooms.
+- `shared/` - Shared constants/types for client + server.
+- `server/projects/` - Project data (animations, scenes, avatars, configs).
+
+## Runtime Flow
+1. Splash screen boot
+2. Console menu (play, editor, settings)
+3. Load a project + scene
+
+## Projects
+Projects live in `server/projects/<projectId>/`:
+- `project.json` - metadata
+- `player.json` - player controller config
+- `animations/` - JSON clips
+- `scenes/` - `scenes.json`
+- `avatars/` - VRM models
 
 ## Key Commands (pnpm)
 - `pnpm install`
@@ -16,10 +40,10 @@ Sleepy Engine is a session-based multiplayer urban riot sandbox prototype with a
 - `pnpm build` (all workspaces)
 - `pnpm lint`
 
-## Runtime Ports & URLs
+## Ports & Networking
 - Server: `ws://localhost:2567` (local)
 - Client: `http://localhost:5173` (local)
-- Production: Nginx on port 80 proxies WebSocket/API to server port 2567.
+- Production: Nginx on port 80 proxies WebSocket/API to 2567
 
 ## Deployment (Docker/Coolify)
 The `Dockerfile` builds an all-in-one image with Nginx + server.
@@ -29,19 +53,15 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
   - `/app/animations`
   - `/app/config`
   - `/app/data`
+  - `/app/projects` (if you want project data persisted)
 
 **Coolify (Dockerfile build):**
 - Container port: **80**
-- Environment: set `GAME_PORT=2567` (prevents port 80 conflict)
-- Volumes: map the three paths above
+- Environment: set `GAME_PORT=2567`
+- Volumes: map the paths above
 
-## Architecture Summary
-- Server runs Express + Colyseus on port 2567.
-- Nginx serves static client assets and proxies `/matchmake/*`, `/api/*`, and room paths to Colyseus.
-- Client connects to the same domain and auto-selects ws/wss based on protocol.
-
-## PSX/Visual Settings
-The client has PSX-style rendering options and color adjustments. Settings are shared between game and editor and persisted via local storage. Console presets are available in the UI.
+## Rendering Presets
+PSX-style rendering is integrated in both game and editor. Presets, post-processing, and color adjustments are managed via the shared settings system.
 
 ## Editor Tools
-The editor supports animation clips (JSON), Mixamo retargeting, and scene configuration. Scene definitions are stored in `/app/config/scenes.json` and served from `/config/scenes.json`.
+The editor includes animation, player, and scene editing with project-scoped APIs. Scene definitions are stored in `server/projects/<projectId>/scenes/scenes.json` and are loaded through the same backend used by the game runtime.
