@@ -83,3 +83,18 @@ export const saveGameAnimation = async (gameId: string, name: string, payload: u
 
 export const getGameAvatarUrl = (gameId: string, name: string) =>
   `/api/games/${gameId}/avatars/${encodeURIComponent(name)}`;
+
+export const listGameAvatars = async (gameId: string) => {
+  const res = await fetch(`/api/games/${gameId}/avatars`, { cache: 'no-store' });
+  return readJson<{ files?: string[] }>(res);
+};
+
+export const uploadGameAvatar = async (gameId: string, name: string, file: File) => {
+  const body = await file.arrayBuffer();
+  const res = await fetch(`/api/games/${gameId}/avatars/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body,
+  });
+  return readJson<{ ok: boolean; file: string }>(res);
+};

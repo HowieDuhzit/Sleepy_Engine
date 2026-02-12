@@ -46,6 +46,7 @@ export class GameApp {
   private obstacleGroup: THREE.Group | null = null;
   private groundMesh: THREE.Mesh | null = null;
   private playerConfig = {
+    avatar: '',
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
@@ -1923,7 +1924,9 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
-      const playerAvatar = typeof (scene as any)?.player?.avatar === 'string' ? String((scene as any).player.avatar) : '';
+      const sceneAvatar = typeof (scene as any)?.player?.avatar === 'string' ? String((scene as any).player.avatar) : '';
+      const configAvatar = typeof (this.playerConfig as any).avatar === 'string' ? String((this.playerConfig as any).avatar) : '';
+      const playerAvatar = sceneAvatar || configAvatar;
       this.playerAvatarEnabled = playerAvatar.length > 0;
       if (this.playerAvatarEnabled) {
         this.localAvatarName = playerAvatar;

@@ -323,6 +323,51 @@ app.get('/api/games/:gameId/animations/:name', async (req: Request, res: Respons
 });
 
 // Get game avatar asset
+app.get('/api/games/:gameId/avatars', async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
+      return;
+    }
+    await ensureGameDir(gameId);
+    const avatarDir = path.join(gamesDir, gameId, 'avatars');
+    const entries = await fs.readdir(avatarDir);
+    const files = entries.filter((file) => /\.(vrm|glb|gltf)$/i.test(file));
+    res.json({ files });
+  } catch (err) {
+    res.status(500).json({ error: 'failed_to_list', detail: String(err) });
+  }
+});
+
+app.post(
+  '/api/games/:gameId/avatars/:name',
+  requireAdmin,
+  express.raw({ type: 'application/octet-stream', limit: '200mb' }),
+  async (req: Request, res: Response) => {
+    try {
+      const gameId = safeGameId(req.params.gameId ?? '');
+      const rawName = req.params.name ?? '';
+      if (!gameId || !rawName) {
+        res.status(400).json({ error: 'missing_params' });
+        return;
+      }
+      const filename = safeAssetName(rawName);
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      await ensureGameDir(gameId);
+      const filePath = path.join(gamesDir, gameId, 'avatars', filename);
+      await fs.writeFile(filePath, body);
+      res.json({ ok: true, file: filename });
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_save', detail: String(err) });
+    }
+  },
+);
+
 app.get('/api/games/:gameId/avatars/:name', async (req: Request, res: Response) => {
   try {
     const gameId = safeGameId(req.params.gameId ?? '');

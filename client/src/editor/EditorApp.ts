@@ -14,9 +14,11 @@ import {
   createGame,
   getGameAnimation,
   getGameAvatarUrl,
+  listGameAvatars,
   getGameScenes,
   listGames,
   saveGameAnimation,
+  uploadGameAvatar,
   saveGameScenes,
 } from '../services/game-api';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
@@ -460,6 +462,7 @@ export class EditorApp {
     { name: 'rightFoot', parent: 'rightLowerLeg' },
   ];
   private playerConfig = {
+    avatar: 'default.vrm',
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
@@ -1161,6 +1164,13 @@ export class EditorApp {
       '<label class="field"><span>Min Pitch</span><input data-cam-min-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Max Pitch</span><input data-cam-max-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Target Smooth</span><input data-cam-target-smooth type="number" step="1" /></label>',
+      '<label class="field"><span>Avatar</span><select data-player-avatar></select></label>',
+      '<label class="field"><span>Upload VRM/GLB</span><input data-player-avatar-file type="file" accept=".vrm,.glb,.gltf" /></label>',
+      '<div class="panel-actions">',
+      '<button data-player-avatar-refresh>Refresh Avatars</button>',
+      '<button data-player-avatar-load>Load Avatar</button>',
+      '<button data-player-avatar-save>Save Avatar</button>',
+      '</div>',
       '<div class="panel-actions">',
       '<button data-player-load>Load</button>',
       '<button data-player-save>Save</button>',
@@ -1613,6 +1623,11 @@ export class EditorApp {
     const overrideBtn = hud.querySelector('[data-override]') as HTMLButtonElement;
     const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
     const playerJson = hud.querySelector('[data-player-json]') as HTMLTextAreaElement;
+    const playerAvatarSelect = hud.querySelector('[data-player-avatar]') as HTMLSelectElement;
+    const playerAvatarFileInput = hud.querySelector('[data-player-avatar-file]') as HTMLInputElement;
+    const playerAvatarRefreshButton = hud.querySelector('[data-player-avatar-refresh]') as HTMLButtonElement;
+    const playerAvatarLoadButton = hud.querySelector('[data-player-avatar-load]') as HTMLButtonElement;
+    const playerAvatarSaveButton = hud.querySelector('[data-player-avatar-save]') as HTMLButtonElement;
     const moveSpeedInput = hud.querySelector('[data-move-speed]') as HTMLInputElement;
     const sprintMultInput = hud.querySelector('[data-sprint-mult]') as HTMLInputElement;
     const crouchMultInput = hud.querySelector('[data-crouch-mult]') as HTMLInputElement;
@@ -2023,6 +2038,37 @@ export class EditorApp {
       playerJson.value = JSON.stringify(this.playerConfig, null, 2);
     };
 
+    const refreshPlayerAvatars = async () => {
+      if (!this.currentGameId) {
+        playerAvatarSelect.innerHTML = '<option value="">(No Avatar)</option>';
+        return;
+      }
+      try {
+        const data = await listGameAvatars(this.currentGameId);
+        const files = (data.files ?? []).slice().sort((a, b) => a.localeCompare(b));
+        playerAvatarSelect.innerHTML = '';
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = '(No Avatar)';
+        playerAvatarSelect.appendChild(noneOption);
+        for (const file of files) {
+          const option = document.createElement('option');
+          option.value = file;
+          option.textContent = file;
+          playerAvatarSelect.appendChild(option);
+        }
+        const currentAvatar = String(this.playerConfig.avatar ?? '');
+        if (currentAvatar && files.includes(currentAvatar)) {
+          playerAvatarSelect.value = currentAvatar;
+        } else {
+          playerAvatarSelect.value = '';
+        }
+      } catch (error) {
+        playerAvatarSelect.innerHTML = '<option value="">(No Avatar)</option>';
+        if (playerStatus) playerStatus.textContent = `Avatar list failed: ${String(error)}`;
+      }
+    };
+
     const setPlayerInputs = () => {
       if (!ikOffsetInput) return;
       moveSpeedInput.value = this.playerConfig.moveSpeed.toFixed(2);
@@ -2047,6 +2093,7 @@ export class EditorApp {
       camMinPitchInput.value = this.playerConfig.cameraMinPitch.toFixed(2);
       camMaxPitchInput.value = this.playerConfig.cameraMaxPitch.toFixed(2);
       camTargetSmoothInput.value = this.playerConfig.targetSmoothSpeed.toFixed(0);
+      playerAvatarSelect.value = String(this.playerConfig.avatar ?? '');
       if (rigBoneSelect && rigBoneSelect.options.length === 0) {
         for (const def of this.ragdollDefs) {
           const opt = document.createElement('option');
@@ -2105,6 +2152,7 @@ export class EditorApp {
       this.playerConfig.cameraMinPitch = Number(camMinPitchInput.value) || 0;
       this.playerConfig.cameraMaxPitch = Number(camMaxPitchInput.value) || 0;
       this.playerConfig.targetSmoothSpeed = Number(camTargetSmoothInput.value) || 0;
+      this.playerConfig.avatar = playerAvatarSelect.value || '';
       if (rigBoneSelect) {
         const name = rigBoneSelect.value;
         if (name) {
@@ -2137,6 +2185,8 @@ export class EditorApp {
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
         setPlayerInputs();
+        await refreshPlayerAvatars();
+        this.loadVrm();
         if (playerStatus) playerStatus.textContent = 'Loaded player config.';
       } catch (error) {
         if (playerStatus) playerStatus.textContent = `Load failed: ${String(error)}`;
@@ -2159,7 +2209,41 @@ export class EditorApp {
       }
     });
 
+    playerAvatarRefreshButton?.addEventListener('click', async () => {
+      await refreshPlayerAvatars();
+      if (playerStatus) playerStatus.textContent = 'Avatar list refreshed.';
+    });
+
+    playerAvatarLoadButton?.addEventListener('click', () => {
+      this.playerConfig.avatar = playerAvatarSelect.value || '';
+      syncPlayerJson();
+      this.loadVrm();
+      if (playerStatus) {
+        playerStatus.textContent = this.playerConfig.avatar
+          ? `Loaded avatar ${this.playerConfig.avatar}`
+          : 'Avatar cleared (no model)';
+      }
+    });
+
+    playerAvatarSaveButton?.addEventListener('click', async () => {
+      try {
+        if (!this.currentGameId) throw new Error('No game selected');
+        const file = playerAvatarFileInput.files?.[0];
+        if (!file) throw new Error('No VRM/GLB file selected');
+        await uploadGameAvatar(this.currentGameId, file.name, file);
+        this.playerConfig.avatar = file.name;
+        syncPlayerJson();
+        await refreshPlayerAvatars();
+        playerAvatarSelect.value = file.name;
+        this.loadVrm();
+        if (playerStatus) playerStatus.textContent = `Uploaded and selected ${file.name}`;
+      } catch (error) {
+        if (playerStatus) playerStatus.textContent = `Avatar upload failed: ${String(error)}`;
+      }
+    });
+
     setPlayerInputs();
+    void refreshPlayerAvatars();
     [
       moveSpeedInput,
       sprintMultInput,
@@ -2183,6 +2267,7 @@ export class EditorApp {
       camMinPitchInput,
       camMaxPitchInput,
       camTargetSmoothInput,
+      playerAvatarSelect,
     ].forEach((input) => {
       input?.addEventListener('change', readPlayerInputs);
     });
@@ -2311,6 +2396,8 @@ export class EditorApp {
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
         setPlayerInputs();
+        await refreshPlayerAvatars();
+        this.loadVrm();
       } catch {
         // ignore
       }
@@ -3105,7 +3192,15 @@ export class EditorApp {
 
   private loadVrm() {
     if (!this.currentGameId) return;
-    const url = getGameAvatarUrl(this.currentGameId, 'default.vrm');
+    const avatarName = String(this.playerConfig.avatar ?? '').trim();
+    if (!avatarName) {
+      if (this.vrm) {
+        this.characterScene.remove(this.vrm.scene);
+        this.vrm = null;
+      }
+      return;
+    }
+    const url = getGameAvatarUrl(this.currentGameId, avatarName);
     this.gltfLoader.load(
       url,
       (gltf) => {
