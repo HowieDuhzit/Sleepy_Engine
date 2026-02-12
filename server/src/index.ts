@@ -5,6 +5,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
 import { closeDb, dbEnabled, dbHealth } from './db.js';
+import { closeRedis, redisEnabled, redisHealth } from './redis.js';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
@@ -18,6 +19,11 @@ app.use(express.json({ limit: '25mb' }));
 
 app.get('/api/db/health', async (_req: Request, res: Response) => {
   const status = await dbHealth();
+  res.json(status);
+});
+
+app.get('/api/redis/health', async (_req: Request, res: Response) => {
+  const status = await redisHealth();
   res.json(status);
 });
 
@@ -317,16 +323,21 @@ ensureProjectsDir().then(() => {
   if (dbEnabled) {
     console.log('Database enabled via DATABASE_URL');
   }
+  if (redisEnabled) {
+    console.log('Redis enabled via REDIS_URL');
+  }
 });
 
 process.on('SIGTERM', async () => {
   await closeDb();
+  await closeRedis();
   gameServer.gracefullyShutdown();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   await closeDb();
+  await closeRedis();
   gameServer.gracefullyShutdown();
   process.exit(0);
 });

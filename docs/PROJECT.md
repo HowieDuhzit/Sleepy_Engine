@@ -44,7 +44,10 @@ Project APIs:
 Postgres is the recommended primary database for persistence and tooling. Configure it with:
 - `DATABASE_URL=postgres://user:pass@host:5432/db`
 
-When unset, the server runs without a database.
+Redis is optional for fast ephemeral state or future multi-node coordination:
+- `REDIS_URL=redis://host:6379`
+
+When unset, the server runs without DB/Redis access.
 
 ## Key Commands (pnpm)
 - `pnpm install`

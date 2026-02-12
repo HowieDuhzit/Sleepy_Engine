@@ -17,6 +17,8 @@ services:
 
       # Database (Postgres)
       DATABASE_URL: postgres://sleepy:sleepy@db:5432/sleepy_engine
+      # Redis (optional)
+      REDIS_URL: redis://redis:6379
 
     volumes:
       # Persistent storage for projects
@@ -45,10 +47,17 @@ services:
     volumes:
       - game-db:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - game-redis:/data
+
 volumes:
   game-projects:
     driver: local
   game-data:
     driver: local
   game-db:
+    driver: local
+  game-redis:
     driver: local
