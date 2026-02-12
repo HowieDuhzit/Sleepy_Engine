@@ -6,12 +6,12 @@ Sleepy Engine is a retro-console style game engine with a built-in editor. It bo
 - Open the integrated game editor
 - Adjust global engine settings
 
-Think of it as a development console: a game engine that runs in "console mode" but ships with full creator tools.
+Think of it as a development console: a game engine that runs in \"console mode\" but ships with full creator tools.
 
 ## Core Goals
 - **Console feel**: boot splash, menu, and fast load into games.
 - **Retro aesthetic**: PSX/retro rendering pipeline with adjustable presets.
-- **Editor-first**: animation, player, scene/level editing inside the same runtime.
+- **Editor-first**: animation, player, and scene editing inside the same runtime.
 - **Authoritative multiplayer**: Colyseus server with shared protocol for live testing.
 
 ## Repo Layout
@@ -33,6 +33,12 @@ Projects live in `server/projects/<projectId>/`:
 - `scenes/` - `scenes.json`
 - `avatars/` - VRM models
 
+Project APIs:
+- `GET /api/projects` (list)
+- `POST /api/projects` (create)
+- `GET/POST /api/projects/:projectId/animations/:name`
+- `GET/POST /api/projects/:projectId/scenes`
+
 ## Key Commands (pnpm)
 - `pnpm install`
 - `pnpm dev` (client on http://localhost:5173)
@@ -53,7 +59,7 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
   - `/app/animations`
   - `/app/config`
   - `/app/data`
-  - `/app/projects` (if you want project data persisted)
+  - `/app/projects` (project data)
 
 **Coolify (Dockerfile build):**
 - Container port: **80**

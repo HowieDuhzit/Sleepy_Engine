@@ -1,6 +1,6 @@
 # Sleepy Engine
 
-Session-based multiplayer urban riot sandbox prototype. The client is a Three.js + Vite app, the server is a Colyseus authoritative simulation, and shared protocol types live in `shared/`.
+Retro-console style game engine with a built-in editor. The app boots to a splash screen, enters a console menu, and can launch games/scenes, open the editor, or change engine settings. The client is Three.js + Vite, the server is Colyseus + Express, and shared protocol types live in `shared/`.
 
 ## Quick Start
 
@@ -24,11 +24,17 @@ pnpm dev
 
 The client connects to `ws://localhost:2567` by default.
 
+## Console Flow
+1) Splash screen boot
+2) Console menu (play, editor, settings)
+3) Load project + scene
+
 ## Workspace Layout
 - `client/` Three.js + Vite frontend
 - `server/` Colyseus authoritative backend
 - `shared/` protocol/types shared between client/server
 - `docs/PROJECT.md` consolidated project notes
+- `server/projects/` project data (animations, scenes, avatars, configs)
 
 ## Docker (Local Test / Deployment)
 

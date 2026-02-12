@@ -2,14 +2,15 @@
 
 ## Project Structure & Module Organization
 This repo is a pnpm workspace with three packages:
-- `client/`: Three.js + Vite app (rendering, input, HUD, networking).
-- `server/`: Colyseus authoritative server (rooms, state, tick loop).
+- `client/`: Three.js + Vite app (console UI, game runtime, editor).
+- `server/`: Colyseus + Express backend (project APIs, rooms, tick loop).
 - `shared/`: Protocol/types shared by client and server.
 
 Supporting directories:
 - `assets/`: art, audio, VFX, and glTF content.
 - `tests/`: future integration/unit tests (keep deterministic, server-focused).
-- `docs/`: design and implementation notes (e.g., `docs/PLAN.md`).
+- `docs/`: consolidated notes in `docs/PROJECT.md`.
+- `server/projects/`: project data (animations, scenes, avatars, configs).
 
 ## Build, Test, and Development Commands
 Use pnpm from the repo root:
@@ -42,3 +43,11 @@ PRs should include a concise summary, test steps (commands + expected output), a
 
 ## Configuration & Secrets
 Use `.env` files for local config. Never commit secrets. Document required variables in `README.md` once they exist.
+
+## Project Data & APIs
+Projects are served from `server/projects/<projectId>/` and accessed via:
+- `/api/projects` (list/create)
+- `/api/projects/:projectId/animations/*`
+- `/api/projects/:projectId/scenes`
+
+When editing animations/scenes, ensure the project ID is set in the console menu or editor.
