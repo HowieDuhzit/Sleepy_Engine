@@ -165,6 +165,7 @@ export class RiotRoom extends Room {
   declare state: RiotState;
   private obstacles: Obstacle[] = OBSTACLES;
   private inputBuffer = new Map<string, PlayerInput>();
+  private lastInputSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
   private readonly navCell = 2.5;
@@ -209,6 +210,26 @@ export class RiotRoom extends Room {
     this.obstacles = await loadSceneObstacles(options);
   }
 
+  private sanitizeInput(input: PlayerInput): PlayerInput {
+    const clampUnit = (value: number) => Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
+    const sanitizeBool = (value: unknown) => value === true;
+    const sanitizeNumber = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
+    return {
+      seq: Math.max(0, Math.floor(sanitizeNumber(input.seq))),
+      moveX: clampUnit(input.moveX),
+      moveZ: clampUnit(input.moveZ),
+      lookYaw: sanitizeNumber(input.lookYaw),
+      lookPitch: sanitizeNumber(input.lookPitch),
+      animState: typeof input.animState === 'string' ? input.animState : 'idle',
+      animTime: sanitizeNumber(input.animTime),
+      sprint: sanitizeBool(input.sprint),
+      attack: sanitizeBool(input.attack),
+      interact: sanitizeBool(input.interact),
+      jump: sanitizeBool(input.jump),
+      crouch: sanitizeBool(input.crouch),
+    };
+  }
+
   async onCreate(options?: RoomOptions) {
     this.setState(new RiotState());
     this.maxClients = 16;
@@ -218,7 +239,11 @@ export class RiotRoom extends Room {
     this.navGrid = new NavGrid(this.navHalf, this.navCell, this.obstacles);
 
     this.onMessage(PROTOCOL.input, (client, message: PlayerInput) => {
-      this.inputBuffer.set(client.sessionId, message);
+      const input = this.sanitizeInput(message);
+      const lastSeq = this.lastInputSeq.get(client.sessionId) ?? -1;
+      if (input.seq <= lastSeq) return;
+      this.lastInputSeq.set(client.sessionId, input.seq);
+      this.inputBuffer.set(client.sessionId, input);
     });
   }
 
@@ -235,6 +260,7 @@ export class RiotRoom extends Room {
   onLeave(client: Client) {
     this.state.players.delete(client.sessionId);
     this.inputBuffer.delete(client.sessionId);
+    this.lastInputSeq.delete(client.sessionId);
   }
 
   private update(dt: number) {
