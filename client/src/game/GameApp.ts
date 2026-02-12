@@ -1129,7 +1129,7 @@ export class GameApp {
 
   private async connect() {
     try {
-      await this.roomClient.connect();
+      await this.roomClient.connect({ projectId: this.projectId, sceneName: this.sceneName });
       this.localId = this.roomClient.getSessionId();
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));

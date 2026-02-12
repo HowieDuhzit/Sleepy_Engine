@@ -1,4 +1,6 @@
 import colyseusPkg from 'colyseus';
+import path from 'path';
+import { promises as fs } from 'fs';
 import { RiotState, PlayerState } from '../state/RiotState.js';
 import {
   PROTOCOL,
@@ -29,6 +31,7 @@ import {
   ATTACK_DAMAGE,
   ATTACK_KNOCKBACK,
   OBSTACLES,
+  type Obstacle,
   resolveCircleAabb,
   resolveCircleCircle,
 } from '@sleepy/shared';
@@ -37,6 +40,58 @@ const { Room } = colyseusPkg as typeof import('colyseus');
 type Client = import('colyseus').Client;
 
 type NavCell = { i: number; j: number };
+type SceneObstacle = {
+  id?: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  width?: number;
+  height?: number;
+  depth?: number;
+  position?: { x: number; y: number; z: number };
+  size?: { x: number; y: number; z: number };
+};
+type RoomOptions = {
+  projectId?: string;
+  sceneName?: string;
+};
+
+const defaultProjectId = 'prototype';
+const defaultSceneName = 'prototype';
+const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
+const safeSegment = (value: string) => value.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+const asNumber = (value: unknown, fallback: number) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+const toObstacle = (input: SceneObstacle, index: number): Obstacle => {
+  if (input.position && input.size) {
+    return {
+      id: input.id ?? `obstacle_${index}`,
+      position: {
+        x: asNumber(input.position.x, 0),
+        y: asNumber(input.position.y, 0),
+        z: asNumber(input.position.z, 0),
+      },
+      size: {
+        x: Math.max(0.01, asNumber(input.size.x, 1)),
+        y: Math.max(0.01, asNumber(input.size.y, 1)),
+        z: Math.max(0.01, asNumber(input.size.z, 1)),
+      },
+    };
+  }
+  return {
+    id: input.id ?? `obstacle_${index}`,
+    position: {
+      x: asNumber(input.x, 0),
+      y: asNumber(input.y, 0),
+      z: asNumber(input.z, 0),
+    },
+    size: {
+      x: Math.max(0.01, asNumber(input.width, 1)),
+      y: Math.max(0.01, asNumber(input.height, 1)),
+      z: Math.max(0.01, asNumber(input.depth, 1)),
+    },
+  };
+};
 
 class NavGrid {
   private half: number;
@@ -45,7 +100,7 @@ class NavGrid {
   private rows: number;
   private blocked = new Set<string>();
 
-  constructor(half: number, cell: number, obstacles: typeof OBSTACLES) {
+  constructor(half: number, cell: number, obstacles: Obstacle[]) {
     this.half = half;
     this.cell = cell;
     this.cols = Math.floor((half * 2) / cell);
@@ -64,7 +119,7 @@ class NavGrid {
     return `${i},${j}`;
   }
 
-  private isBlocked(x: number, z: number, obstacles: typeof OBSTACLES) {
+  private isBlocked(x: number, z: number, obstacles: Obstacle[]) {
     for (const obstacle of obstacles) {
       const halfX = obstacle.size.x / 2 + CROWD_RADIUS;
       const halfZ = obstacle.size.z / 2 + CROWD_RADIUS;
@@ -157,6 +212,7 @@ class NavGrid {
 
 export class RiotRoom extends Room {
   declare state: RiotState;
+  private obstacles: Obstacle[] = OBSTACLES;
   private inputBuffer = new Map<string, PlayerInput>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
@@ -188,7 +244,7 @@ export class RiotRoom extends Room {
 
   private sampleGroundHeight(x: number, z: number) {
     let height = GROUND_Y;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
       if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
@@ -198,12 +254,29 @@ export class RiotRoom extends Room {
     return height;
   }
 
-  onCreate() {
+  private async loadRoomObstacles(options?: RoomOptions) {
+    const projectId = safeSegment(options?.projectId ?? defaultProjectId) || defaultProjectId;
+    const sceneName = String(options?.sceneName ?? defaultSceneName);
+    const scenesPath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
+    try {
+      const raw = await fs.readFile(scenesPath, 'utf8');
+      const payload = JSON.parse(raw) as { scenes?: Array<{ name: string; obstacles?: SceneObstacle[] }> };
+      const scene = payload.scenes?.find((entry) => entry.name === sceneName) ?? payload.scenes?.[0];
+      this.obstacles = Array.isArray(scene?.obstacles)
+        ? scene.obstacles.map((obs, index) => toObstacle(obs, index))
+        : [];
+    } catch {
+      this.obstacles = [];
+    }
+  }
+
+  async onCreate(options?: RoomOptions) {
     this.setState(new RiotState());
     this.maxClients = 16;
     this.setPrivate(false);
+    await this.loadRoomObstacles(options);
     this.setSimulationInterval((dt) => this.update(dt), 1000 / 20);
-    this.navGrid = new NavGrid(this.navHalf, this.navCell, OBSTACLES);
+    this.navGrid = new NavGrid(this.navHalf, this.navCell, this.obstacles);
 
     this.onMessage(PROTOCOL.input, (client, message: PlayerInput) => {
       this.inputBuffer.set(client.sessionId, message);
@@ -276,7 +349,7 @@ export class RiotRoom extends Room {
       player.z += player.vz * delta;
 
       let resolved = { x: player.x, y: player.y, z: player.z };
-      for (const obstacle of OBSTACLES) {
+      for (const obstacle of this.obstacles) {
         resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
       }
       player.x = resolved.x;
@@ -414,7 +487,7 @@ export class RiotRoom extends Room {
       agent.z = Math.max(-CROWD_BOUNDS, Math.min(CROWD_BOUNDS, agent.z));
 
       let resolved = { x: agent.x, y: agent.y, z: agent.z };
-      for (const obstacle of OBSTACLES) {
+      for (const obstacle of this.obstacles) {
         resolved = resolveCircleAabb(resolved, CROWD_RADIUS, obstacle);
       }
       agent.x = resolved.x;
