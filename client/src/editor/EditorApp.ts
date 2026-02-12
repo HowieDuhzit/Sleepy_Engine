@@ -38,6 +38,15 @@ type RestPose = {
 };
 
 type Vec3 = { x: number; y: number; z: number };
+type LevelObstacle = {
+  id?: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  width?: number;
+  height?: number;
+  depth?: number;
+};
 
 type RagdollBone = {
   name: string;
@@ -147,6 +156,15 @@ export class EditorApp {
   private ragdollHandleLine = new THREE.Line3();
   private ragdollHandleTemp = new THREE.Vector3();
   private ragdollHandleTemp2 = new THREE.Vector3();
+  private levelTransform: TransformControls | null = null;
+  private levelObstacleGroup = new THREE.Group();
+  private levelObstacleMeshes = new Map<string, THREE.Mesh>();
+  private selectedLevelObstacleId: string | null = null;
+  private levelSceneListEl: HTMLSelectElement | null = null;
+  private levelSceneObstaclesEl: HTMLTextAreaElement | null = null;
+  private levelSceneJsonEl: HTMLTextAreaElement | null = null;
+  private levelObjectSelectEl: HTMLSelectElement | null = null;
+  private levelSceneStateRef: { scenes: Array<{ name: string; obstacles?: LevelObstacle[] }> } | null = null;
 
   // Game management
   private currentGameId: string | null = null;
@@ -403,7 +421,7 @@ export class EditorApp {
   };
   private boneVisualsVisible = true;
   private overrideMode = false;
-  public updateLevelVisualization: (obstacles: any[]) => void = () => {};
+  public updateLevelVisualization: (obstacles: LevelObstacle[]) => void = () => {};
   private readonly ragdollDefs: { name: string; parent?: string }[] = [
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
@@ -535,6 +553,19 @@ export class EditorApp {
       this.characterScene.add(this.ragdollTransform._root);
     }
 
+    this.levelTransform = new TransformControls(this.camera, this.renderer.domElement);
+    (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    this.levelTransform.setMode('translate');
+    this.levelTransform.addEventListener('dragging-changed', (event) => {
+      if (this.controls) this.controls.enabled = !event.value;
+    });
+    this.levelTransform.addEventListener('objectChange', this.handleLevelTransformObjectChange);
+    // @ts-expect-error
+    if (this.levelTransform._root) {
+      // @ts-expect-error
+      this.levelScene.add(this.levelTransform._root);
+    }
+
     this.hud = this.createHud();
     this.viewport?.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.width = '100%';
@@ -623,6 +654,7 @@ export class EditorApp {
     this.viewport?.removeEventListener('drop', this.handleDrop);
     this.viewport?.removeEventListener('dragleave', this.handleDragLeave);
     this.renderer.dispose();
+    this.levelTransform?.removeEventListener('objectChange', this.handleLevelTransformObjectChange);
     this.container.innerHTML = '';
   }
 
@@ -716,6 +748,136 @@ export class EditorApp {
       }
     }
   }
+
+  private normalizeLevelObstacle(obstacle: LevelObstacle, index: number): Required<LevelObstacle> {
+    return {
+      id: obstacle.id ?? `obstacle_${index + 1}`,
+      x: Number(obstacle.x ?? 0),
+      y: Number(obstacle.y ?? 0),
+      z: Number(obstacle.z ?? 0),
+      width: Math.max(0.1, Number(obstacle.width ?? 1)),
+      height: Math.max(0.1, Number(obstacle.height ?? 1)),
+      depth: Math.max(0.1, Number(obstacle.depth ?? 1)),
+    };
+  }
+
+  private getCurrentLevelSceneEntry() {
+    const sceneState = this.levelSceneStateRef;
+    const sceneList = this.levelSceneListEl;
+    if (!sceneState || !sceneList) return null;
+    return sceneState.scenes.find((scene) => scene.name === sceneList.value) ?? null;
+  }
+
+  private syncLevelTextEditors() {
+    const scene = this.getCurrentLevelSceneEntry();
+    if (!scene || !this.levelSceneObstaclesEl || !this.levelSceneJsonEl || !this.levelSceneStateRef) return;
+    this.levelSceneObstaclesEl.value = JSON.stringify(scene.obstacles ?? [], null, 2);
+    this.levelSceneJsonEl.value = JSON.stringify(this.levelSceneStateRef, null, 2);
+  }
+
+  private refreshLevelObjectSelect() {
+    if (!this.levelObjectSelectEl) return;
+    const scene = this.getCurrentLevelSceneEntry();
+    this.levelObjectSelectEl.innerHTML = '';
+    const obstacles = scene?.obstacles ?? [];
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const item = this.normalizeLevelObstacle(obstacles[i] ?? {}, i);
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.id;
+      this.levelObjectSelectEl.appendChild(option);
+    }
+    if (this.selectedLevelObstacleId && this.levelObstacleMeshes.has(this.selectedLevelObstacleId)) {
+      this.levelObjectSelectEl.value = this.selectedLevelObstacleId;
+    } else if (obstacles.length > 0) {
+      const first = this.normalizeLevelObstacle(obstacles[0] ?? {}, 0);
+      this.levelObjectSelectEl.value = first.id;
+      this.selectLevelObstacle(first.id);
+    } else {
+      this.selectLevelObstacle(null);
+    }
+  }
+
+  private updateLevelVisualizationFromState(obstacles: LevelObstacle[]) {
+    this.levelObstacleMeshes.clear();
+    this.levelObstacleGroup.clear();
+
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const obstacle = this.normalizeLevelObstacle(obstacles[i] ?? {}, i);
+      if (!obstacles[i]?.id) obstacles[i] = obstacle;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 }),
+      );
+      mesh.position.set(obstacle.x, obstacle.y + obstacle.height / 2, obstacle.z);
+      mesh.scale.set(obstacle.width, obstacle.height, obstacle.depth);
+      mesh.userData.levelObstacleId = obstacle.id;
+      this.levelObstacleGroup.add(mesh);
+      this.levelObstacleMeshes.set(obstacle.id, mesh);
+    }
+    this.refreshLevelObjectSelect();
+  }
+
+  private selectLevelObstacle(obstacleId: string | null) {
+    this.selectedLevelObstacleId = obstacleId;
+
+    for (const [id, mesh] of this.levelObstacleMeshes) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.color.set(id === obstacleId ? 0xf59e0b : 0x666666);
+      mat.emissive.set(id === obstacleId ? 0x201008 : 0x000000);
+      mat.emissiveIntensity = id === obstacleId ? 0.5 : 0;
+    }
+
+    if (this.levelObjectSelectEl) {
+      this.levelObjectSelectEl.value = obstacleId ?? '';
+    }
+
+    if (!this.levelTransform) return;
+    const mesh = obstacleId ? this.levelObstacleMeshes.get(obstacleId) : null;
+    if (mesh) {
+      this.levelTransform.attach(mesh);
+      (this.levelTransform as unknown as THREE.Object3D).visible = true;
+    } else {
+      this.levelTransform.detach();
+      (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    }
+  }
+
+  private handleLevelTransformObjectChange = () => {
+    const selectedId = this.selectedLevelObstacleId;
+    if (!selectedId) return;
+    const scene = this.getCurrentLevelSceneEntry();
+    const mesh = this.levelObstacleMeshes.get(selectedId);
+    if (!scene || !mesh) return;
+    const obstacles = scene.obstacles ?? [];
+    const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
+    if (index < 0) return;
+
+    obstacles[index] = {
+      id: selectedId,
+      x: mesh.position.x,
+      y: mesh.position.y - mesh.scale.y / 2,
+      z: mesh.position.z,
+      width: Math.max(0.1, mesh.scale.x),
+      height: Math.max(0.1, mesh.scale.y),
+      depth: Math.max(0.1, mesh.scale.z),
+    };
+    scene.obstacles = obstacles;
+    this.syncLevelTextEditors();
+  };
+
+  private pickLevelObstacle = (event: PointerEvent) => {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(Array.from(this.levelObstacleMeshes.values()), false);
+    const hitId = hits[0]?.object.userData.levelObstacleId as string | undefined;
+    if (hitId) {
+      this.selectLevelObstacle(hitId);
+      this.triggerHapticFeedback('light');
+    }
+  };
 
   // Get API path for animations (game-scoped only)
   private getAnimationsPath(): string | null {
@@ -917,6 +1079,19 @@ export class EditorApp {
       '<div class="panel-title">Obstacles JSON</div>',
       '<textarea data-scene-obstacles rows="12" style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>',
       '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Level Tools</div>',
+      '<label class="field"><span>Objects</span><select data-level-object></select></label>',
+      '<div class="panel-actions">',
+      '<button data-level-add>Add Box</button>',
+      '<button data-level-duplicate>Duplicate</button>',
+      '<button data-level-delete>Delete</button>',
+      '</div>',
+      '<label class="field"><span>Transform Mode</span><select data-level-transform-mode><option value="translate">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option></select></label>',
+      '<label class="field"><span>Snap Step</span><input data-level-snap type="number" min="0" step="0.1" value="0.5" /></label>',
+      '<button data-level-focus>Focus Selected</button>',
+      '<div class="clip-status" data-level-status>Select an object in viewport or list to edit transform.</div>',
+      '</div>',
       '</div>',
       '<div class="editor-view" data-viewport>',
       '<div class="viewport-overlay">',
@@ -929,13 +1104,6 @@ export class EditorApp {
       '</label>',
       '<button class="icon-btn" data-reset title="Reset Pose">R</button>',
       '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
-      '</div>',
-      '<div class="overlay-group">',
-      '<button class="icon-btn" data-ragdoll title="Ragdoll">RG</button>',
-      '<button class="icon-btn" data-ragdoll-visual title="Ragdoll Visual">RV</button>',
-      '<button class="icon-btn" data-ragdoll-reset title="Ragdoll Reset">RR</button>',
-      '<button class="icon-btn" data-ragdoll-record title="Ragdoll Record">REC</button>',
-      '<button class="icon-btn" data-ragdoll-stop title="Ragdoll Stop">STP</button>',
       '</div>',
       '</div>',
       '<div class="overlay-bottom-left">',
@@ -1003,7 +1171,6 @@ export class EditorApp {
       '<label class="duration-field"><span>Duration</span><input data-duration type="number" min="1" max="10" step="0.1" value="5" /></label>',
       '</div>',
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
-      '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
       '</div>',
       '<div class="timeline-grid timeline-midi">',
       '<div class="timeline-header" data-timeline-header></div>',
@@ -1302,12 +1469,12 @@ export class EditorApp {
     const mixamoBake = hud.querySelector('[data-mixamo-bake]') as HTMLButtonElement;
     const mixamoStop = hud.querySelector('[data-mixamo-stop]') as HTMLButtonElement;
     const mixamoStatus = hud.querySelector('[data-mixamo-status]') as HTMLSpanElement;
-    const ragdollBtn = hud.querySelector('[data-ragdoll]') as HTMLButtonElement;
-    const ragdollVisualBtn = hud.querySelector('[data-ragdoll-visual]') as HTMLButtonElement;
-    const ragdollResetBtn = hud.querySelector('[data-ragdoll-reset]') as HTMLButtonElement;
-    const ragdollRecordBtn = hud.querySelector('[data-ragdoll-record]') as HTMLButtonElement;
-    const ragdollStopBtn = hud.querySelector('[data-ragdoll-stop]') as HTMLButtonElement;
-    const ragdollStatus = hud.querySelector('[data-ragdoll-status]') as HTMLSpanElement;
+    const ragdollBtn = hud.querySelector('[data-ragdoll]') as HTMLButtonElement | null;
+    const ragdollVisualBtn = hud.querySelector('[data-ragdoll-visual]') as HTMLButtonElement | null;
+    const ragdollResetBtn = hud.querySelector('[data-ragdoll-reset]') as HTMLButtonElement | null;
+    const ragdollRecordBtn = hud.querySelector('[data-ragdoll-record]') as HTMLButtonElement | null;
+    const ragdollStopBtn = hud.querySelector('[data-ragdoll-stop]') as HTMLButtonElement | null;
+    const ragdollStatus = hud.querySelector('[data-ragdoll-status]') as HTMLSpanElement | null;
     const timeline = hud.querySelector('[data-timeline]') as HTMLCanvasElement;
     const timelineHeader = hud.querySelector('[data-timeline-header]') as HTMLDivElement;
     const timelineWrap = hud.querySelector('[data-timeline-wrap]') as HTMLDivElement;
@@ -1364,6 +1531,14 @@ export class EditorApp {
     const sceneStatus = hud.querySelector('[data-scene-status]') as HTMLDivElement;
     const sceneObstacles = hud.querySelector('[data-scene-obstacles]') as HTMLTextAreaElement;
     const sceneJson = hud.querySelector('[data-scene-json]') as HTMLTextAreaElement;
+    const levelObjectSelect = hud.querySelector('[data-level-object]') as HTMLSelectElement;
+    const levelAddBtn = hud.querySelector('[data-level-add]') as HTMLButtonElement;
+    const levelDuplicateBtn = hud.querySelector('[data-level-duplicate]') as HTMLButtonElement;
+    const levelDeleteBtn = hud.querySelector('[data-level-delete]') as HTMLButtonElement;
+    const levelTransformMode = hud.querySelector('[data-level-transform-mode]') as HTMLSelectElement;
+    const levelSnapInput = hud.querySelector('[data-level-snap]') as HTMLInputElement;
+    const levelFocusBtn = hud.querySelector('[data-level-focus]') as HTMLButtonElement;
+    const levelStatus = hud.querySelector('[data-level-status]') as HTMLDivElement;
 
     // Settings tab controls
     const consolePresetSelect = hud.querySelector('[data-console-preset]') as HTMLSelectElement;
@@ -1378,7 +1553,12 @@ export class EditorApp {
     const exposureInput = hud.querySelector('[data-exposure]') as HTMLInputElement;
     const exposureVal = hud.querySelector('[data-exposure-val]') as HTMLElement;
 
-    const sceneState = { scenes: [] as { name: string; obstacles?: any[] }[] };
+    const sceneState = { scenes: [] as { name: string; obstacles?: LevelObstacle[] }[] };
+    this.levelSceneStateRef = sceneState;
+    this.levelSceneListEl = sceneList;
+    this.levelSceneObstaclesEl = sceneObstacles;
+    this.levelSceneJsonEl = sceneJson;
+    this.levelObjectSelectEl = levelObjectSelect;
     const setSceneStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
       sceneStatus.textContent = text;
       sceneStatus.dataset.tone = tone;
@@ -1406,38 +1586,9 @@ export class EditorApp {
     };
 
     // Method to update level scene with obstacles
-    this.updateLevelVisualization = (obstacles: any[]) => {
-      // Clear existing obstacle meshes from level scene
-      const toRemove: THREE.Object3D[] = [];
-      this.levelScene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh && obj.geometry instanceof THREE.BoxGeometry) {
-          // Check if it's an obstacle mesh (not the grid or other objects)
-          if (obj.material instanceof THREE.MeshStandardMaterial) {
-            toRemove.push(obj);
-          }
-        }
-      });
-      toRemove.forEach((obj) => this.levelScene.remove(obj));
-
-      // Add new obstacle meshes
-      for (const obstacle of obstacles) {
-        const geometry = new THREE.BoxGeometry(
-          obstacle.width || 1,
-          obstacle.height || 1,
-          obstacle.depth || 1
-        );
-        const material = new THREE.MeshStandardMaterial({
-          color: 0x666666,
-          roughness: 0.8,
-        });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(
-          obstacle.x || 0,
-          (obstacle.y || 0) + (obstacle.height || 1) / 2, // Center the box
-          obstacle.z || 0
-        );
-        this.levelScene.add(mesh);
-      }
+    this.updateLevelVisualization = (obstacles: LevelObstacle[]) => {
+      this.updateLevelVisualizationFromState(obstacles);
+      this.syncLevelTextEditors();
     };
     const loadScenes = async () => {
       const scenesPath = this.getScenesPath();
@@ -1450,7 +1601,16 @@ export class EditorApp {
       try {
         if (!this.currentGameId) throw new Error('No game selected');
         const data = await getGameScenes(this.currentGameId);
-        sceneState.scenes = data.scenes ?? [{ name: 'main', obstacles: [] }];
+        sceneState.scenes = (data.scenes ?? [{ name: 'main', obstacles: [] }]).map((scene, sceneIndex) => {
+          const rawObstacles = Array.isArray(scene.obstacles) ? scene.obstacles : [];
+          const obstacles = rawObstacles.map((item, obstacleIndex) =>
+            this.normalizeLevelObstacle((item ?? {}) as LevelObstacle, obstacleIndex),
+          );
+          return {
+            name: scene.name || `scene_${sceneIndex + 1}`,
+            obstacles,
+          };
+        });
         syncSceneSelect();
         loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
         setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
@@ -1502,9 +1662,9 @@ export class EditorApp {
     });
     sceneSaveBtn?.addEventListener('click', async () => {
       const name = (sceneNameInput.value || '').trim() || sceneList.value || 'main';
-      let obstacles: any[] = [];
+      let obstacles: LevelObstacle[] = [];
       try {
-        obstacles = JSON.parse(sceneObstacles.value || '[]');
+        obstacles = JSON.parse(sceneObstacles.value || '[]') as LevelObstacle[];
       } catch (err) {
         setSceneStatus(`Invalid JSON: ${String(err)}`, 'warn');
         return;
@@ -1533,6 +1693,82 @@ export class EditorApp {
       syncSceneJson();
       await saveScenes();
     });
+
+    levelObjectSelect.addEventListener('change', () => {
+      this.selectLevelObstacle(levelObjectSelect.value || null);
+      if (levelStatus) levelStatus.textContent = levelObjectSelect.value ? `Selected ${levelObjectSelect.value}` : 'No object selected';
+    });
+
+    levelTransformMode.addEventListener('change', () => {
+      if (!this.levelTransform) return;
+      const mode = levelTransformMode.value as 'translate' | 'rotate' | 'scale';
+      this.levelTransform.setMode(mode);
+      if (levelStatus) levelStatus.textContent = `Transform mode: ${mode}`;
+    });
+
+    levelSnapInput.addEventListener('change', () => {
+      if (!this.levelTransform) return;
+      const snap = Math.max(0, Number(levelSnapInput.value) || 0);
+      this.levelTransform.setTranslationSnap(snap > 0 ? snap : null);
+      this.levelTransform.setRotationSnap(snap > 0 ? THREE.MathUtils.degToRad(Math.max(1, snap * 10)) : null);
+      this.levelTransform.setScaleSnap(snap > 0 ? snap : null);
+      if (levelStatus) levelStatus.textContent = snap > 0 ? `Snap: ${snap}` : 'Snap: off';
+    });
+    levelTransformMode.value = 'translate';
+    levelSnapInput.dispatchEvent(new Event('change'));
+
+    levelAddBtn.addEventListener('click', () => {
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!scene) return;
+      const obstacles = scene.obstacles ?? [];
+      const id = `obstacle_${obstacles.length + 1}`;
+      obstacles.push({ id, x: 0, y: 0, z: 0, width: 1, height: 1, depth: 1 });
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.selectLevelObstacle(id);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Added ${id}`;
+    });
+
+    levelDuplicateBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!selectedId || !scene) return;
+      const obstacles = scene.obstacles ?? [];
+      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
+      if (index < 0) return;
+      const source = this.normalizeLevelObstacle(obstacles[index] ?? {}, index);
+      const id = `obstacle_${obstacles.length + 1}`;
+      obstacles.push({ ...source, id, x: source.x + 1 });
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.selectLevelObstacle(id);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Duplicated ${selectedId} -> ${id}`;
+    });
+
+    levelDeleteBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!selectedId || !scene) return;
+      const obstacles = (scene.obstacles ?? []).filter(
+        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id !== selectedId,
+      );
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Deleted ${selectedId}`;
+    });
+
+    levelFocusBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const mesh = selectedId ? this.levelObstacleMeshes.get(selectedId) : null;
+      if (!mesh || !this.controls) return;
+      this.controls.target.copy(mesh.position);
+      this.camera.position.set(mesh.position.x + 4, mesh.position.y + 4, mesh.position.z + 4);
+      this.controls.update();
+    });
+
     void loadScenes();
 
     // Settings tab initialization and handlers
@@ -1900,9 +2136,9 @@ export class EditorApp {
     });
     rigShowInput?.addEventListener('change', () => {
       if (rigShowInput.checked && !this.ragdollVisible) {
-        void this.toggleRagdollVisual(ragdollStatus);
+        void this.toggleRagdollVisual(ragdollStatus ?? undefined);
       } else if (!rigShowInput.checked && this.ragdollVisible) {
-        void this.toggleRagdollVisual(ragdollStatus);
+        void this.toggleRagdollVisual(ragdollStatus ?? undefined);
       }
     });
     rigApplyButton?.addEventListener('click', () => {
@@ -2385,28 +2621,30 @@ export class EditorApp {
       this.bakeMixamoToClip(mixamoSelect.value, jsonBox, mixamoStatus);
     });
 
-    ragdollBtn.addEventListener('click', () => {
-      this.toggleRagdoll(ragdollStatus);
+    ragdollBtn?.addEventListener('click', () => {
+      void this.toggleRagdoll(ragdollStatus ?? undefined);
     });
 
-    ragdollVisualBtn.addEventListener('click', () => {
-      this.toggleRagdollVisual(ragdollStatus);
+    ragdollVisualBtn?.addEventListener('click', () => {
+      void this.toggleRagdollVisual(ragdollStatus ?? undefined);
     });
 
-    ragdollResetBtn.addEventListener('click', () => {
+    ragdollResetBtn?.addEventListener('click', () => {
       this.resetRagdollPose();
-      ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : this.ragdollVisible ? 'Ragdoll: visual' : 'Ragdoll: off';
+      if (ragdollStatus) {
+        ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : this.ragdollVisible ? 'Ragdoll: visual' : 'Ragdoll: off';
+      }
     });
 
-    ragdollRecordBtn.addEventListener('click', () => {
+    ragdollRecordBtn?.addEventListener('click', () => {
       if (!this.ragdollEnabled) return;
       this.startRagdollRecording();
-      ragdollStatus.textContent = 'Ragdoll: recording';
+      if (ragdollStatus) ragdollStatus.textContent = 'Ragdoll: recording';
     });
 
-    ragdollStopBtn.addEventListener('click', () => {
+    ragdollStopBtn?.addEventListener('click', () => {
       this.ragdollRecording = false;
-      ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
+      if (ragdollStatus) ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
     });
 
     return hud;
@@ -2812,6 +3050,8 @@ export class EditorApp {
     const playerMarker = new THREE.Mesh(playerMarkerGeo, playerMarkerMat);
     playerMarker.position.set(0, 1, 0); // Player spawn at origin
     this.levelScene.add(playerMarker);
+    this.levelObstacleGroup.name = 'level-obstacles';
+    this.levelScene.add(this.levelObstacleGroup);
 
     // Add label for player spawn
     const playerLabel = document.createElement('div');
@@ -2819,8 +3059,7 @@ export class EditorApp {
     playerLabel.style.cssText = 'position: absolute; color: #00ff00; font-size: 12px; pointer-events: none;';
     // Note: Label positioning would need to be updated in render loop for proper 3D->2D projection
 
-    // Load level geometry from config (if exists)
-    this.loadLevelGeometry();
+    // Obstacles are loaded from the selected scene in the level editor UI.
   }
 
   private createSettingsScene() {
@@ -3423,6 +3662,10 @@ export class EditorApp {
 
   private handleViewportPick = (event: PointerEvent) => {
     if (!this.viewport) return;
+    if (this.currentTab === 'level') {
+      this.pickLevelObstacle(event);
+      return;
+    }
 
     // Capture stylus/pointer state
     this.pointerPressure = event.pressure ?? 0.5;
@@ -3771,11 +4014,11 @@ export class EditorApp {
     return this.rapierReady;
   }
 
-  private async toggleRagdoll(status: HTMLElement) {
+  private async toggleRagdoll(status?: HTMLElement) {
     if (!this.vrm) return;
     if (this.ragdollEnabled) {
       this.disableRagdoll();
-      status.textContent = 'Ragdoll: off';
+      if (status) status.textContent = 'Ragdoll: off';
       this.resetPose();
       return;
     }
@@ -3786,7 +4029,7 @@ export class EditorApp {
     this.ragdollEnabled = true;
     this.ragdollVisible = true;
     this.isPlaying = false;
-    status.textContent = 'Ragdoll: on';
+    if (status) status.textContent = 'Ragdoll: on';
   }
 
   private disableRagdoll() {
@@ -3801,14 +4044,14 @@ export class EditorApp {
     this.ragdollDebugMeshes = [];
   }
 
-  private async toggleRagdollVisual(status: HTMLElement) {
+  private async toggleRagdollVisual(status?: HTMLElement) {
     if (!this.vrm) return;
     if (this.ragdollVisible) {
       this.ragdollVisible = false;
       for (const mesh of this.ragdollDebugMeshes) {
         mesh.visible = false;
       }
-      status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
+      if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
       return;
     }
     await this.ensureRapier();
@@ -3827,7 +4070,7 @@ export class EditorApp {
     for (const mesh of this.ragdollDebugMeshes) {
       mesh.visible = true;
     }
-    status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: visual';
+    if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: visual';
   }
 
   private resetRagdollPose() {
