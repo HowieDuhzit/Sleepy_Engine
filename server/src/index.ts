@@ -5,7 +5,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { RiotRoom } from './rooms/RiotRoom.js';
 import { closeDb, dbEnabled, dbHealth } from './db.js';
-import { closeRedis, redisEnabled, redisHealth } from './redis.js';
+import { cacheDel, cacheGet, cacheSet, closeRedis, redisEnabled, redisHealth } from './redis.js';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const projectsDir = process.env.PROJECTS_DIR ?? path.join(process.cwd(), 'projects');
@@ -49,6 +49,8 @@ const ensureProjectDir = async (projectId: string) => {
 const safeProjectId = (id: string) => {
   return id.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
 };
+
+const cacheKey = (...parts: string[]) => `sleepy:${parts.join(':')}`;
 
 // List all projects
 app.get('/api/projects', async (_req: Request, res: Response) => {
@@ -155,10 +157,20 @@ app.get('/api/projects/:projectId/animations', async (req: Request, res: Respons
     }
 
     await ensureProjectDir(projectId);
+    const listKey = cacheKey('project', projectId, 'animations', 'list');
+    const cached = await cacheGet(listKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'application/json');
+      res.send(cached);
+      return;
+    }
+
     const animDir = path.join(projectsDir, projectId, 'animations');
     const entries = await fs.readdir(animDir);
     const files = entries.filter((file) => file.toLowerCase().endsWith('.json'));
 
+    const payload = JSON.stringify({ files });
+    await cacheSet(listKey, payload);
     res.json({ files });
   } catch (err) {
     console.error('List project animations failed', err);
@@ -177,8 +189,16 @@ app.get('/api/projects/:projectId/animations/:name', async (req: Request, res: R
     }
 
     const filename = safeName(rawName);
+    const fileKey = cacheKey('project', projectId, 'animations', filename);
+    const cached = await cacheGet(fileKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'application/json');
+      res.send(cached);
+      return;
+    }
     const filePath = path.join(projectsDir, projectId, 'animations', filename);
     const raw = await fs.readFile(filePath, 'utf8');
+    await cacheSet(fileKey, raw);
     res.setHeader('Content-Type', 'application/json');
     res.send(raw);
   } catch (err) {
@@ -196,8 +216,16 @@ app.get('/api/projects/:projectId/player', async (req: Request, res: Response) =
     }
 
     await ensureProjectDir(projectId);
+    const fileKey = cacheKey('project', projectId, 'player');
+    const cached = await cacheGet(fileKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'application/json');
+      res.send(cached);
+      return;
+    }
     const filePath = path.join(projectsDir, projectId, 'player.json');
     const raw = await fs.readFile(filePath, 'utf8');
+    await cacheSet(fileKey, raw);
     res.setHeader('Content-Type', 'application/json');
     res.send(raw);
   } catch (err) {
@@ -216,7 +244,9 @@ app.post('/api/projects/:projectId/player', async (req: Request, res: Response) 
 
     await ensureProjectDir(projectId);
     const filePath = path.join(projectsDir, projectId, 'player.json');
-    await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+    const payload = JSON.stringify(req.body, null, 2);
+    await fs.writeFile(filePath, payload);
+    await cacheSet(cacheKey('project', projectId, 'player'), payload);
     res.json({ ok: true, file: 'player.json' });
   } catch (err) {
     res.status(500).json({ error: 'failed_to_save', detail: String(err) });
@@ -245,7 +275,10 @@ app.post('/api/projects/:projectId/animations/:name', async (req: Request, res: 
     await ensureProjectDir(projectId);
     const filename = safeName(rawName);
     const filePath = path.join(projectsDir, projectId, 'animations', filename);
-    await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+    const payload = JSON.stringify(req.body, null, 2);
+    await fs.writeFile(filePath, payload);
+    await cacheSet(cacheKey('project', projectId, 'animations', filename), payload);
+    await cacheDel(cacheKey('project', projectId, 'animations', 'list'));
 
     res.json({ ok: true, file: filename });
   } catch (err) {
@@ -263,10 +296,18 @@ app.get('/api/projects/:projectId/scenes', async (req: Request, res: Response) =
     }
 
     await ensureProjectDir(projectId);
+    const fileKey = cacheKey('project', projectId, 'scenes');
+    const cached = await cacheGet(fileKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'application/json');
+      res.send(cached);
+      return;
+    }
     const filePath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
 
     try {
       const raw = await fs.readFile(filePath, 'utf8');
+      await cacheSet(fileKey, raw);
       res.setHeader('Content-Type', 'application/json');
       res.send(raw);
     } catch {
@@ -300,7 +341,9 @@ app.post('/api/projects/:projectId/scenes', async (req: Request, res: Response) 
 
     await ensureProjectDir(projectId);
     const filePath = path.join(projectsDir, projectId, 'scenes', 'scenes.json');
-    await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+    const payload = JSON.stringify(req.body, null, 2);
+    await fs.writeFile(filePath, payload);
+    await cacheSet(cacheKey('project', projectId, 'scenes'), payload);
 
     res.json({ ok: true, file: 'scenes.json' });
   } catch (err) {
