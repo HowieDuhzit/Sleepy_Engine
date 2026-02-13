@@ -24,11 +24,13 @@ RUN pnpm -C client build
 
 FROM base AS server
 ENV NODE_ENV=production
+ENV PROJECTS_DIR=/app/projects
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/server/node_modules ./server/node_modules
 COPY --from=deps /app/shared/node_modules ./shared/node_modules
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/shared/dist ./shared/dist
+COPY --from=build /app/server/projects /app/projects
 COPY server/package.json server/package.json
 COPY shared/package.json shared/package.json
 EXPOSE 2567
@@ -40,6 +42,7 @@ EXPOSE 80
 
 FROM base AS allinone
 ENV NODE_ENV=production
+ENV PROJECTS_DIR=/app/projects
 RUN apt-get update \
   && apt-get install -y --no-install-recommends nginx curl \
   && rm -rf /var/lib/apt/lists/* \

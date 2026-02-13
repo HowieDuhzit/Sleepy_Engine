@@ -381,17 +381,45 @@ export class GameApp {
     this.crowd = this.createCrowd();
     this.input = new InputState();
     const env = (import.meta as any).env || {};
-    const envUrl = env.VITE_PUBLIC_WS_URL;
+    const envUrl = env.VITE_PUBLIC_WS_URL as string | undefined;
+    const isLocalPage = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const pageProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const pageDefaultUrl = `${pageProtocol}//${window.location.host}`;
 
-    // Default: use same host/protocol as the page (works for Coolify deployments)
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host; // includes port if present
-    const defaultUrl = `${protocol}//${host}`;
+    const normalizeWsUrl = (raw: string) => {
+      const parsed = new URL(raw);
+      if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+      if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+      return parsed.toString().replace(/\/$/, '');
+    };
 
-    // For localhost dev, use explicit port
-    const wsUrl = envUrl || (window.location.hostname === 'localhost'
-      ? 'ws://127.0.0.1:2567'
-      : defaultUrl);
+    const envLooksLocal = (raw: string) => {
+      try {
+        const host = new URL(raw).hostname;
+        return ['localhost', '127.0.0.1', '::1'].includes(host);
+      } catch {
+        return false;
+      }
+    };
+
+    // Production-safe endpoint resolution:
+    // - local dev defaults to ws://127.0.0.1:2567
+    // - hosted pages default to same-origin ws/wss
+    // - ignore localhost env WS URL when page itself is not local
+    const wsUrl = (() => {
+      if (!envUrl) {
+        return isLocalPage ? 'ws://127.0.0.1:2567' : pageDefaultUrl;
+      }
+      if (!isLocalPage && envLooksLocal(envUrl)) {
+        console.warn('Ignoring localhost VITE_PUBLIC_WS_URL on non-local page; using same-origin websocket URL.');
+        return pageDefaultUrl;
+      }
+      try {
+        return normalizeWsUrl(envUrl);
+      } catch {
+        return isLocalPage ? 'ws://127.0.0.1:2567' : pageDefaultUrl;
+      }
+    })();
     this.roomClient = new RoomClient(wsUrl);
     this.localPlayer = this.createPlayer();
 

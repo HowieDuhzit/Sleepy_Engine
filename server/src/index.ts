@@ -575,7 +575,8 @@ gameServer.attach({ server: httpServer });
 // Ensure games directory exists before starting server
 ensureGamesDir().then(() => {
   httpServer.listen(port);
-  console.log(`Game server listening on ws://localhost:${port}`);
+  console.log(`Game server listening on port ${port} (ws path served on this host)`);
+  console.log(`Games directory: ${gamesDir}`);
   if (dbEnabled) {
     console.log('Database enabled via DATABASE_URL');
   }

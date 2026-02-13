@@ -3930,14 +3930,21 @@ export class EditorApp {
     }
     this.boneMarkers.clear();
 
-    // Use adaptive scale for touch/stylus precision
+    // Keep marker meshes as invisible hit-targets for selection/snap behavior.
+    // Visual joints are rendered by bone gizmos only to avoid duplicate spheres.
     const adaptiveScale = this.computeAdaptiveBoneScale();
     const geom = new THREE.SphereGeometry(adaptiveScale * 0.6, 16, 12);
 
     for (const bone of this.bones) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0x60a5fa, depthTest: false, transparent: true });
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x60a5fa,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0,
+      });
       const marker = new THREE.Mesh(geom, mat);
-      marker.renderOrder = 10;
+      marker.renderOrder = 0;
       marker.visible = this.boneVisualsVisible;
       marker.userData.boneName = bone.name;
       marker.userData.baseScale = adaptiveScale;
@@ -3968,25 +3975,7 @@ export class EditorApp {
 
       const pos = bone.getWorldPosition(new THREE.Vector3());
       marker.position.copy(pos);
-
-      const mat = marker.material as THREE.MeshBasicMaterial;
-      const isSelected = bone === this.selectedBone;
-      const isHovered = bone === hoveredBone;
-
-      // Color and scale based on state
-      if (isSelected) {
-        mat.color.set(0xf59e0b); // Orange for selected
-        mat.opacity = 1.0;
-        marker.scale.setScalar(1.2); // Slightly larger when selected
-      } else if (isHovered) {
-        mat.color.set(0x60a5fa); // Blue for hover
-        mat.opacity = 0.9;
-        marker.scale.setScalar(1.4); // Larger on hover for easy targeting
-      } else {
-        mat.color.set(0x60a5fa); // Default blue
-        mat.opacity = 0.7;
-        marker.scale.setScalar(1.0);
-      }
+      marker.scale.setScalar(bone === hoveredBone ? 1.4 : 1.0);
     }
   }
 
