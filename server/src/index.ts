@@ -248,6 +248,47 @@ app.post('/api/games', requireAdmin, async (req: Request, res: Response) => {
   }
 });
 
+// Delete game
+app.delete('/api/games/:gameId', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
+      return;
+    }
+    if (gameId === 'prototype') {
+      res.status(400).json({ error: 'cannot_delete_prototype' });
+      return;
+    }
+
+    const gamePath = path.join(gamesDir, gameId);
+    let stat;
+    try {
+      stat = await fs.stat(gamePath);
+    } catch {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (!stat.isDirectory()) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    await fs.rm(gamePath, { recursive: true, force: true });
+
+    await Promise.allSettled([
+      cacheDel(cacheKey('game', gameId, 'animations', 'list')),
+      cacheDel(cacheKey('game', gameId, 'player')),
+      cacheDel(cacheKey('game', gameId, 'scenes')),
+    ]);
+
+    res.json({ ok: true, id: gameId });
+  } catch (err) {
+    console.error('Delete game failed', err);
+    res.status(500).json({ error: 'failed_to_delete_game', detail: String(err) });
+  }
+});
+
 // Get game details
 app.get('/api/games/:gameId', async (req: Request, res: Response) => {
   try {

@@ -7,11 +7,11 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { PSXRenderer } from '../rendering/PSXRenderer';
 import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
-import { PSXMaterial } from '../materials/PSXMaterial';
 import { psxSettings } from '../settings/PSXSettings';
 import { retargetMixamoClip } from '../game/retarget';
 import {
   createGame,
+  deleteGame,
   getGameAnimation,
   getGameAvatarUrl,
   listGameAvatars,
@@ -26,6 +26,7 @@ import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type Clip
 
 const MAX_DURATION = 10;
 const SAMPLE_RATE = 30;
+const DEFAULT_TIMELINE_FRAMES = 65;
 const ROOT_BONE_KEY = 'hips';
 
 type MixamoEntry = {
@@ -60,9 +61,238 @@ type LevelScene = {
   name: string;
   obstacles?: LevelObstacle[];
   ground?: LevelGround;
-  player?: { avatar?: string };
-  crowd?: { enabled?: boolean; avatar?: string };
+  player?: { avatar?: string; x?: number; y?: number; z?: number; yaw?: number };
+  crowd?: { enabled?: boolean; avatar?: string; x?: number; y?: number; z?: number; radius?: number };
 };
+
+type LevelObjectKind = 'ground' | 'player' | 'crowd' | 'obstacle';
+type LevelSceneObjectRef = {
+  id: string;
+  label: string;
+  kind: LevelObjectKind;
+  object: THREE.Object3D;
+  obstacleId?: string;
+};
+
+type CharacterRole = 'player' | 'npc' | 'boss' | 'neutral';
+type ControllerMode = 'third_person' | 'first_person' | 'ai_only' | 'hybrid';
+
+type StateMachineStateDef = {
+  id: string;
+  clip: string;
+  speed: number;
+  loop: boolean;
+  tags?: string[];
+};
+
+type StateMachineTransitionDef = {
+  from: string;
+  to: string;
+  condition: string;
+  blendMs: number;
+  priority: number;
+  interruptible: boolean;
+};
+
+type PlayerCapsuleConfig = {
+  preview: boolean;
+  baseRadius: number;
+  baseHeight: number;
+  skinWidth: number;
+  stepHeight: number;
+  slopeLimitDeg: number;
+};
+
+type PlayerNpcConfig = {
+  enabled: boolean;
+  archetype: string;
+  aggression: number;
+  perceptionRange: number;
+  fovDeg: number;
+  patrolSpeed: number;
+  chaseSpeed: number;
+  attackRange: number;
+  reactionMs: number;
+  goals: string[];
+};
+
+type CharacterProfile = {
+  name: string;
+  role: CharacterRole;
+  controller: ControllerMode;
+  faction: string;
+  health: number;
+  stamina: number;
+  description: string;
+  tags: string[];
+};
+
+type PlayerConfig = {
+  avatar: string;
+  ikOffset: number;
+  capsuleRadiusScale: number;
+  capsuleHeightScale: number;
+  capsuleYOffset: number;
+  moveSpeed: number;
+  sprintMultiplier: number;
+  crouchMultiplier: number;
+  slideAccel: number;
+  slideFriction: number;
+  gravity: number;
+  jumpSpeed: number;
+  walkThreshold: number;
+  runThreshold: number;
+  cameraDistance: number;
+  cameraHeight: number;
+  cameraShoulder: number;
+  cameraShoulderHeight: number;
+  cameraSensitivity: number;
+  cameraSmoothing: number;
+  cameraMinPitch: number;
+  cameraMaxPitch: number;
+  targetSmoothSpeed: number;
+  ragdollMuscle: {
+    enabled: boolean;
+    stiffness: number;
+    damping: number;
+    maxTorque: number;
+  };
+  ragdollSim: {
+    jointStiffnessScale: number;
+    jointDampingScale: number;
+    bodyLinearDampingScale: number;
+    bodyAngularDampingScale: number;
+    groundFriction: number;
+    bodyFriction: number;
+    maxSubsteps: number;
+    substepHz: number;
+    limitBlend: number;
+    linearBleed: number;
+    angularBleed: number;
+    groundSlideDamping: number;
+    groundSlideYThreshold: number;
+    groundSlideDeadzone: number;
+    maxLinearVelocity: number;
+    maxAngularVelocity: number;
+    startImpulseY: number;
+  };
+  ragdollRig: Record<
+    string,
+    { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
+  >;
+  profile: CharacterProfile;
+  capsule: PlayerCapsuleConfig;
+  stateMachine: {
+    initial: string;
+    states: StateMachineStateDef[];
+    transitions: StateMachineTransitionDef[];
+  };
+  npc: PlayerNpcConfig;
+};
+
+const DEFAULT_STATE_MACHINE_STATES: StateMachineStateDef[] = [
+  { id: 'idle', clip: 'idle', speed: 1, loop: true, tags: ['base'] },
+  { id: 'walk', clip: 'walk', speed: 1, loop: true, tags: ['locomotion'] },
+  { id: 'run', clip: 'run', speed: 1, loop: true, tags: ['locomotion'] },
+  { id: 'jump', clip: 'jump', speed: 1, loop: false, tags: ['air'] },
+];
+
+const DEFAULT_STATE_MACHINE_TRANSITIONS: StateMachineTransitionDef[] = [
+  { from: 'idle', to: 'walk', condition: 'speed > 0.15', blendMs: 120, priority: 1, interruptible: true },
+  { from: 'walk', to: 'run', condition: 'speed > 3.9', blendMs: 90, priority: 1, interruptible: true },
+  { from: 'run', to: 'walk', condition: 'speed <= 3.9', blendMs: 100, priority: 1, interruptible: true },
+  { from: 'walk', to: 'idle', condition: 'speed <= 0.15', blendMs: 140, priority: 1, interruptible: true },
+  { from: 'any', to: 'jump', condition: 'jumpPressed && grounded', blendMs: 70, priority: 5, interruptible: true },
+];
+
+function createDefaultPlayerConfig(): PlayerConfig {
+  return {
+    avatar: 'default.vrm',
+    ikOffset: 0.02,
+    capsuleRadiusScale: 1,
+    capsuleHeightScale: 1,
+    capsuleYOffset: 0,
+    moveSpeed: 6,
+    sprintMultiplier: 1.6,
+    crouchMultiplier: 0.55,
+    slideAccel: 10,
+    slideFriction: 6,
+    gravity: -22,
+    jumpSpeed: 8,
+    walkThreshold: 0.15,
+    runThreshold: 3.9,
+    cameraDistance: 6,
+    cameraHeight: 1.4,
+    cameraShoulder: 1.2,
+    cameraShoulderHeight: 0.4,
+    cameraSensitivity: 1.0,
+    cameraSmoothing: 0,
+    cameraMinPitch: 0.2,
+    cameraMaxPitch: Math.PI - 0.2,
+    targetSmoothSpeed: 15,
+    ragdollMuscle: {
+      enabled: false,
+      stiffness: 70,
+      damping: 16,
+      maxTorque: 70,
+    },
+    ragdollSim: {
+      jointStiffnessScale: 1,
+      jointDampingScale: 1,
+      bodyLinearDampingScale: 1,
+      bodyAngularDampingScale: 1,
+      groundFriction: 2.2,
+      bodyFriction: 1.6,
+      maxSubsteps: 4,
+      substepHz: 90,
+      limitBlend: 0.45,
+      linearBleed: 0.985,
+      angularBleed: 0.88,
+      groundSlideDamping: 0.92,
+      groundSlideYThreshold: 0.5,
+      groundSlideDeadzone: 0.08,
+      maxLinearVelocity: 16,
+      maxAngularVelocity: 12,
+      startImpulseY: -0.35,
+    },
+    ragdollRig: {},
+    profile: {
+      name: 'Default Character',
+      role: 'player',
+      controller: 'third_person',
+      faction: 'neutral',
+      health: 100,
+      stamina: 100,
+      description: '',
+      tags: ['humanoid'],
+    },
+    capsule: {
+      preview: true,
+      baseRadius: 0.35,
+      baseHeight: 1.72,
+      skinWidth: 0.03,
+      stepHeight: 0.35,
+      slopeLimitDeg: 50,
+    },
+    stateMachine: {
+      initial: 'idle',
+      states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+      transitions: DEFAULT_STATE_MACHINE_TRANSITIONS.map((transition) => ({ ...transition })),
+    },
+    npc: {
+      enabled: false,
+      archetype: 'grunt',
+      aggression: 0.5,
+      perceptionRange: 20,
+      fovDeg: 120,
+      patrolSpeed: 2,
+      chaseSpeed: 4,
+      attackRange: 1.8,
+      reactionMs: 220,
+      goals: ['patrol', 'investigate', 'chase'],
+    },
+  };
+}
 
 type RagdollBone = {
   name: string;
@@ -142,6 +372,13 @@ export class EditorApp {
   private timelinePaintMode: 'enable' | 'disable' | null = null;
   private timelinePaintChanged = false;
   private timelineDownFrame = -1;
+  private timelineLastDrawnFrame = -1;
+  private timelineLastUiUpdateMs = 0;
+  private lastAxisDrawMs = 0;
+  private lastBoneVisualUpdateMs = 0;
+  private lastVrmUpdateMs = 0;
+  private lastHipsTargetUpdateMs = 0;
+  private renderPixelRatio = 1;
   private disabledFrameCache = new Map<number, BoneFrame>();
   // Multi-touch gesture state
   private activePointers = new Map<number, { x: number; y: number; type: string }>();
@@ -151,6 +388,8 @@ export class EditorApp {
   private gestureStartCameraRotation = { yaw: 0, pitch: 0 };
   private isGesturing = false;
   private boneMarkers: Map<string, THREE.Mesh> = new Map();
+  private boneMarkerObjects: THREE.Object3D[] = [];
+  private boneMarkerWorldPos = new THREE.Vector3();
   private boneScale = 0.08;
   private clipKeyMap: Map<string, THREE.Object3D> = new Map();
   private gltfLoader = new GLTFLoader();
@@ -163,6 +402,12 @@ export class EditorApp {
   private timelineHeader: HTMLDivElement | null = null;
   private timelineWrap: HTMLDivElement | null = null;
   private axisCanvas: HTMLCanvasElement | null = null;
+  private axisDrawInvQuat = new THREE.Quaternion();
+  private axisDrawVec = new THREE.Vector3();
+  private axisDrawNegVec = new THREE.Vector3();
+  private axisBasisX = new THREE.Vector3(1, 0, 0);
+  private axisBasisY = new THREE.Vector3(0, 1, 0);
+  private axisBasisZ = new THREE.Vector3(0, 0, 1);
   private bones: THREE.Object3D[] = [];
   private boneByName = new Map<string, THREE.Object3D>();
   private boneByKey = new Map<string, THREE.Object3D>();
@@ -170,13 +415,13 @@ export class EditorApp {
   private restPose = new Map<string, RestPose>();
   private time = 0;
   private isPlaying = false;
-  private clip: ClipData = { duration: 5, frames: [] };
+  private clip: ClipData = { duration: DEFAULT_TIMELINE_FRAMES / SAMPLE_RATE, frames: [] };
   private mixer: THREE.AnimationMixer | null = null;
   private mixamoEntries: MixamoEntry[] = [];
   private currentMixamo: THREE.AnimationAction | null = null;
   private retargetedClip: THREE.AnimationClip | null = null;
   private retargetedName = 'none';
-  private fps = 30;
+  private fps = SAMPLE_RATE;
   private rapier: typeof import('@dimforge/rapier3d-compat') | null = null;
   private rapierReady: Promise<void> | null = null;
   private ragdollWorld: RAPIER.World | null = null;
@@ -189,6 +434,9 @@ export class EditorApp {
   private overrideRangeStartFrame = 0;
   private overrideRangeEndFrame = 0;
   private hipsOffset = new THREE.Vector3();
+  private clipInterpQuatA = new THREE.Quaternion();
+  private clipInterpQuatB = new THREE.Quaternion();
+  private clipInterpQuatOut = new THREE.Quaternion();
   private dpr = Math.min(window.devicePixelRatio, 2);
   private skeletonHelper: THREE.SkeletonHelper | null = null;
   private ragdollDebugMeshes: THREE.Object3D[] = [];
@@ -209,13 +457,32 @@ export class EditorApp {
   private levelObstacleGroup = new THREE.Group();
   private levelGroundMesh: THREE.Mesh | null = null;
   private levelCrowdMarker: THREE.Group | null = null;
+  private levelPlayerMarker: THREE.Group | null = null;
   private levelObstacleMeshes = new Map<string, THREE.Mesh>();
-  private selectedLevelObstacleId: string | null = null;
+  private selectedLevelObjectId: string | null = null;
+  private levelSceneObjects = new Map<string, LevelSceneObjectRef>();
   private levelSceneListEl: HTMLSelectElement | null = null;
   private levelSceneObstaclesEl: HTMLTextAreaElement | null = null;
   private levelSceneJsonEl: HTMLTextAreaElement | null = null;
   private levelObjectSelectEl: HTMLSelectElement | null = null;
+  private levelHierarchyEl: HTMLDivElement | null = null;
   private levelSceneStateRef: { scenes: LevelScene[] } | null = null;
+  private playerCapsulePreview: THREE.Group | null = null;
+  private playerCapsulePreviewMaterial = new THREE.MeshBasicMaterial({
+    color: 0x36d4ff,
+    transparent: true,
+    opacity: 0.2,
+    wireframe: false,
+    depthWrite: false,
+  });
+  private playerCapsuleWireframe = new THREE.MeshBasicMaterial({
+    color: 0x8ff6ff,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+  });
+  private playerCapsuleTemp = new THREE.Vector3();
 
   // Game management
   private currentGameId: string | null = null;
@@ -223,6 +490,8 @@ export class EditorApp {
   private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
   private refreshClipsFunction: (() => Promise<void>) | null = null;
   private refreshScenesFunction: (() => Promise<void>) | null = null;
+  private refreshPlayerInputsFunction: (() => void) | null = null;
+  private refreshPlayerAvatarsFunction: (() => Promise<void>) | null = null;
   private loadGamesListFunction: (() => Promise<void>) | null = null;
   private selectGameFunction: ((gameId: string) => Promise<void>) | null = null;
   private applyTabFunction: ((tab: 'animation' | 'player' | 'level' | 'settings') => void) | null = null;
@@ -494,60 +763,7 @@ export class EditorApp {
     { name: 'rightLowerLeg', parent: 'rightUpperLeg' },
     { name: 'rightFoot', parent: 'rightLowerLeg' },
   ];
-  private playerConfig = {
-    avatar: 'default.vrm',
-    ikOffset: 0.02,
-    capsuleRadiusScale: 1,
-    capsuleHeightScale: 1,
-    capsuleYOffset: 0,
-    moveSpeed: 6,
-    sprintMultiplier: 1.6,
-    crouchMultiplier: 0.55,
-    slideAccel: 10,
-    slideFriction: 6,
-    gravity: -22,
-    jumpSpeed: 8,
-    walkThreshold: 0.15,
-    runThreshold: 3.9,
-    cameraDistance: 6,
-    cameraHeight: 1.4,
-    cameraShoulder: 1.2,
-    cameraShoulderHeight: 0.4,
-    cameraSensitivity: 1.0,
-    cameraSmoothing: 0,
-    cameraMinPitch: 0.2,
-    cameraMaxPitch: Math.PI - 0.2,
-    targetSmoothSpeed: 15,
-    ragdollMuscle: {
-      enabled: false,
-      stiffness: 70,
-      damping: 16,
-      maxTorque: 70,
-    },
-    ragdollSim: {
-      jointStiffnessScale: 1,
-      jointDampingScale: 1,
-      bodyLinearDampingScale: 1,
-      bodyAngularDampingScale: 1,
-      groundFriction: 2.2,
-      bodyFriction: 1.6,
-      maxSubsteps: 4,
-      substepHz: 90,
-      limitBlend: 0.45,
-      linearBleed: 0.985,
-      angularBleed: 0.88,
-      groundSlideDamping: 0.92,
-      groundSlideYThreshold: 0.5,
-      groundSlideDeadzone: 0.08,
-      maxLinearVelocity: 16,
-      maxAngularVelocity: 12,
-      startImpulseY: -0.35,
-    },
-    ragdollRig: {} as Record<
-      string,
-      { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
-    >,
-  };
+  private playerConfig: PlayerConfig = createDefaultPlayerConfig();
 
   constructor(
     container: HTMLElement | null,
@@ -562,7 +778,8 @@ export class EditorApp {
 
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(this.dpr);
+    this.renderPixelRatio = this.getTargetRenderPixelRatio();
+    this.renderer.setPixelRatio(this.renderPixelRatio);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(0x0b0c12, 1);
 
@@ -757,16 +974,30 @@ export class EditorApp {
     return data;
   }
 
+  public async deleteCurrentGameFromUi() {
+    const gameId = this.currentGameId;
+    if (!gameId) {
+      throw new Error('No game selected');
+    }
+    if (gameId === 'prototype') {
+      throw new Error('Cannot delete prototype');
+    }
+    await deleteGame(gameId);
+    if (localStorage.getItem('editorGameId') === gameId) {
+      localStorage.removeItem('editorGameId');
+    }
+    if (this.loadGamesListFunction) {
+      await this.loadGamesListFunction();
+    }
+    return { ok: true, id: gameId };
+  }
+
   public setExternalShellEnabled(enabled: boolean) {
     if (!this.hud) return;
     this.hud.classList.toggle('external-shell', enabled);
     const header = this.hud.querySelector('.editor-header') as HTMLDivElement | null;
     if (header) {
       header.style.display = enabled ? 'none' : '';
-    }
-    const shellPanels = Array.from(this.hud.querySelectorAll('.editor-shell > .editor-left, .editor-shell > .editor-bottom')) as HTMLDivElement[];
-    for (const panel of shellPanels) {
-      panel.style.display = enabled ? 'none' : '';
     }
     this.resizeRenderer();
     this.resizeTimeline();
@@ -778,10 +1009,27 @@ export class EditorApp {
     host: HTMLElement,
   ) {
     const key = `${area}:${tab}`;
-    const panel = this.externalPanelNodes.get(key);
-    host.innerHTML = '';
+    const selector = area === 'left'
+      ? `.editor-left[data-tab-panel="${tab}"]`
+      : `.editor-bottom[data-tab-panel="${tab}"]`;
+    const panel = this.externalPanelNodes.get(key)
+      ?? (this.hud.querySelector(selector) as HTMLDivElement | null);
     if (!panel) return false;
-    panel.style.display = '';
+    host.innerHTML = '';
+    panel.style.display = area === 'left' ? 'flex' : '';
+    panel.style.visibility = '';
+    panel.hidden = false;
+    if (area === 'left') {
+      panel.style.flexDirection = 'column';
+      panel.style.minHeight = '0';
+      panel.style.overflowY = tab === 'player' || tab === 'level' ? 'auto' : '';
+    }
+    if (host instanceof HTMLDivElement) {
+      host.style.display = 'block';
+      if (area === 'left') {
+        host.style.minWidth = tab === 'player' || tab === 'level' ? '300px' : '220px';
+      }
+    }
     host.appendChild(panel);
     requestAnimationFrame(() => {
       this.resizeRenderer();
@@ -818,6 +1066,16 @@ export class EditorApp {
     this.viewport?.removeEventListener('dragover', this.handleDragOver);
     this.viewport?.removeEventListener('drop', this.handleDrop);
     this.viewport?.removeEventListener('dragleave', this.handleDragLeave);
+    if (this.playerCapsulePreview) {
+      for (const child of this.playerCapsulePreview.children) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+      }
+      this.characterScene.remove(this.playerCapsulePreview);
+      this.playerCapsulePreview = null;
+    }
+    this.playerCapsulePreviewMaterial.dispose();
+    this.playerCapsuleWireframe.dispose();
     this.renderer.dispose();
     this.levelTransform?.removeEventListener('objectChange', this.handleLevelTransformObjectChange);
     this.container.innerHTML = '';
@@ -825,7 +1083,7 @@ export class EditorApp {
 
   private handleResize = () => {
     this.dpr = Math.min(window.devicePixelRatio, 2);
-    this.renderer.setPixelRatio(this.dpr);
+    this.syncRenderPixelRatio();
     this.resizeRenderer();
     this.resizeTimeline();
     this.drawTimeline();
@@ -842,6 +1100,22 @@ export class EditorApp {
       this.psxPostProcessor.setSize(innerWidth, innerHeight);
     }
   };
+
+  private getTargetRenderPixelRatio() {
+    const device = Math.min(window.devicePixelRatio, 2);
+    const base = Math.min(device, 1.5);
+    if (this.currentTab === 'animation' && this.isPlaying) return Math.min(base, 1);
+    if (this.currentTab === 'level') return Math.min(base, 1.25);
+    return base;
+  }
+
+  private syncRenderPixelRatio() {
+    const target = this.getTargetRenderPixelRatio();
+    if (Math.abs(target - this.renderPixelRatio) < 0.01) return;
+    this.renderPixelRatio = target;
+    this.renderer.setPixelRatio(target);
+    this.resizeRenderer();
+  }
 
   private handleKeyboard = (e: KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -922,6 +1196,16 @@ export class EditorApp {
         this.controls.target.set(0, 1.2, 0);
       }
     }
+    if (tab !== 'level' && this.levelTransform) {
+      this.levelTransform.detach();
+      (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    }
+    if ((tab !== 'animation' && tab !== 'player') || (!this.ragdollVisible && !this.ragdollEnabled)) {
+      this.detachRagdollTransform();
+      if (this.ragdollHandles) this.ragdollHandles.visible = false;
+    }
+    this.syncPlayerCapsulePreview();
+    this.syncRenderPixelRatio();
   }
 
   private normalizeLevelObstacle(obstacle: LevelObstacle, index: number): Required<LevelObstacle> {
@@ -1007,29 +1291,79 @@ export class EditorApp {
 
   private refreshLevelObjectSelect() {
     if (!this.levelObjectSelectEl) return;
-    const scene = this.getCurrentLevelSceneEntry();
     this.levelObjectSelectEl.innerHTML = '';
-    const obstacles = scene?.obstacles ?? [];
-    for (let i = 0; i < obstacles.length; i += 1) {
-      const item = this.normalizeLevelObstacle(obstacles[i] ?? {}, i);
+    const entries = Array.from(this.levelSceneObjects.values()).sort((a, b) => a.label.localeCompare(b.label));
+    for (const item of entries) {
       const option = document.createElement('option');
       option.value = item.id;
-      option.textContent = item.id;
+      option.textContent = item.label;
       this.levelObjectSelectEl.appendChild(option);
     }
-    if (this.selectedLevelObstacleId && this.levelObstacleMeshes.has(this.selectedLevelObstacleId)) {
-      this.levelObjectSelectEl.value = this.selectedLevelObstacleId;
-    } else if (obstacles.length > 0) {
-      const first = this.normalizeLevelObstacle(obstacles[0] ?? {}, 0);
-      this.levelObjectSelectEl.value = first.id;
-      this.selectLevelObstacle(first.id);
+    if (this.selectedLevelObjectId && this.levelSceneObjects.has(this.selectedLevelObjectId)) {
+      this.levelObjectSelectEl.value = this.selectedLevelObjectId;
+    } else if (entries.length > 0) {
+      this.levelObjectSelectEl.value = entries[0]!.id;
+      this.selectLevelObject(entries[0]!.id);
     } else {
-      this.selectLevelObstacle(null);
+      this.selectLevelObject(null);
+    }
+    if (this.levelHierarchyEl) {
+      this.levelHierarchyEl.innerHTML = '';
+      for (const entry of entries) {
+        const button = document.createElement('button');
+        button.className = `bone-list-item${entry.id === this.selectedLevelObjectId ? ' active' : ''}`;
+        button.type = 'button';
+        button.dataset.levelObjectId = entry.id;
+        button.textContent = entry.label;
+        button.addEventListener('click', () => {
+          this.selectLevelObject(entry.id);
+        });
+        this.levelHierarchyEl.appendChild(button);
+      }
+    }
+  }
+
+  private rebuildLevelSceneObjects() {
+    this.levelSceneObjects.clear();
+    if (this.levelGroundMesh) {
+      this.levelSceneObjects.set('ground', {
+        id: 'ground',
+        label: 'Ground',
+        kind: 'ground',
+        object: this.levelGroundMesh,
+      });
+    }
+    if (this.levelPlayerMarker) {
+      this.levelSceneObjects.set('player', {
+        id: 'player',
+        label: 'Player Spawn',
+        kind: 'player',
+        object: this.levelPlayerMarker,
+      });
+    }
+    if (this.levelCrowdMarker) {
+      this.levelSceneObjects.set('crowd', {
+        id: 'crowd',
+        label: 'Crowd Spawn',
+        kind: 'crowd',
+        object: this.levelCrowdMarker,
+      });
+    }
+    for (const [obstacleId, mesh] of this.levelObstacleMeshes) {
+      const id = `obstacle:${obstacleId}`;
+      this.levelSceneObjects.set(id, {
+        id,
+        label: `Obstacle: ${obstacleId}`,
+        kind: 'obstacle',
+        object: mesh,
+        obstacleId,
+      });
     }
   }
 
   private updateLevelVisualizationFromState(obstacles: LevelObstacle[]) {
     const scene = this.getCurrentLevelSceneEntry();
+    if (scene && !scene.player) scene.player = {};
     const ground = this.normalizeLevelGround(scene?.ground);
     if (this.levelGroundMesh) {
       this.levelScene.remove(this.levelGroundMesh);
@@ -1041,7 +1375,7 @@ export class EditorApp {
       const concreteTexture = this.createEditorConcreteTexture();
       concreteTexture.repeat.set(ground.textureRepeat, ground.textureRepeat);
       this.levelGroundMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(ground.width, ground.depth),
+        new THREE.PlaneGeometry(1, 1),
         new THREE.MeshStandardMaterial({
           map: concreteTexture,
           roughness: 0.95,
@@ -1051,8 +1385,36 @@ export class EditorApp {
       );
       this.levelGroundMesh.rotation.x = -Math.PI / 2;
       this.levelGroundMesh.position.y = ground.y;
+      this.levelGroundMesh.scale.set(ground.width, ground.depth, 1);
+      this.levelGroundMesh.userData.levelObjectId = 'ground';
       this.levelScene.add(this.levelGroundMesh);
     }
+
+    if (this.levelPlayerMarker) {
+      this.levelScene.remove(this.levelPlayerMarker);
+      this.levelPlayerMarker = null;
+    }
+    const player = scene?.player ?? {};
+    const playerMarker = new THREE.Group();
+    playerMarker.userData.levelObjectId = 'player';
+    const playerBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 0.45, 1.8, 16),
+      new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x0b2a5f, emissiveIntensity: 0.3 }),
+    );
+    playerBody.position.y = 0.9;
+    playerBody.userData.levelObjectId = 'player';
+    const playerArrow = new THREE.Mesh(
+      new THREE.ConeGeometry(0.35, 0.55, 12),
+      new THREE.MeshStandardMaterial({ color: 0x60a5fa, emissive: 0x1d4ed8, emissiveIntensity: 0.25 }),
+    );
+    playerArrow.position.set(0, 1.7, 0.85);
+    playerArrow.rotation.x = Math.PI / 2;
+    playerArrow.userData.levelObjectId = 'player';
+    playerMarker.add(playerBody, playerArrow);
+    playerMarker.position.set(Number(player.x ?? 0), Number(player.y ?? (ground?.y ?? 0)), Number(player.z ?? 0));
+    playerMarker.rotation.y = Number(player.yaw ?? 0);
+    this.levelPlayerMarker = playerMarker;
+    this.levelScene.add(playerMarker);
 
     const crowdEnabled = scene?.crowd?.enabled === true;
     if (this.levelCrowdMarker) {
@@ -1066,13 +1428,20 @@ export class EditorApp {
         new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0x4a2a08, emissiveIntensity: 0.5 }),
       );
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = (ground?.y ?? 0) + 0.05;
+      ring.position.y = 0.05;
+      ring.userData.levelObjectId = 'crowd';
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.25, 0.25, 2.5, 12),
         new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x4a2a08, emissiveIntensity: 0.35 }),
       );
-      pillar.position.set(0, (ground?.y ?? 0) + 1.25, 0);
+      pillar.position.set(0, 1.25, 0);
+      pillar.userData.levelObjectId = 'crowd';
       marker.add(ring, pillar);
+      marker.userData.levelObjectId = 'crowd';
+      const crowd = scene?.crowd ?? {};
+      marker.position.set(Number(crowd.x ?? 0), Number(crowd.y ?? (ground?.y ?? 0)), Number(crowd.z ?? 0));
+      const crowdRadius = Math.max(1, Number(crowd.radius ?? 12));
+      marker.scale.set(crowdRadius / 12, 1, crowdRadius / 12);
       this.levelCrowdMarker = marker;
       this.levelScene.add(marker);
     }
@@ -1089,31 +1458,58 @@ export class EditorApp {
       );
       mesh.position.set(obstacle.x, obstacle.y + obstacle.height / 2, obstacle.z);
       mesh.scale.set(obstacle.width, obstacle.height, obstacle.depth);
-      mesh.userData.levelObstacleId = obstacle.id;
+      mesh.userData.levelObjectId = `obstacle:${obstacle.id}`;
       this.levelObstacleGroup.add(mesh);
       this.levelObstacleMeshes.set(obstacle.id, mesh);
     }
+    this.rebuildLevelSceneObjects();
     this.refreshLevelObjectSelect();
   }
 
-  private selectLevelObstacle(obstacleId: string | null) {
-    this.selectedLevelObstacleId = obstacleId;
+  private selectLevelObject(objectId: string | null) {
+    this.selectedLevelObjectId = objectId;
 
     for (const [id, mesh] of this.levelObstacleMeshes) {
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.color.set(id === obstacleId ? 0xf59e0b : 0x666666);
-      mat.emissive.set(id === obstacleId ? 0x201008 : 0x000000);
-      mat.emissiveIntensity = id === obstacleId ? 0.5 : 0;
+      const selected = objectId === `obstacle:${id}`;
+      mat.color.set(selected ? 0xf59e0b : 0x666666);
+      mat.emissive.set(selected ? 0x201008 : 0x000000);
+      mat.emissiveIntensity = selected ? 0.5 : 0;
+    }
+    if (this.levelGroundMesh) {
+      const mat = this.levelGroundMesh.material as THREE.MeshStandardMaterial;
+      mat.emissive = new THREE.Color(objectId === 'ground' ? 0x112233 : 0x000000);
+      mat.emissiveIntensity = objectId === 'ground' ? 0.25 : 0;
+    }
+    if (this.levelPlayerMarker) {
+      this.levelPlayerMarker.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.material && mesh.material instanceof THREE.MeshStandardMaterial) {
+          mesh.material.emissiveIntensity = objectId === 'player' ? 0.75 : 0.3;
+        }
+      });
+    }
+    if (this.levelCrowdMarker) {
+      this.levelCrowdMarker.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.material && mesh.material instanceof THREE.MeshStandardMaterial) {
+          mesh.material.emissiveIntensity = objectId === 'crowd' ? 0.85 : 0.35;
+        }
+      });
     }
 
     if (this.levelObjectSelectEl) {
-      this.levelObjectSelectEl.value = obstacleId ?? '';
+      this.levelObjectSelectEl.value = objectId ?? '';
+    }
+    if (this.levelHierarchyEl) {
+      const items = this.levelHierarchyEl.querySelectorAll<HTMLButtonElement>('.bone-list-item');
+      items.forEach((item) => item.classList.toggle('active', item.dataset.levelObjectId === objectId));
     }
 
     if (!this.levelTransform) return;
-    const mesh = obstacleId ? this.levelObstacleMeshes.get(obstacleId) : null;
-    if (mesh) {
-      this.levelTransform.attach(mesh);
+    const entry = objectId ? this.levelSceneObjects.get(objectId) ?? null : null;
+    if (entry?.object && entry.object.parent) {
+      this.levelTransform.attach(entry.object);
       (this.levelTransform as unknown as THREE.Object3D).visible = true;
     } else {
       this.levelTransform.detach();
@@ -1122,40 +1518,79 @@ export class EditorApp {
   }
 
   private handleLevelTransformObjectChange = () => {
-    const selectedId = this.selectedLevelObstacleId;
+    const selectedId = this.selectedLevelObjectId;
     if (!selectedId) return;
     const scene = this.getCurrentLevelSceneEntry();
-    const mesh = this.levelObstacleMeshes.get(selectedId);
-    if (!scene || !mesh) return;
-    const obstacles = scene.obstacles ?? [];
-    const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
-    if (index < 0) return;
-
-    obstacles[index] = {
-      id: selectedId,
-      x: mesh.position.x,
-      y: mesh.position.y - mesh.scale.y / 2,
-      z: mesh.position.z,
-      width: Math.max(0.1, mesh.scale.x),
-      height: Math.max(0.1, mesh.scale.y),
-      depth: Math.max(0.1, mesh.scale.z),
-    };
-    scene.obstacles = obstacles;
+    const entry = this.levelSceneObjects.get(selectedId);
+    if (!scene || !entry) return;
+    if (entry.kind === 'obstacle' && entry.obstacleId) {
+      const mesh = entry.object as THREE.Mesh;
+      const obstacles = scene.obstacles ?? [];
+      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === entry.obstacleId);
+      if (index >= 0) {
+        obstacles[index] = {
+          id: entry.obstacleId,
+          x: mesh.position.x,
+          y: mesh.position.y - mesh.scale.y / 2,
+          z: mesh.position.z,
+          width: Math.max(0.1, mesh.scale.x),
+          height: Math.max(0.1, mesh.scale.y),
+          depth: Math.max(0.1, mesh.scale.z),
+        };
+      }
+      scene.obstacles = obstacles;
+    } else if (entry.kind === 'ground') {
+      const ground = this.normalizeLevelGround(scene.ground ?? undefined) ?? { type: 'concrete', width: 120, depth: 120, y: 0, textureRepeat: 12 };
+      ground.width = Math.max(1, entry.object.scale.x);
+      ground.depth = Math.max(1, Math.max(entry.object.scale.y, entry.object.scale.z));
+      ground.y = entry.object.position.y;
+      scene.ground = ground;
+    } else if (entry.kind === 'player') {
+      const player = scene.player ?? {};
+      player.x = entry.object.position.x;
+      player.y = entry.object.position.y;
+      player.z = entry.object.position.z;
+      player.yaw = entry.object.rotation.y;
+      scene.player = player;
+    } else if (entry.kind === 'crowd') {
+      const crowd = scene.crowd ?? { enabled: true };
+      crowd.enabled = true;
+      crowd.x = entry.object.position.x;
+      crowd.y = entry.object.position.y;
+      crowd.z = entry.object.position.z;
+      crowd.radius = Math.max(1, 12 * entry.object.scale.x);
+      scene.crowd = crowd;
+    }
     this.syncLevelTextEditors();
   };
 
-  private pickLevelObstacle = (event: PointerEvent) => {
+  private pickLevelObject = (event: PointerEvent) => {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(Array.from(this.levelObstacleMeshes.values()), false);
-    const hitId = hits[0]?.object.userData.levelObstacleId as string | undefined;
+    const selectable = Array.from(this.levelSceneObjects.values()).map((entry) => entry.object);
+    const hits = this.raycaster.intersectObjects(selectable, true);
+    const hitObject = hits[0]?.object;
+    let hitId = hitObject?.userData.levelObjectId as string | undefined;
+    if (!hitId && hitObject) {
+      let cursor: THREE.Object3D | null = hitObject;
+      while (cursor && !hitId) {
+        hitId = cursor.userData.levelObjectId as string | undefined;
+        cursor = cursor.parent;
+      }
+    }
     if (hitId) {
-      this.selectLevelObstacle(hitId);
+      this.selectLevelObject(hitId);
       this.triggerHapticFeedback('light');
     }
   };
+
+  private isTransformGizmoActive(control: TransformControls | null) {
+    if (!control) return false;
+    const axis = (control as unknown as { axis?: string | null }).axis ?? null;
+    return axis != null && axis !== '';
+  }
 
   // Get API path for animations (game-scoped only)
   private getAnimationsPath(): string | null {
@@ -1178,7 +1613,23 @@ export class EditorApp {
     console.log('Loading assets for game:', this.currentGameId, `(attempt ${retryCount + 1})`);
     console.log('refreshClipsFunction available:', !!this.refreshClipsFunction);
     console.log('refreshScenesFunction available:', !!this.refreshScenesFunction);
+    if (this.currentGameId) {
+      try {
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = (await res.json()) as Partial<PlayerConfig>;
+          this.playerConfig = this.normalizePlayerConfig({ ...this.playerConfig, ...data });
+        } else {
+          this.playerConfig = this.normalizePlayerConfig(this.playerConfig);
+        }
+      } catch {
+        this.playerConfig = this.normalizePlayerConfig(this.playerConfig);
+      }
+    }
     this.loadVrm();
+    if (this.refreshPlayerAvatarsFunction) await this.refreshPlayerAvatarsFunction();
+    this.refreshPlayerInputsFunction?.();
+    this.syncPlayerCapsulePreview();
 
     // If functions aren't ready yet, retry after a delay (max 5 retries)
     if ((!this.refreshClipsFunction || !this.refreshScenesFunction) && retryCount < 5) {
@@ -1218,40 +1669,66 @@ export class EditorApp {
 
   private tick = () => {
     const delta = this.clock.getDelta();
-    if (this.ragdollEnabled && this.ragdollWorld) {
+    const now = performance.now();
+    const isAnimationTab = this.currentTab === 'animation';
+    const isCharacterTab = this.currentTab === 'animation' || this.currentTab === 'player';
+    this.sanitizeTransformControls();
+    this.syncRenderPixelRatio();
+
+    if (isAnimationTab && this.ragdollEnabled && this.ragdollWorld) {
       this.stepRagdoll(delta);
-    } else if (this.isPlaying) {
+    } else if (isAnimationTab && this.isPlaying) {
       this.time += delta;
       if (this.time > this.clip.duration) this.time = 0;
     }
-    if (this.ragdollVisible && !this.ragdollEnabled) {
+    if (isAnimationTab && this.ragdollVisible && !this.ragdollEnabled) {
       this.updateRagdollDebugFromBones();
     }
-    if (this.vrm && this.controls) {
-      const hips = this.vrm.humanoid.getRawBoneNode('hips');
-      if (hips) {
-        hips.getWorldPosition(this.controls.target);
+    const shouldUpdateHipsTarget =
+      isCharacterTab &&
+      this.vrm &&
+      this.controls &&
+      (!isAnimationTab || !this.isPlaying || now - this.lastHipsTargetUpdateMs >= 120);
+    if (shouldUpdateHipsTarget) {
+      const vrm = this.vrm;
+      const controls = this.controls;
+      if (vrm && controls) {
+        const hips = vrm.humanoid.getRawBoneNode('hips');
+        if (hips) {
+          hips.getWorldPosition(controls.target);
+          this.lastHipsTargetUpdateMs = now;
+        }
       }
     }
     this.controls?.update();
-    if (this.vrm) this.vrm.update(delta);
-    if (this.mixer && this.currentMixamo) this.mixer.update(delta);
-    if (this.isPlaying) {
+    if (isAnimationTab && this.mixer && this.currentMixamo) this.mixer.update(delta);
+    if (isAnimationTab && this.isPlaying) {
       this.applyClipAtTime(this.time);
-      this.updateTimeline();
+      this.updateTimeline(false);
     }
-    this.updateBoneMarkers();
-    this.updateBoneGizmos();
-    this.drawAxisWidget();
-
-    // Update PSX material resolutions before rendering
-    if (psxSettings.config.enabled && this.psxRenderer) {
-      const res = this.psxRenderer.getResolution();
-      this.scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
-          obj.material.updateResolution(res.width, res.height);
-        }
-      });
+    if (isCharacterTab && this.vrm) {
+      const vrmUpdateIntervalMs = isAnimationTab && this.isPlaying ? 33 : 0;
+      if (vrmUpdateIntervalMs === 0 || now - this.lastVrmUpdateMs >= vrmUpdateIntervalMs) {
+        this.vrm.update(delta);
+        this.lastVrmUpdateMs = now;
+      }
+    }
+    if (this.currentTab === 'player') {
+      this.syncPlayerCapsulePreview();
+    }
+    const shouldUpdateBoneVisuals =
+      !this.isPlaying || now - this.lastBoneVisualUpdateMs >= 66;
+    if (shouldUpdateBoneVisuals) {
+      if (isAnimationTab && this.boneVisualsVisible) {
+        this.updateBoneMarkers();
+        this.updateBoneGizmos();
+      }
+      this.lastBoneVisualUpdateMs = now;
+    }
+    const shouldDrawAxis = !this.isPlaying || now - this.lastAxisDrawMs >= 33;
+    if (shouldDrawAxis) {
+      this.drawAxisWidget();
+      this.lastAxisDrawMs = now;
     }
 
     // Render with PSX effects or standard
@@ -1278,6 +1755,7 @@ export class EditorApp {
       '<option value="">-- Select Game --</option>',
       '</select>',
       '<button data-new-game>New Game</button>',
+      '<button data-delete-game>Delete Game</button>',
       '</label>',
       '</div>',
       '<div class="editor-tabs">',
@@ -1335,6 +1813,14 @@ export class EditorApp {
       '<label class="field"><span>Min Pitch</span><input data-cam-min-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Max Pitch</span><input data-cam-max-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Target Smooth</span><input data-cam-target-smooth type="number" step="1" /></label>',
+      '<label class="field"><span>Name</span><input data-profile-name type="text" placeholder="Character Name" /></label>',
+      '<label class="field"><span>Role</span><select data-profile-role><option value="player">Player</option><option value="npc">NPC</option><option value="boss">Boss</option><option value="neutral">Neutral</option></select></label>',
+      '<label class="field"><span>Controller</span><select data-profile-controller><option value="third_person">Third Person</option><option value="first_person">First Person</option><option value="ai_only">AI Only</option><option value="hybrid">Hybrid</option></select></label>',
+      '<label class="field"><span>Faction</span><input data-profile-faction type="text" /></label>',
+      '<label class="field"><span>Health</span><input data-profile-health type="number" min="1" step="1" /></label>',
+      '<label class="field"><span>Stamina</span><input data-profile-stamina type="number" min="0" step="1" /></label>',
+      '<label class="field"><span>Tags CSV</span><input data-profile-tags type="text" placeholder="humanoid,player" /></label>',
+      '<label class="field"><span>Description</span><input data-profile-description type="text" placeholder="Short bio / intent" /></label>',
       '<label class="field"><span>Avatar</span><select data-player-avatar></select></label>',
       '<label class="field"><span>Upload VRM/GLB</span><input data-player-avatar-file type="file" accept=".vrm,.glb,.gltf" /></label>',
       '<div class="panel-actions">',
@@ -1347,6 +1833,39 @@ export class EditorApp {
       '<button data-player-save>Save</button>',
       '</div>',
       '<div class="clip-status" data-player-status></div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Capsule Collider</div>',
+      '<label class="field"><span>Preview</span><input data-capsule-preview type="checkbox" /></label>',
+      '<label class="field"><span>Base Radius</span><input data-capsule-base-radius type="number" step="0.01" min="0.05" /></label>',
+      '<label class="field"><span>Base Height</span><input data-capsule-base-height type="number" step="0.01" min="0.2" /></label>',
+      '<label class="field"><span>Skin Width</span><input data-capsule-skin-width type="number" step="0.005" min="0" /></label>',
+      '<label class="field"><span>Step Height</span><input data-capsule-step-height type="number" step="0.01" min="0" /></label>',
+      '<label class="field"><span>Slope Limit (deg)</span><input data-capsule-slope type="number" step="1" min="1" max="89" /></label>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Animation State Machine</div>',
+      '<label class="field"><span>Initial</span><input data-sm-initial type="text" placeholder="idle" /></label>',
+      '<label class="field"><span>States JSON</span><textarea data-sm-states rows="7"></textarea></label>',
+      '<label class="field"><span>Transitions JSON</span><textarea data-sm-transitions rows="7"></textarea></label>',
+      '<div class="panel-actions">',
+      '<button data-sm-reset>Reset SM</button>',
+      '<button data-sm-validate>Validate SM</button>',
+      '</div>',
+      '<div class="clip-status" data-sm-status></div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">NPC Brain</div>',
+      '<label class="field"><span>NPC Enabled</span><input data-npc-enabled type="checkbox" /></label>',
+      '<label class="field"><span>Archetype</span><input data-npc-archetype type="text" placeholder="grunt" /></label>',
+      '<label class="field"><span>Aggression</span><input data-npc-aggression type="number" min="0" max="1" step="0.05" /></label>',
+      '<label class="field"><span>Perception</span><input data-npc-perception type="number" min="0" step="0.5" /></label>',
+      '<label class="field"><span>FOV</span><input data-npc-fov type="number" min="1" max="179" step="1" /></label>',
+      '<label class="field"><span>Patrol Speed</span><input data-npc-patrol-speed type="number" min="0" step="0.1" /></label>',
+      '<label class="field"><span>Chase Speed</span><input data-npc-chase-speed type="number" min="0" step="0.1" /></label>',
+      '<label class="field"><span>Attack Range</span><input data-npc-attack-range type="number" min="0" step="0.1" /></label>',
+      '<label class="field"><span>Reaction (ms)</span><input data-npc-reaction type="number" min="0" step="10" /></label>',
+      '<label class="field"><span>Goals JSON</span><textarea data-npc-goals rows="4"></textarea></label>',
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Ragdoll Rig</div>',
@@ -1412,7 +1931,9 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Level Tools</div>',
-      '<label class="field"><span>Objects</span><select data-level-object></select></label>',
+      '<label class="field"><span>Selected</span><select data-level-object></select></label>',
+      '<div class="panel-title">Scene Hierarchy</div>',
+      '<div class="bone-list" data-level-hierarchy></div>',
       '<div class="panel-actions">',
       '<button data-level-add>Add Box</button>',
       '<button data-level-duplicate>Duplicate</button>',
@@ -1496,8 +2017,8 @@ export class EditorApp {
       '<button data-ragdoll-reset>Ragdoll Reset</button>',
       '<button data-ragdoll-record>Record</button>',
       '<button data-ragdoll-stop>Stop Rec</button>',
-      '<label class="duration-field"><span>FPS</span><input data-fps type="number" min="5" max="60" step="1" value="30" /></label>',
-      '<label class="duration-field"><span>Frames</span><input data-duration type="number" min="1" max="600" step="1" value="150" /></label>',
+      `<label class="duration-field"><span>FPS</span><input data-fps type="number" min="5" max="60" step="1" value="${SAMPLE_RATE}" /></label>`,
+      `<label class="duration-field"><span>Frames</span><input data-duration type="number" min="1" max="600" step="1" value="${DEFAULT_TIMELINE_FRAMES}" /></label>`,
       '</div>',
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
       '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
@@ -1584,15 +2105,24 @@ export class EditorApp {
 
     const gameSelect = hud.querySelector('[data-game-select]') as HTMLSelectElement;
     const newGameBtn = hud.querySelector('[data-new-game]') as HTMLButtonElement;
+    const deleteGameBtn = hud.querySelector('[data-delete-game]') as HTMLButtonElement;
     const backMenuBtn = hud.querySelector('[data-back-menu]') as HTMLButtonElement;
     backMenuBtn.addEventListener('click', () => {
       this.onBackToMenu?.();
     });
+    const updateDeleteGameButtonState = () => {
+      const selectedId = this.currentGameId;
+      deleteGameBtn.disabled = !selectedId || selectedId === 'prototype';
+      deleteGameBtn.title =
+        selectedId === 'prototype'
+          ? 'Prototype is protected and cannot be deleted'
+          : '';
+    };
 
     // Fetch and populate games list
-    const loadGamesList = async () => {
+    const loadGamesList = async (cacheBust = false) => {
       try {
-        const games = await listGames();
+        const games = await listGames(cacheBust);
         gameSelect.innerHTML = '<option value="">-- Select Game --</option>';
         for (const game of games) {
           const option = document.createElement('option');
@@ -1667,6 +2197,7 @@ export class EditorApp {
             this.loadGameAssets(0);
           }, 100);
         }
+        updateDeleteGameButtonState();
       } catch (err) {
         console.error('Error loading games list:', err);
       }
@@ -1676,10 +2207,12 @@ export class EditorApp {
       if (!gameId) {
         this.currentGameId = null;
         localStorage.removeItem('editorGameId');
+        updateDeleteGameButtonState();
         return;
       }
       this.currentGameId = gameId;
       localStorage.setItem('editorGameId', gameId);
+      updateDeleteGameButtonState();
       // Reload assets for this game
       await this.loadGameAssets();
     };
@@ -1702,7 +2235,7 @@ export class EditorApp {
         localStorage.setItem('editorGameId', data.id);
 
         // Refresh games list
-        await loadGamesList();
+        await loadGamesList(true);
         gameSelect.value = data.id;
 
         // Load empty assets for new game
@@ -1712,6 +2245,41 @@ export class EditorApp {
       } catch (err) {
         console.error('Error creating game:', err);
         alert(`Error creating game: ${String(err)}`);
+      }
+    });
+
+    deleteGameBtn.addEventListener('click', async () => {
+      const gameId = this.currentGameId;
+      if (!gameId) {
+        alert('Select a game first.');
+        return;
+      }
+      if (gameId === 'prototype') {
+        alert('Prototype is protected and cannot be deleted.');
+        return;
+      }
+      const label =
+        gameSelect.options[gameSelect.selectedIndex]?.textContent?.trim() || gameId;
+      const confirmed = confirm(
+        `Delete game "${label}" (${gameId})?\n\nThis removes all scenes, animations, avatars, assets, and logic for this game.`,
+      );
+      if (!confirmed) return;
+
+      try {
+        await deleteGame(gameId);
+        if (localStorage.getItem('editorGameId') === gameId) {
+          localStorage.removeItem('editorGameId');
+        }
+        this.currentGameId = null;
+        gameSelect.value = '';
+        const optionToRemove = Array.from(gameSelect.options).find((option) => option.value === gameId);
+        optionToRemove?.remove();
+        updateDeleteGameButtonState();
+        await loadGamesList(true);
+        alert(`Game "${label}" deleted.`);
+      } catch (err) {
+        console.error('Error deleting game:', err);
+        alert(`Error deleting game: ${String(err)}`);
       }
     });
 
@@ -1772,7 +2340,13 @@ export class EditorApp {
       for (const btn of tabButtons) {
         btn.classList.toggle('active', btn.dataset.tab === tab);
       }
+      const isExternalShell = hud.classList.contains('external-shell');
       for (const panel of tabPanels) {
+        if (isExternalShell) {
+          // In React external-shell mode, panels are mounted into external hosts.
+          // Avoid forcing inline display state here, or the mounted panel can get stuck hidden.
+          continue;
+        }
         const show = panel.dataset.tabPanel === tab;
         panel.style.display = show ? '' : 'none';
       }
@@ -1863,6 +2437,14 @@ export class EditorApp {
     const camMinPitchInput = hud.querySelector('[data-cam-min-pitch]') as HTMLInputElement;
     const camMaxPitchInput = hud.querySelector('[data-cam-max-pitch]') as HTMLInputElement;
     const camTargetSmoothInput = hud.querySelector('[data-cam-target-smooth]') as HTMLInputElement;
+    const profileNameInput = hud.querySelector('[data-profile-name]') as HTMLInputElement;
+    const profileRoleInput = hud.querySelector('[data-profile-role]') as HTMLSelectElement;
+    const profileControllerInput = hud.querySelector('[data-profile-controller]') as HTMLSelectElement;
+    const profileFactionInput = hud.querySelector('[data-profile-faction]') as HTMLInputElement;
+    const profileHealthInput = hud.querySelector('[data-profile-health]') as HTMLInputElement;
+    const profileStaminaInput = hud.querySelector('[data-profile-stamina]') as HTMLInputElement;
+    const profileTagsInput = hud.querySelector('[data-profile-tags]') as HTMLInputElement;
+    const profileDescriptionInput = hud.querySelector('[data-profile-description]') as HTMLInputElement;
     const rigShowInput = hud.querySelector('[data-rig-show]') as HTMLInputElement;
     const rigBoneSelect = hud.querySelector('[data-rig-bone]') as HTMLSelectElement;
     const rigModeSelect = hud.querySelector('[data-rig-mode]') as HTMLSelectElement;
@@ -1899,6 +2481,28 @@ export class EditorApp {
     const rsimMaxLin = hud.querySelector('[data-rsim-max-lin]') as HTMLInputElement;
     const rsimMaxAng = hud.querySelector('[data-rsim-max-ang]') as HTMLInputElement;
     const rsimStartImpulse = hud.querySelector('[data-rsim-start-impulse]') as HTMLInputElement;
+    const capsulePreviewInput = hud.querySelector('[data-capsule-preview]') as HTMLInputElement;
+    const capsuleBaseRadiusInput = hud.querySelector('[data-capsule-base-radius]') as HTMLInputElement;
+    const capsuleBaseHeightInput = hud.querySelector('[data-capsule-base-height]') as HTMLInputElement;
+    const capsuleSkinWidthInput = hud.querySelector('[data-capsule-skin-width]') as HTMLInputElement;
+    const capsuleStepHeightInput = hud.querySelector('[data-capsule-step-height]') as HTMLInputElement;
+    const capsuleSlopeInput = hud.querySelector('[data-capsule-slope]') as HTMLInputElement;
+    const stateMachineInitialInput = hud.querySelector('[data-sm-initial]') as HTMLInputElement;
+    const stateMachineStatesInput = hud.querySelector('[data-sm-states]') as HTMLTextAreaElement;
+    const stateMachineTransitionsInput = hud.querySelector('[data-sm-transitions]') as HTMLTextAreaElement;
+    const stateMachineResetButton = hud.querySelector('[data-sm-reset]') as HTMLButtonElement;
+    const stateMachineValidateButton = hud.querySelector('[data-sm-validate]') as HTMLButtonElement;
+    const stateMachineStatus = hud.querySelector('[data-sm-status]') as HTMLDivElement;
+    const npcEnabledInput = hud.querySelector('[data-npc-enabled]') as HTMLInputElement;
+    const npcArchetypeInput = hud.querySelector('[data-npc-archetype]') as HTMLInputElement;
+    const npcAggressionInput = hud.querySelector('[data-npc-aggression]') as HTMLInputElement;
+    const npcPerceptionInput = hud.querySelector('[data-npc-perception]') as HTMLInputElement;
+    const npcFovInput = hud.querySelector('[data-npc-fov]') as HTMLInputElement;
+    const npcPatrolSpeedInput = hud.querySelector('[data-npc-patrol-speed]') as HTMLInputElement;
+    const npcChaseSpeedInput = hud.querySelector('[data-npc-chase-speed]') as HTMLInputElement;
+    const npcAttackRangeInput = hud.querySelector('[data-npc-attack-range]') as HTMLInputElement;
+    const npcReactionInput = hud.querySelector('[data-npc-reaction]') as HTMLInputElement;
+    const npcGoalsInput = hud.querySelector('[data-npc-goals]') as HTMLTextAreaElement;
     const playerLoadButton = hud.querySelector('[data-player-load]') as HTMLButtonElement;
     const playerSaveButton = hud.querySelector('[data-player-save]') as HTMLButtonElement;
     const sceneList = hud.querySelector('[data-scene-list]') as HTMLSelectElement;
@@ -1911,6 +2515,7 @@ export class EditorApp {
     const sceneObstacles = hud.querySelector('[data-scene-obstacles]') as HTMLTextAreaElement;
     const sceneJson = hud.querySelector('[data-scene-json]') as HTMLTextAreaElement;
     const levelObjectSelect = hud.querySelector('[data-level-object]') as HTMLSelectElement;
+    const levelHierarchy = hud.querySelector('[data-level-hierarchy]') as HTMLDivElement;
     const levelAddBtn = hud.querySelector('[data-level-add]') as HTMLButtonElement;
     const levelDuplicateBtn = hud.querySelector('[data-level-duplicate]') as HTMLButtonElement;
     const levelDeleteBtn = hud.querySelector('[data-level-delete]') as HTMLButtonElement;
@@ -1938,6 +2543,7 @@ export class EditorApp {
     this.levelSceneObstaclesEl = sceneObstacles;
     this.levelSceneJsonEl = sceneJson;
     this.levelObjectSelectEl = levelObjectSelect;
+    this.levelHierarchyEl = levelHierarchy;
     const setSceneStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
       sceneStatus.textContent = text;
       sceneStatus.dataset.tone = tone;
@@ -2079,7 +2685,7 @@ export class EditorApp {
     });
 
     levelObjectSelect.addEventListener('change', () => {
-      this.selectLevelObstacle(levelObjectSelect.value || null);
+      this.selectLevelObject(levelObjectSelect.value || null);
       if (levelStatus) levelStatus.textContent = levelObjectSelect.value ? `Selected ${levelObjectSelect.value}` : 'No object selected';
     });
 
@@ -2109,47 +2715,49 @@ export class EditorApp {
       obstacles.push({ id, x: 0, y: 0, z: 0, width: 1, height: 1, depth: 1 });
       scene.obstacles = obstacles;
       this.updateLevelVisualization(obstacles);
-      this.selectLevelObstacle(id);
+      this.selectLevelObject(`obstacle:${id}`);
       this.syncLevelTextEditors();
       if (levelStatus) levelStatus.textContent = `Added ${id}`;
     });
 
     levelDuplicateBtn.addEventListener('click', () => {
-      const selectedId = this.selectedLevelObstacleId;
+      const selectedId = this.selectedLevelObjectId;
       const scene = this.getCurrentLevelSceneEntry();
-      if (!selectedId || !scene) return;
+      if (!selectedId || !scene || !selectedId.startsWith('obstacle:')) return;
+      const selectedObstacleId = selectedId.replace('obstacle:', '');
       const obstacles = scene.obstacles ?? [];
-      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
+      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedObstacleId);
       if (index < 0) return;
       const source = this.normalizeLevelObstacle(obstacles[index] ?? {}, index);
       const id = `obstacle_${obstacles.length + 1}`;
       obstacles.push({ ...source, id, x: source.x + 1 });
       scene.obstacles = obstacles;
       this.updateLevelVisualization(obstacles);
-      this.selectLevelObstacle(id);
+      this.selectLevelObject(`obstacle:${id}`);
       this.syncLevelTextEditors();
-      if (levelStatus) levelStatus.textContent = `Duplicated ${selectedId} -> ${id}`;
+      if (levelStatus) levelStatus.textContent = `Duplicated ${selectedObstacleId} -> ${id}`;
     });
 
     levelDeleteBtn.addEventListener('click', () => {
-      const selectedId = this.selectedLevelObstacleId;
+      const selectedId = this.selectedLevelObjectId;
       const scene = this.getCurrentLevelSceneEntry();
-      if (!selectedId || !scene) return;
+      if (!selectedId || !scene || !selectedId.startsWith('obstacle:')) return;
+      const selectedObstacleId = selectedId.replace('obstacle:', '');
       const obstacles = (scene.obstacles ?? []).filter(
-        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id !== selectedId,
+        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id !== selectedObstacleId,
       );
       scene.obstacles = obstacles;
       this.updateLevelVisualization(obstacles);
       this.syncLevelTextEditors();
-      if (levelStatus) levelStatus.textContent = `Deleted ${selectedId}`;
+      if (levelStatus) levelStatus.textContent = `Deleted ${selectedObstacleId}`;
     });
 
     levelFocusBtn.addEventListener('click', () => {
-      const selectedId = this.selectedLevelObstacleId;
-      const mesh = selectedId ? this.levelObstacleMeshes.get(selectedId) : null;
-      if (!mesh || !this.controls) return;
-      this.controls.target.copy(mesh.position);
-      this.camera.position.set(mesh.position.x + 4, mesh.position.y + 4, mesh.position.z + 4);
+      const selectedId = this.selectedLevelObjectId;
+      const entry = selectedId ? this.levelSceneObjects.get(selectedId) : null;
+      if (!entry || !this.controls) return;
+      this.controls.target.copy(entry.object.position);
+      this.camera.position.set(entry.object.position.x + 4, entry.object.position.y + 4, entry.object.position.z + 4);
       this.controls.update();
     });
 
@@ -2307,6 +2915,7 @@ export class EditorApp {
         if (playerStatus) playerStatus.textContent = `Avatar list failed: ${String(error)}`;
       }
     };
+    this.refreshPlayerAvatarsFunction = refreshPlayerAvatars;
 
     const setPlayerInputs = () => {
       if (!ikOffsetInput) return;
@@ -2332,7 +2941,34 @@ export class EditorApp {
       camMinPitchInput.value = this.playerConfig.cameraMinPitch.toFixed(2);
       camMaxPitchInput.value = this.playerConfig.cameraMaxPitch.toFixed(2);
       camTargetSmoothInput.value = this.playerConfig.targetSmoothSpeed.toFixed(0);
+      profileNameInput.value = String(this.playerConfig.profile?.name ?? '');
+      profileRoleInput.value = String(this.playerConfig.profile?.role ?? 'player');
+      profileControllerInput.value = String(this.playerConfig.profile?.controller ?? 'third_person');
+      profileFactionInput.value = String(this.playerConfig.profile?.faction ?? '');
+      profileHealthInput.value = String(this.playerConfig.profile?.health ?? 100);
+      profileStaminaInput.value = String(this.playerConfig.profile?.stamina ?? 100);
+      profileTagsInput.value = (this.playerConfig.profile?.tags ?? []).join(',');
+      profileDescriptionInput.value = String(this.playerConfig.profile?.description ?? '');
       playerAvatarSelect.value = String(this.playerConfig.avatar ?? '');
+      capsulePreviewInput.checked = Boolean(this.playerConfig.capsule?.preview);
+      capsuleBaseRadiusInput.value = String(this.playerConfig.capsule?.baseRadius ?? 0.35);
+      capsuleBaseHeightInput.value = String(this.playerConfig.capsule?.baseHeight ?? 1.72);
+      capsuleSkinWidthInput.value = String(this.playerConfig.capsule?.skinWidth ?? 0.03);
+      capsuleStepHeightInput.value = String(this.playerConfig.capsule?.stepHeight ?? 0.35);
+      capsuleSlopeInput.value = String(this.playerConfig.capsule?.slopeLimitDeg ?? 50);
+      stateMachineInitialInput.value = String(this.playerConfig.stateMachine?.initial ?? 'idle');
+      stateMachineStatesInput.value = JSON.stringify(this.playerConfig.stateMachine?.states ?? [], null, 2);
+      stateMachineTransitionsInput.value = JSON.stringify(this.playerConfig.stateMachine?.transitions ?? [], null, 2);
+      npcEnabledInput.checked = Boolean(this.playerConfig.npc?.enabled);
+      npcArchetypeInput.value = String(this.playerConfig.npc?.archetype ?? 'grunt');
+      npcAggressionInput.value = String(this.playerConfig.npc?.aggression ?? 0.5);
+      npcPerceptionInput.value = String(this.playerConfig.npc?.perceptionRange ?? 20);
+      npcFovInput.value = String(this.playerConfig.npc?.fovDeg ?? 120);
+      npcPatrolSpeedInput.value = String(this.playerConfig.npc?.patrolSpeed ?? 2);
+      npcChaseSpeedInput.value = String(this.playerConfig.npc?.chaseSpeed ?? 4);
+      npcAttackRangeInput.value = String(this.playerConfig.npc?.attackRange ?? 1.8);
+      npcReactionInput.value = String(this.playerConfig.npc?.reactionMs ?? 220);
+      npcGoalsInput.value = JSON.stringify(this.playerConfig.npc?.goals ?? [], null, 2);
       if (rigBoneSelect && rigBoneSelect.options.length === 0) {
         for (const def of this.ragdollDefs) {
           const opt = document.createElement('option');
@@ -2389,10 +3025,13 @@ export class EditorApp {
       rsimMaxLin.value = String(sim.maxLinearVelocity);
       rsimMaxAng.value = String(sim.maxAngularVelocity);
       rsimStartImpulse.value = String(sim.startImpulseY);
+      this.syncPlayerCapsulePreview();
       syncPlayerJson();
     };
+    this.refreshPlayerInputsFunction = setPlayerInputs;
 
     const readPlayerInputs = () => {
+      if (stateMachineStatus) stateMachineStatus.textContent = '';
       this.playerConfig.moveSpeed = Number(moveSpeedInput.value) || 0;
       this.playerConfig.sprintMultiplier = Number(sprintMultInput.value) || 0;
       this.playerConfig.crouchMultiplier = Number(crouchMultInput.value) || 0;
@@ -2415,7 +3054,85 @@ export class EditorApp {
       this.playerConfig.cameraMinPitch = Number(camMinPitchInput.value) || 0;
       this.playerConfig.cameraMaxPitch = Number(camMaxPitchInput.value) || 0;
       this.playerConfig.targetSmoothSpeed = Number(camTargetSmoothInput.value) || 0;
+      this.playerConfig.profile = {
+        name: profileNameInput.value.trim() || 'Unnamed Character',
+        role: (profileRoleInput.value as CharacterRole) || 'player',
+        controller: (profileControllerInput.value as ControllerMode) || 'third_person',
+        faction: profileFactionInput.value.trim() || 'neutral',
+        health: Math.max(1, Number(profileHealthInput.value) || 100),
+        stamina: Math.max(0, Number(profileStaminaInput.value) || 100),
+        description: profileDescriptionInput.value.trim(),
+        tags: profileTagsInput.value
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      };
       this.playerConfig.avatar = playerAvatarSelect.value || '';
+      this.playerConfig.capsule = {
+        preview: capsulePreviewInput.checked,
+        baseRadius: Math.max(0.05, Number(capsuleBaseRadiusInput.value) || 0.35),
+        baseHeight: Math.max(0.2, Number(capsuleBaseHeightInput.value) || 1.72),
+        skinWidth: Math.max(0, Number(capsuleSkinWidthInput.value) || 0.03),
+        stepHeight: Math.max(0, Number(capsuleStepHeightInput.value) || 0.35),
+        slopeLimitDeg: THREE.MathUtils.clamp(Number(capsuleSlopeInput.value) || 50, 1, 89),
+      };
+      let parsedStates = this.playerConfig.stateMachine?.states ?? [];
+      let parsedTransitions = this.playerConfig.stateMachine?.transitions ?? [];
+      try {
+        const statesRaw = JSON.parse(stateMachineStatesInput.value || '[]');
+        parsedStates = Array.isArray(statesRaw)
+          ? statesRaw.map((state) => ({
+            id: String((state as any).id ?? '').trim(),
+            clip: String((state as any).clip ?? '').trim(),
+            speed: Number((state as any).speed ?? 1) || 1,
+            loop: Boolean((state as any).loop ?? true),
+            tags: Array.isArray((state as any).tags)
+              ? (state as any).tags.map((tag: unknown) => String(tag))
+              : [],
+          })).filter((state) => state.id.length > 0)
+          : parsedStates;
+      } catch {
+        if (stateMachineStatus) stateMachineStatus.textContent = 'States JSON parse error.';
+      }
+      try {
+        const transitionsRaw = JSON.parse(stateMachineTransitionsInput.value || '[]');
+        parsedTransitions = Array.isArray(transitionsRaw)
+          ? transitionsRaw.map((transition) => ({
+            from: String((transition as any).from ?? 'any'),
+            to: String((transition as any).to ?? '').trim(),
+            condition: String((transition as any).condition ?? '').trim(),
+            blendMs: Math.max(0, Number((transition as any).blendMs ?? 120) || 120),
+            priority: Math.max(0, Number((transition as any).priority ?? 1) || 1),
+            interruptible: Boolean((transition as any).interruptible ?? true),
+          })).filter((transition) => transition.to.length > 0)
+          : parsedTransitions;
+      } catch {
+        if (stateMachineStatus) stateMachineStatus.textContent = 'Transitions JSON parse error.';
+      }
+      this.playerConfig.stateMachine = {
+        initial: stateMachineInitialInput.value.trim() || 'idle',
+        states: parsedStates,
+        transitions: parsedTransitions,
+      };
+      let npcGoals = this.playerConfig.npc?.goals ?? [];
+      try {
+        const parsed = JSON.parse(npcGoalsInput.value || '[]');
+        if (Array.isArray(parsed)) npcGoals = parsed.map((goal) => String(goal));
+      } catch {
+        // Keep last valid goals if parse fails.
+      }
+      this.playerConfig.npc = {
+        enabled: npcEnabledInput.checked,
+        archetype: npcArchetypeInput.value.trim() || 'grunt',
+        aggression: THREE.MathUtils.clamp(Number(npcAggressionInput.value) || 0.5, 0, 1),
+        perceptionRange: Math.max(0, Number(npcPerceptionInput.value) || 20),
+        fovDeg: THREE.MathUtils.clamp(Number(npcFovInput.value) || 120, 1, 179),
+        patrolSpeed: Math.max(0, Number(npcPatrolSpeedInput.value) || 2),
+        chaseSpeed: Math.max(0, Number(npcChaseSpeedInput.value) || 4),
+        attackRange: Math.max(0, Number(npcAttackRangeInput.value) || 1.8),
+        reactionMs: Math.max(0, Number(npcReactionInput.value) || 220),
+        goals: npcGoals,
+      };
       this.playerConfig.ragdollMuscle = {
         enabled: rsimMuscleEnabled.checked,
         stiffness: Number(rsimMuscleStiffness.value) || 0,
@@ -2462,16 +3179,46 @@ export class EditorApp {
           };
         }
       }
+      this.syncPlayerCapsulePreview();
       syncPlayerJson();
     };
+
+    stateMachineResetButton?.addEventListener('click', () => {
+      this.playerConfig.stateMachine = {
+        initial: 'idle',
+        states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+        transitions: DEFAULT_STATE_MACHINE_TRANSITIONS.map((transition) => ({ ...transition })),
+      };
+      setPlayerInputs();
+      if (stateMachineStatus) stateMachineStatus.textContent = 'Reset state machine defaults.';
+    });
+
+    stateMachineValidateButton?.addEventListener('click', () => {
+      readPlayerInputs();
+      const errors: string[] = [];
+      const sm = this.playerConfig.stateMachine;
+      const stateNames = new Set(sm.states.map((state) => state.id));
+      if (!stateNames.has(sm.initial)) errors.push(`Initial "${sm.initial}" is missing from states.`);
+      for (const transition of sm.transitions) {
+        if (transition.from !== 'any' && !stateNames.has(transition.from)) {
+          errors.push(`Transition from "${transition.from}" is invalid.`);
+        }
+        if (!stateNames.has(transition.to)) {
+          errors.push(`Transition to "${transition.to}" is invalid.`);
+        }
+      }
+      if (stateMachineStatus) {
+        stateMachineStatus.textContent = errors.length > 0 ? `Invalid: ${errors[0]}` : 'State machine valid.';
+      }
+    });
 
     playerLoadButton?.addEventListener('click', async () => {
       try {
         if (!this.currentGameId) throw new Error('No game selected');
         const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) throw new Error(await res.text());
-        const data = (await res.json()) as Partial<typeof this.playerConfig>;
-        this.playerConfig = { ...this.playerConfig, ...data };
+        const data = (await res.json()) as Partial<PlayerConfig>;
+        this.playerConfig = this.normalizePlayerConfig({ ...this.playerConfig, ...data });
         setPlayerInputs();
         await refreshPlayerAvatars();
         this.loadVrm();
@@ -2555,6 +3302,33 @@ export class EditorApp {
       camMinPitchInput,
       camMaxPitchInput,
       camTargetSmoothInput,
+      profileNameInput,
+      profileRoleInput,
+      profileControllerInput,
+      profileFactionInput,
+      profileHealthInput,
+      profileStaminaInput,
+      profileTagsInput,
+      profileDescriptionInput,
+      capsulePreviewInput,
+      capsuleBaseRadiusInput,
+      capsuleBaseHeightInput,
+      capsuleSkinWidthInput,
+      capsuleStepHeightInput,
+      capsuleSlopeInput,
+      stateMachineInitialInput,
+      stateMachineStatesInput,
+      stateMachineTransitionsInput,
+      npcEnabledInput,
+      npcArchetypeInput,
+      npcAggressionInput,
+      npcPerceptionInput,
+      npcFovInput,
+      npcPatrolSpeedInput,
+      npcChaseSpeedInput,
+      npcAttackRangeInput,
+      npcReactionInput,
+      npcGoalsInput,
       playerAvatarSelect,
       rsimMuscleEnabled,
       rsimMuscleStiffness,
@@ -2729,8 +3503,8 @@ export class EditorApp {
         if (!this.currentGameId) throw new Error('No game selected');
         const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) return;
-        const data = (await res.json()) as Partial<typeof this.playerConfig>;
-        this.playerConfig = { ...this.playerConfig, ...data };
+        const data = (await res.json()) as Partial<PlayerConfig>;
+        this.playerConfig = this.normalizePlayerConfig({ ...this.playerConfig, ...data });
         setPlayerInputs();
         await refreshPlayerAvatars();
         this.loadVrm();
@@ -3412,9 +4186,16 @@ export class EditorApp {
     textarea.value = JSON.stringify(this.clip, null, 2);
   }
 
-  private updateTimeline() {
+  private updateTimeline(force = true) {
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
-    if (timeInput) timeInput.value = this.time.toFixed(4);
+    const frameIndex = THREE.MathUtils.clamp(Math.round(this.time * this.fps), 0, this.getTotalFrames() - 1);
+    const now = performance.now();
+    if (timeInput && (force || now - this.timelineLastUiUpdateMs >= 66)) {
+      timeInput.value = this.time.toFixed(4);
+      this.timelineLastUiUpdateMs = now;
+    }
+    if (!force && frameIndex === this.timelineLastDrawnFrame) return;
+    this.timelineLastDrawnFrame = frameIndex;
     this.drawTimeline();
   }
 
@@ -3804,57 +4585,56 @@ export class EditorApp {
     if (this.clipKeyMap.size === 0) {
       this.rebuildClipKeyMap();
     }
-    const root = this.boneByKey.get(ROOT_BONE_KEY);
-    if (root) {
-      let prev: BoneFrame | null = null;
-      let next: BoneFrame | null = null;
-      for (let i = 0; i < frames.length; i += 1) {
-        const frame = frames[i]!;
-        if (!frame.rootPos) continue;
-        if (frame.time <= time) prev = frame;
-        if (frame.time >= time) {
-          next = frame;
-          break;
+    const first = frames[0]!;
+    const last = frames[frames.length - 1]!;
+    let prev = first;
+    let next = last;
+    if (time <= first.time) {
+      prev = first;
+      next = first;
+    } else if (time >= last.time) {
+      prev = last;
+      next = last;
+    } else {
+      let lo = 0;
+      let hi = frames.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const frame = frames[mid]!;
+        if (frame.time < time) {
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
       }
-      if (prev || next) {
-        if (!next) next = prev;
-        if (!prev) prev = next;
-        if (prev?.rootPos && next?.rootPos) {
-          const span = Math.max(0.0001, next.time - prev.time);
-          const t = THREE.MathUtils.clamp((time - prev.time) / span, 0, 1);
-          root.position.set(
-            THREE.MathUtils.lerp(prev.rootPos.x, next.rootPos.x, t),
-            THREE.MathUtils.lerp(prev.rootPos.y, next.rootPos.y, t),
-            THREE.MathUtils.lerp(prev.rootPos.z, next.rootPos.z, t),
-          );
-        }
+      const nextIndex = THREE.MathUtils.clamp(lo, 0, frames.length - 1);
+      const prevIndex = THREE.MathUtils.clamp(nextIndex - 1, 0, frames.length - 1);
+      prev = frames[prevIndex]!;
+      next = frames[nextIndex]!;
+    }
+    const span = Math.max(0.0001, next.time - prev.time);
+    const t = THREE.MathUtils.clamp((time - prev.time) / span, 0, 1);
+
+    const root = this.boneByKey.get(ROOT_BONE_KEY);
+    if (root) {
+      const rootA = prev.rootPos ?? next.rootPos;
+      const rootB = next.rootPos ?? prev.rootPos;
+      if (rootA && rootB) {
+        root.position.set(
+          THREE.MathUtils.lerp(rootA.x, rootB.x, t),
+          THREE.MathUtils.lerp(rootA.y, rootB.y, t),
+          THREE.MathUtils.lerp(rootA.z, rootB.z, t),
+        );
       }
     }
     for (const [key, bone] of this.clipKeyMap.entries()) {
-      let prev: BoneFrame | null = null;
-      let next: BoneFrame | null = null;
-      for (let i = 0; i < frames.length; i += 1) {
-        const frame = frames[i]!;
-        if (!frame.bones[key]) continue;
-        if (frame.time <= time) prev = frame;
-        if (frame.time >= time) {
-          next = frame;
-          break;
-        }
-      }
-      if (!prev && !next) continue;
-      if (!next) next = prev;
-      if (!prev) prev = next;
-      const qa = prev!.bones[key];
-      const qb = next!.bones[key];
+      const qa = prev.bones[key] ?? next.bones[key];
+      const qb = next.bones[key] ?? prev.bones[key];
       if (!qa || !qb) continue;
-      const span = Math.max(0.0001, next!.time - prev!.time);
-      const t = THREE.MathUtils.clamp((time - prev!.time) / span, 0, 1);
-      const q1 = new THREE.Quaternion(qa.x, qa.y, qa.z, qa.w);
-      const q2 = new THREE.Quaternion(qb.x, qb.y, qb.z, qb.w);
-      q1.slerp(q2, t);
-      bone.quaternion.copy(q1);
+      this.clipInterpQuatA.set(qa.x, qa.y, qa.z, qa.w);
+      this.clipInterpQuatB.set(qb.x, qb.y, qb.z, qb.w);
+      this.clipInterpQuatOut.slerpQuaternions(this.clipInterpQuatA, this.clipInterpQuatB, t);
+      bone.quaternion.copy(this.clipInterpQuatOut);
     }
   }
 
@@ -3900,6 +4680,106 @@ export class EditorApp {
     }
   }
 
+  private normalizePlayerConfig(payload: Partial<PlayerConfig> | null | undefined): PlayerConfig {
+    const defaults = createDefaultPlayerConfig();
+    const data = (payload ?? {}) as Partial<PlayerConfig>;
+    return {
+      ...defaults,
+      ...data,
+      ragdollMuscle: { ...defaults.ragdollMuscle, ...(data.ragdollMuscle ?? {}) },
+      ragdollSim: { ...defaults.ragdollSim, ...(data.ragdollSim ?? {}) },
+      ragdollRig: typeof data.ragdollRig === 'object' && data.ragdollRig ? { ...data.ragdollRig } : {},
+      profile: {
+        ...defaults.profile,
+        ...(data.profile ?? {}),
+        tags: Array.isArray(data.profile?.tags) ? data.profile!.tags.map((tag) => String(tag)) : [...defaults.profile.tags],
+      },
+      capsule: { ...defaults.capsule, ...(data.capsule ?? {}) },
+      stateMachine: {
+        initial: String(data.stateMachine?.initial ?? defaults.stateMachine.initial),
+        states: Array.isArray(data.stateMachine?.states)
+          ? data.stateMachine!.states.map((state) => ({
+            id: String((state as any).id ?? ''),
+            clip: String((state as any).clip ?? ''),
+            speed: Number((state as any).speed ?? 1) || 1,
+            loop: Boolean((state as any).loop ?? true),
+            tags: Array.isArray((state as any).tags)
+              ? (state as any).tags.map((tag: unknown) => String(tag))
+              : [],
+          })).filter((state) => state.id.length > 0)
+          : defaults.stateMachine.states.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+        transitions: Array.isArray(data.stateMachine?.transitions)
+          ? data.stateMachine!.transitions.map((transition) => ({
+            from: String((transition as any).from ?? 'any'),
+            to: String((transition as any).to ?? ''),
+            condition: String((transition as any).condition ?? ''),
+            blendMs: Number((transition as any).blendMs ?? 120) || 120,
+            priority: Number((transition as any).priority ?? 1) || 1,
+            interruptible: Boolean((transition as any).interruptible ?? true),
+          })).filter((transition) => transition.to.length > 0)
+          : defaults.stateMachine.transitions.map((transition) => ({ ...transition })),
+      },
+      npc: {
+        ...defaults.npc,
+        ...(data.npc ?? {}),
+        goals: Array.isArray(data.npc?.goals) ? data.npc!.goals.map((goal) => String(goal)) : [...defaults.npc.goals],
+      },
+    };
+  }
+
+  private syncPlayerCapsulePreview() {
+    const enabled = this.currentTab === 'player' && Boolean(this.playerConfig.capsule?.preview);
+    if (!enabled) {
+      if (this.playerCapsulePreview) this.playerCapsulePreview.visible = false;
+      return;
+    }
+    const capsule = this.playerConfig.capsule ?? createDefaultPlayerConfig().capsule;
+    const radius = Math.max(0.08, capsule.baseRadius * (this.playerConfig.capsuleRadiusScale || 1));
+    const height = Math.max(radius * 2.2, capsule.baseHeight * (this.playerConfig.capsuleHeightScale || 1));
+    const cylinderLength = Math.max(0.05, height - radius * 2);
+    if (!this.playerCapsulePreview) {
+      const solid = new THREE.Mesh(
+        new THREE.CapsuleGeometry(radius, cylinderLength, 8, 16),
+        this.playerCapsulePreviewMaterial,
+      );
+      const wire = new THREE.Mesh(
+        new THREE.CapsuleGeometry(radius, cylinderLength, 8, 16),
+        this.playerCapsuleWireframe,
+      );
+      const group = new THREE.Group();
+      group.add(solid, wire);
+      group.renderOrder = 20;
+      this.characterScene.add(group);
+      this.playerCapsulePreview = group;
+    } else {
+      const solid = this.playerCapsulePreview.children[0] as THREE.Mesh | undefined;
+      const wire = this.playerCapsulePreview.children[1] as THREE.Mesh | undefined;
+      if (solid) {
+        solid.geometry.dispose();
+        solid.geometry = new THREE.CapsuleGeometry(radius, cylinderLength, 8, 16);
+      }
+      if (wire) {
+        wire.geometry.dispose();
+        wire.geometry = new THREE.CapsuleGeometry(radius, cylinderLength, 8, 16);
+      }
+    }
+    const anchor = this.playerCapsuleTemp.set(0, 0, 0);
+    if (this.vrm) {
+      const hips = this.vrm.humanoid.getRawBoneNode('hips');
+      if (hips) {
+        hips.getWorldPosition(anchor);
+      } else {
+        anchor.copy(this.vrm.scene.position);
+      }
+    }
+    this.playerCapsulePreview.position.set(
+      anchor.x,
+      Math.max(radius, height * 0.5 + (this.playerConfig.capsuleYOffset || 0)),
+      anchor.z,
+    );
+    this.playerCapsulePreview.visible = enabled;
+  }
+
   private loadVrm() {
     if (!this.currentGameId) return;
     const avatarName = String(this.playerConfig.avatar ?? '').trim();
@@ -3908,6 +4788,7 @@ export class EditorApp {
         this.characterScene.remove(this.vrm.scene);
         this.vrm = null;
       }
+      this.syncPlayerCapsulePreview();
       return;
     }
     const url = getGameAvatarUrl(this.currentGameId, avatarName);
@@ -3922,32 +4803,38 @@ export class EditorApp {
   }
 
   private createCharacterScene() {
-    // Simple lighting - clean and functional
-    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
-    this.characterScene.add(ambient);
+    // Minimal animation-preview scene: clean lighting + floor/grid only.
+    this.characterScene.background = new THREE.Color(0x090d16);
+    this.characterScene.fog = null;
 
-    const key = new THREE.DirectionalLight(0xffffff, 0.8);
-    key.position.set(5, 10, 5);
+    const hemi = new THREE.HemisphereLight(0xb6c8ff, 0x10141d, 0.5);
+    this.characterScene.add(hemi);
+
+    const key = new THREE.DirectionalLight(0xffffff, 0.95);
+    key.position.set(4, 7, 3);
     this.characterScene.add(key);
 
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
-    fill.position.set(-5, 5, -5);
+    const fill = new THREE.DirectionalLight(0x88aaff, 0.25);
+    fill.position.set(-4, 3.5, -2);
     this.characterScene.add(fill);
 
-    // Simple floor
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(50, 50),
       new THREE.MeshStandardMaterial({
-        color: 0x2a2a2a,
-        roughness: 0.9,
-        metalness: 0.0,
+        color: 0x1f2530,
+        roughness: 0.94,
+        metalness: 0.02,
       }),
     );
     floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.001;
     this.characterScene.add(floor);
 
-    // Add subtle grid
-    const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
+    const gridHelper = new THREE.GridHelper(40, 40, 0x4d5b78, 0x232c3b);
+    gridHelper.position.y = 0.002;
+    const gridMat = gridHelper.material as THREE.Material;
+    gridMat.transparent = true;
+    gridMat.opacity = 0.32;
     this.characterScene.add(gridHelper);
   }
 
@@ -3965,26 +4852,8 @@ export class EditorApp {
     gridHelper.position.y = 0.01; // Slightly above ground to prevent z-fighting
     this.levelScene.add(gridHelper);
 
-    // Add player spawn marker
-    const playerMarkerGeo = new THREE.CylinderGeometry(0.6, 0.6, 2, 16);
-    const playerMarkerMat = new THREE.MeshStandardMaterial({
-      color: 0x00ff00,
-      emissive: 0x00ff00,
-      emissiveIntensity: 0.3,
-      transparent: true,
-      opacity: 0.7
-    });
-    const playerMarker = new THREE.Mesh(playerMarkerGeo, playerMarkerMat);
-    playerMarker.position.set(0, 1, 0); // Player spawn at origin
-    this.levelScene.add(playerMarker);
     this.levelObstacleGroup.name = 'level-obstacles';
     this.levelScene.add(this.levelObstacleGroup);
-
-    // Add label for player spawn
-    const playerLabel = document.createElement('div');
-    playerLabel.textContent = 'Player Spawn';
-    playerLabel.style.cssText = 'position: absolute; color: #00ff00; font-size: 12px; pointer-events: none;';
-    // Note: Label positioning would need to be updated in render loop for proper 3D->2D projection
 
     // Obstacles are loaded from the selected scene in the level editor UI.
   }
@@ -4137,6 +5006,7 @@ export class EditorApp {
     this.collectBones();
     this.buildBoneGizmos();
     this.populateBoneList();
+    this.syncPlayerCapsulePreview();
   }
 
   private fitCameraToVrm(forceAxis = false) {
@@ -4228,18 +5098,18 @@ export class EditorApp {
     const center = size / 2;
     const scale = size * 0.34;
 
-    const camQuat = this.camera.quaternion.clone().invert();
+    this.axisDrawInvQuat.copy(this.camera.quaternion).invert();
     const axes = [
-      { name: 'X', dir: new THREE.Vector3(1, 0, 0), color: '#ef4444', neg: '#7f1d1d' },
-      { name: 'Y', dir: new THREE.Vector3(0, 1, 0), color: '#22c55e', neg: '#14532d' },
-      { name: 'Z', dir: new THREE.Vector3(0, 0, 1), color: '#3b82f6', neg: '#1e3a8a' },
+      { name: 'X', dir: this.axisBasisX, color: '#ef4444', neg: '#7f1d1d' },
+      { name: 'Y', dir: this.axisBasisY, color: '#22c55e', neg: '#14532d' },
+      { name: 'Z', dir: this.axisBasisZ, color: '#3b82f6', neg: '#1e3a8a' },
     ];
 
     const drawAxis = (dir: THREE.Vector3, color: string, label: string) => {
-      const v = dir.clone().applyQuaternion(camQuat);
-      const x = center + v.x * scale;
-      const y = center - v.y * scale;
-      const depth = v.z;
+      this.axisDrawVec.copy(dir).applyQuaternion(this.axisDrawInvQuat);
+      const x = center + this.axisDrawVec.x * scale;
+      const y = center - this.axisDrawVec.y * scale;
+      const depth = this.axisDrawVec.z;
       ctx.strokeStyle = color;
       ctx.lineWidth = depth > 0 ? 2.4 : 1.4;
       ctx.beginPath();
@@ -4256,7 +5126,8 @@ export class EditorApp {
 
     for (const axis of axes) {
       drawAxis(axis.dir, axis.color, `+${axis.name}`);
-      drawAxis(axis.dir.clone().multiplyScalar(-1), axis.neg, `-${axis.name}`);
+      this.axisDrawNegVec.copy(axis.dir).multiplyScalar(-1);
+      drawAxis(this.axisDrawNegVec, axis.neg, `-${axis.name}`);
     }
 
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
@@ -4446,6 +5317,7 @@ export class EditorApp {
       this.scene.remove(marker);
     }
     this.boneMarkers.clear();
+    this.boneMarkerObjects = [];
 
     // Keep marker meshes as invisible hit-targets for selection/snap behavior.
     // Visual joints are rendered by bone gizmos only to avoid duplicate spheres.
@@ -4467,6 +5339,7 @@ export class EditorApp {
       marker.userData.baseScale = adaptiveScale;
       this.scene.add(marker);
       this.boneMarkers.set(bone.name, marker);
+      this.boneMarkerObjects.push(marker);
     }
   }
 
@@ -4477,7 +5350,7 @@ export class EditorApp {
     let hoveredBone: THREE.Object3D | null = null;
     if ((this.pointerType === 'pen' || this.pointerType === 'touch') && !this.dragActive) {
       this.raycaster.setFromCamera(this.pointer, this.camera);
-      const hits = this.raycaster.intersectObjects(Array.from(this.boneMarkers.values()), false);
+      const hits = this.raycaster.intersectObjects(this.boneMarkerObjects, false);
       if (hits[0]) {
         const boneName = hits[0].object.userData.boneName as string | undefined;
         if (boneName) {
@@ -4490,8 +5363,8 @@ export class EditorApp {
       const marker = this.boneMarkers.get(bone.name);
       if (!marker) continue;
 
-      const pos = bone.getWorldPosition(new THREE.Vector3());
-      marker.position.copy(pos);
+      bone.getWorldPosition(this.boneMarkerWorldPos);
+      marker.position.copy(this.boneMarkerWorldPos);
       marker.scale.setScalar(bone === hoveredBone ? 1.4 : 1.0);
     }
   }
@@ -4526,6 +5399,8 @@ export class EditorApp {
     const up = new THREE.Vector3(0, 1, 0);
     const v0 = new THREE.Vector3();
     const v1 = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const stickQuat = new THREE.Quaternion();
 
     // Calculate pressure-based scale multiplier for gizmos
     const pressureScale = this.pointerType === 'pen' && this.pointerPressure > 0
@@ -4561,14 +5436,14 @@ export class EditorApp {
       const parent = gizmo.parent;
       if (parent && parent.type === 'Bone') {
         parent.getWorldPosition(v1);
-        const dir = v0.clone().sub(v1);
+        dir.copy(v0).sub(v1);
         const len = dir.length();
         if (len > 0.001) {
           gizmo.stick.visible = true;
           gizmo.stick.position.copy(v1).addScaledVector(dir, 0.5);
           gizmo.stick.scale.set(1, len, 1);
-          const quat = new THREE.Quaternion().setFromUnitVectors(up, dir.normalize());
-          gizmo.stick.quaternion.copy(quat);
+          stickQuat.setFromUnitVectors(up, dir.normalize());
+          gizmo.stick.quaternion.copy(stickQuat);
         } else {
           gizmo.stick.visible = false;
         }
@@ -4580,8 +5455,12 @@ export class EditorApp {
 
   private handleViewportPick = (event: PointerEvent) => {
     if (!this.viewport) return;
+    this.sanitizeTransformControls();
     if (this.currentTab === 'level') {
-      this.pickLevelObstacle(event);
+      if (this.levelTransform?.dragging || this.isTransformGizmoActive(this.levelTransform)) {
+        return;
+      }
+      this.pickLevelObject(event);
       return;
     }
 
@@ -4685,7 +5564,7 @@ export class EditorApp {
     this.selectedRagdoll = name;
     const mesh = this.ragdollDebugMeshes.find((item) => item.userData.ragdollName === name) ?? null;
     if (this.ragdollTransform) {
-      if (mesh) {
+      if (mesh && mesh.parent) {
         this.ragdollTransform.attach(mesh);
         (this.ragdollTransform as unknown as THREE.Object3D).visible = true;
       } else {
@@ -4693,7 +5572,9 @@ export class EditorApp {
         (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
       }
     }
-    this.ensureRagdollHandles();
+    if (mesh && mesh.parent) {
+      this.ensureRagdollHandles();
+    }
   }
 
   private ensureRagdollHandles() {
@@ -4793,6 +5674,26 @@ export class EditorApp {
     this.buildRagdoll();
     this.updateRagdollHandles();
   };
+
+  private detachRagdollTransform() {
+    if (!this.ragdollTransform) return;
+    this.ragdollTransform.detach();
+    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+    this.selectedRagdoll = null;
+  }
+
+  private sanitizeTransformControls() {
+    const sanitize = (control: TransformControls | null) => {
+      if (!control) return;
+      const target = (control as unknown as { object?: THREE.Object3D | null }).object;
+      if (!target || !target.parent) {
+        control.detach();
+        (control as unknown as THREE.Object3D).visible = false;
+      }
+    };
+    sanitize(this.ragdollTransform);
+    sanitize(this.levelTransform);
+  }
 
   private resizeRenderer() {
     if (!this.viewport) return;
@@ -4998,6 +5899,7 @@ export class EditorApp {
   }
 
   private disableRagdoll() {
+    this.detachRagdollTransform();
     this.ragdollEnabled = false;
     this.ragdollRecording = false;
     this.ragdollWorld = null;
@@ -5007,15 +5909,18 @@ export class EditorApp {
       this.scene.remove(mesh);
     }
     this.ragdollDebugMeshes = [];
+    if (this.ragdollHandles) this.ragdollHandles.visible = false;
   }
 
   private async toggleRagdollVisual(status?: HTMLElement) {
     if (!this.vrm) return;
     if (this.ragdollVisible) {
       this.ragdollVisible = false;
+      this.detachRagdollTransform();
       for (const mesh of this.ragdollDebugMeshes) {
         mesh.visible = false;
       }
+      if (this.ragdollHandles) this.ragdollHandles.visible = false;
       if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
       return;
     }
@@ -5035,6 +5940,7 @@ export class EditorApp {
     for (const mesh of this.ragdollDebugMeshes) {
       mesh.visible = true;
     }
+    if (this.ragdollHandles) this.ragdollHandles.visible = true;
     if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: visual';
   }
 
@@ -5059,6 +5965,7 @@ export class EditorApp {
 
   private buildRagdoll() {
     if (!this.vrm || !this.rapier) return;
+    this.detachRagdollTransform();
     const RAPIER = this.rapier;
     const sim = this.getRagdollSimConfig();
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -5795,6 +6702,9 @@ export class EditorApp {
     if (!this.timeline) return;
     const ctx = this.timeline.getContext('2d');
     if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
     const width = this.timeline.width;
     const height = this.timeline.height;
     ctx.clearRect(0, 0, width, height);
@@ -5816,26 +6726,41 @@ export class EditorApp {
     for (const frame of this.clip.frames) {
       keyedFrames.add(THREE.MathUtils.clamp(Math.round(frame.time * this.fps), 0, totalFrames - 1));
     }
-
-    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.fillStyle = 'rgba(148,163,184,0.08)';
     ctx.fillRect(lanePadX, laneY - Math.max(1, Math.floor(4 * this.dpr)), usableWidth, cellSize + Math.max(2, Math.floor(8 * this.dpr)));
+
+    const majorFrameStep = Math.max(1, this.fps);
+    const minorFrameStep = Math.max(1, Math.round(this.fps / 2));
 
     for (let f = 0; f < totalFrames; f += 1) {
       const x = lanePadX + f * stepPitch + gap * 0.5;
       const hasKey = keyedFrames.has(f);
 
-      if (f % this.fps === 0) {
+      if (f % majorFrameStep === 0) {
         ctx.strokeStyle = 'rgba(255,255,255,0.18)';
         ctx.lineWidth = Math.max(1, Math.floor(this.dpr * 0.7));
         ctx.beginPath();
         ctx.moveTo(Math.floor(x) + 0.5, laneY - Math.max(4, Math.floor(6 * this.dpr)));
         ctx.lineTo(Math.floor(x) + 0.5, laneY - Math.max(1, Math.floor(2 * this.dpr)));
         ctx.stroke();
+      } else if (minorFrameStep > 1 && f % minorFrameStep === 0) {
+        ctx.strokeStyle = 'rgba(148,163,184,0.2)';
+        ctx.lineWidth = Math.max(1, Math.floor(this.dpr * 0.55));
+        ctx.beginPath();
+        ctx.moveTo(Math.floor(x) + 0.5, laneY - Math.max(2, Math.floor(4 * this.dpr)));
+        ctx.lineTo(Math.floor(x) + 0.5, laneY - 1);
+        ctx.stroke();
       }
 
-      ctx.fillStyle = hasKey ? '#f5c84c' : 'rgba(255,255,255,0.1)';
+      let frameFill = f % 2 === 0 ? 'rgba(148,163,184,0.24)' : 'rgba(148,163,184,0.16)';
+      let frameStroke = 'rgba(148,163,184,0.45)';
+      if (hasKey) {
+        frameFill = 'rgba(245,200,76,0.75)';
+        frameStroke = 'rgba(245,200,76,0.95)';
+      }
+      ctx.fillStyle = frameFill;
       ctx.fillRect(x, cellOffsetY, Math.max(1, cellSize), Math.max(1, cellSize));
-      ctx.strokeStyle = hasKey ? 'rgba(245,200,76,0.95)' : 'rgba(255,255,255,0.2)';
+      ctx.strokeStyle = frameStroke;
       ctx.lineWidth = hasKey ? keyBorder : gridBorder;
       ctx.strokeRect(x + 0.5, cellOffsetY + 0.5, Math.max(1, cellSize - 1), Math.max(1, cellSize - 1));
     }

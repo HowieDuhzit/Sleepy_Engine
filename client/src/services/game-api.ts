@@ -19,8 +19,9 @@ const readJson = async <T>(response: Response): Promise<T> => {
   return (await response.json()) as T;
 };
 
-export const listGames = async () => {
-  const res = await fetch('/api/games', { cache: 'no-store' });
+export const listGames = async (cacheBust = false) => {
+  const url = cacheBust ? `/api/games?t=${Date.now()}` : '/api/games';
+  const res = await fetch(url, { cache: 'no-store' });
   const data = await readJson<{ games: GameMeta[] }>(res);
   return data.games;
 };
@@ -32,6 +33,13 @@ export const createGame = async (payload: { name: string; description?: string }
     body: JSON.stringify(payload),
   });
   return readJson<{ id: string; name: string }>(res);
+};
+
+export const deleteGame = async (gameId: string) => {
+  const res = await fetch(`/api/games/${encodeURIComponent(gameId)}`, {
+    method: 'DELETE',
+  });
+  return readJson<{ ok: boolean; id: string }>(res);
 };
 
 export const getGameScenes = async (gameId: string) => {

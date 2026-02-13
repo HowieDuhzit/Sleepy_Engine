@@ -2,44 +2,7 @@
   "scenes": [
     {
       "name": "prototype",
-      "obstacles": [
-        {
-          "id": "obstacle_2",
-          "x": 4.5,
-          "y": 0,
-          "z": 0,
-          "width": 2.5,
-          "height": 2,
-          "depth": 2.5
-        },
-        {
-          "id": "obstacle_3",
-          "x": 1,
-          "y": 0,
-          "z": 5.5,
-          "width": 1,
-          "height": 1,
-          "depth": 1
-        },
-        {
-          "id": "obstacle_3",
-          "x": 0,
-          "y": 0,
-          "z": 0,
-          "width": 1,
-          "height": 1,
-          "depth": 1
-        },
-        {
-          "id": "obstacle_4",
-          "x": -5,
-          "y": 0,
-          "z": -5.5,
-          "width": 1,
-          "height": 1,
-          "depth": 1
-        }
-      ],
+      "obstacles": [],
       "ground": {
         "type": "concrete",
         "width": 120,
@@ -48,11 +11,19 @@
         "textureRepeat": 12
       },
       "player": {
-        "avatar": "default.vrm"
+        "avatar": "default.vrm",
+        "x": 0,
+        "y": 0,
+        "z": 10,
+        "yaw": 0
       },
       "crowd": {
         "enabled": true,
-        "avatar": "crowd.vrm"
+        "avatar": "crowd.vrm",
+        "x": -17.5,
+        "y": 0,
+        "z": -2,
+        "radius": 12
       }
     }
   ]
