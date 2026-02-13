@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { getGameScenes, listGames } from '../services/game-api';
-import { createRoot, type Root } from 'react-dom/client';
 import { ReactPSXSettingsPanel } from './ReactPSXSettingsPanel';
 import { UiButton, UiCard, UiField, UiSelect } from './ui-primitives';
 
@@ -18,8 +17,6 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
   const [currentGameId, setCurrentGameId] = useState<string>('');
   const [currentStartScene, setCurrentStartScene] = useState<string>('main');
   const [showSettings, setShowSettings] = useState(false);
-  const settingsHostRef = useRef<HTMLDivElement | null>(null);
-  const settingsRootRef = useRef<Root | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -73,21 +70,6 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
     };
   }, [currentGameId]);
 
-  useEffect(() => {
-    if (!showSettings) return;
-    const host = settingsHostRef.current;
-    if (!host) return;
-
-    const root = createRoot(host);
-    settingsRootRef.current = root;
-    root.render(h(ReactPSXSettingsPanel));
-
-    return () => {
-      settingsRootRef.current?.unmount();
-      settingsRootRef.current = null;
-    };
-  }, [showSettings]);
-
   const disabled = useMemo(() => !currentGameId, [currentGameId]);
 
   const gameOptions = games.map((game) => h('option', { key: game.id, value: game.id }, game.name));
@@ -138,7 +120,7 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
   const settingsCard = h(
     'div',
     { className: 'menu-settings' },
-    h('div', { ref: settingsHostRef }),
+    h(ReactPSXSettingsPanel),
     h(
       UiButton,
       {
