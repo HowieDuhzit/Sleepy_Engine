@@ -4795,8 +4795,11 @@ export class EditorApp {
     const groundBody = world.createRigidBody(ground);
     const groundCollider = RAPIER.ColliderDesc.cuboid(25, 0.5, 25)
       .setTranslation(0, -0.5, 0)
-      .setFriction(1.05)
+      .setFriction(2.2)
       .setRestitution(0);
+    if (RAPIER.CoefficientCombineRule) {
+      groundCollider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
+    }
     world.createCollider(groundCollider, groundBody);
     this.ragdollBones.clear();
     for (const mesh of this.ragdollDebugMeshes) {
@@ -5020,7 +5023,10 @@ export class EditorApp {
         halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
       )
         .setCollisionGroups((0x0002 << 16) | 0x0001);
-      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(0.9).setRestitution(0);
+      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(1.6).setRestitution(0);
+      if (RAPIER.CoefficientCombineRule) {
+        collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
+      }
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
         color: 0x6ee7b7,
@@ -5140,6 +5146,7 @@ export class EditorApp {
     }
     const parentQuat = new THREE.Quaternion();
     const parentQuatInv = new THREE.Quaternion();
+    const currentWorldQuat = new THREE.Quaternion();
     const childQuat = new THREE.Quaternion();
     const relQuat = new THREE.Quaternion();
     const twistQuat = new THREE.Quaternion();
@@ -5203,8 +5210,13 @@ export class EditorApp {
         }
       }
       if (!changed) continue;
+      currentWorldQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
       childQuat.copy(parentQuat).multiply(relQuat).normalize();
-      ragBone.body.setRotation({ x: childQuat.x, y: childQuat.y, z: childQuat.z, w: childQuat.w }, true);
+      currentWorldQuat.slerp(childQuat, 0.45).normalize();
+      ragBone.body.setRotation(
+        { x: currentWorldQuat.x, y: currentWorldQuat.y, z: currentWorldQuat.z, w: currentWorldQuat.w },
+        true,
+      );
       const avNow = ragBone.body.angvel();
       childAng.set(avNow.x, avNow.y, avNow.z).multiplyScalar(0.35);
       ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, true);
@@ -5217,6 +5229,14 @@ export class EditorApp {
     for (const ragBone of this.ragdollBones.values()) {
       const lv = ragBone.body.linvel();
       lin.set(lv.x, lv.y, lv.z);
+      if (Math.abs(lin.y) < 0.5) {
+        lin.x *= 0.92;
+        lin.z *= 0.92;
+      }
+      if (Math.hypot(lin.x, lin.z) < 0.08) {
+        lin.x = 0;
+        lin.z = 0;
+      }
       lin.multiplyScalar(0.985);
       ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
       const linLen = lin.length();
