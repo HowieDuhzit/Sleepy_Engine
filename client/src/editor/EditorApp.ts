@@ -67,6 +67,7 @@ type LevelScene = {
 type RagdollBone = {
   name: string;
   bone: THREE.Object3D;
+  child: THREE.Object3D | null;
   body: RAPIER.RigidBody;
   parent?: RagdollBone;
   baseLength?: number;
@@ -4906,11 +4907,14 @@ export class EditorApp {
       debugMesh.renderOrder = 12;
       debugMesh.userData.ragdollName = def.name;
       debugMesh.visible = this.ragdollEnabled || this.ragdollVisible;
+      debugMesh.position.copy(center);
+      debugMesh.quaternion.copy(tmpQuat);
       this.scene.add(debugMesh);
       this.ragdollDebugMeshes.push(debugMesh);
       const ragBone: RagdollBone = {
         name: def.name,
         bone,
+        child,
         body,
         baseLength: segmentLength,
         radius,
@@ -4999,6 +5003,7 @@ export class EditorApp {
       const rot = ragBone.body.rotation();
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.quaternion.set(rot.x, rot.y, rot.z, rot.w);
+      mesh.scale.set(1, 1, 1);
     }
     const hipsBody = this.ragdollBones.get('hips');
     if (hipsBody) {
@@ -5021,14 +5026,38 @@ export class EditorApp {
 
   private updateRagdollDebugFromBones() {
     if (!this.vrm || this.ragdollBones.size === 0) return;
+    const start = new THREE.Vector3();
+    const end = new THREE.Vector3();
+    const axis = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion();
     for (const mesh of this.ragdollDebugMeshes) {
       const name = mesh.userData.ragdollName as string;
       const ragBone = this.ragdollBones.get(name);
       if (!ragBone) continue;
-      const pos = ragBone.bone.getWorldPosition(new THREE.Vector3());
-      const rot = ragBone.bone.getWorldQuaternion(new THREE.Quaternion());
-      mesh.position.copy(pos);
-      mesh.quaternion.copy(rot);
+      ragBone.bone.getWorldPosition(start);
+      if (ragBone.child) {
+        ragBone.child.getWorldPosition(end);
+      } else {
+        axis
+          .copy(ragBone.axis ?? up)
+          .normalize();
+        end.copy(start).addScaledVector(axis, Math.max(0.08, ragBone.baseLength ?? 0.2));
+      }
+      axis.copy(end).sub(start);
+      const len = axis.length();
+      if (len > 1e-6) {
+        axis.multiplyScalar(1 / len);
+      } else {
+        axis.copy(ragBone.axis ?? up).normalize();
+      }
+      center.copy(start).add(end).multiplyScalar(0.5);
+      quat.setFromUnitVectors(up, axis);
+      mesh.position.copy(center);
+      mesh.quaternion.copy(quat);
+      const baseLen = Math.max(0.08, ragBone.baseLength ?? 0.2);
+      mesh.scale.set(1, Math.max(0.5, len / baseLen), 1);
     }
     this.updateRagdollHandles();
   }
