@@ -73,6 +73,8 @@ type RagdollBone = {
   hingeAxisLocal?: THREE.Vector3;
   hingeMin?: number;
   hingeMax?: number;
+  swingLimitRad?: number;
+  twistLimitRad?: number;
   parent?: RagdollBone;
   baseLength?: number;
   radius?: number;
@@ -4831,6 +4833,11 @@ export class EditorApp {
       leftLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
       rightLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
     };
+    const ballJointLimits: Record<string, { swingDeg: number; twistDeg: number }> = {
+      head: { swingDeg: 45, twistDeg: 55 },
+      leftUpperArm: { swingDeg: 105, twistDeg: 85 },
+      rightUpperArm: { swingDeg: 105, twistDeg: 85 },
+    };
     const spineJointChildren = new Set(['spine', 'chest', 'head']);
 
     const rootBone = getBone('hips');
@@ -4933,6 +4940,11 @@ export class EditorApp {
         ragBone.hingeMin = hinge.min;
         ragBone.hingeMax = hinge.max;
       }
+      const ballLimit = ballJointLimits[def.name];
+      if (ballLimit) {
+        ragBone.swingLimitRad = THREE.MathUtils.degToRad(ballLimit.swingDeg);
+        ragBone.twistLimitRad = THREE.MathUtils.degToRad(ballLimit.twistDeg);
+      }
       this.ragdollBones.set(def.name, ragBone);
     }
     const pelvis = this.ragdollBones.get('hips');
@@ -5000,32 +5012,61 @@ export class EditorApp {
     const childPos = new THREE.Vector3();
     const axisLocal = new THREE.Vector3();
     const twistVec = new THREE.Vector3();
-    // Hard-clamp hinge joints (knees/elbows) so they cannot hyperextend.
+    // Hard-clamp anatomical joints so they cannot exceed human ranges.
     for (const ragBone of this.ragdollBones.values()) {
-      if (!ragBone.parent || !ragBone.hingeAxisLocal) continue;
-      const min = ragBone.hingeMin ?? -Math.PI;
-      const max = ragBone.hingeMax ?? Math.PI;
+      if (!ragBone.parent) continue;
       const pRot = ragBone.parent.body.rotation();
       const cRot = ragBone.body.rotation();
       parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
       childQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
       parentQuatInv.copy(parentQuat).invert();
       relQuat.copy(parentQuatInv).multiply(childQuat).normalize();
-      axisLocal.copy(ragBone.hingeAxisLocal).normalize();
-      twistVec.set(relQuat.x, relQuat.y, relQuat.z);
-      const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
-      twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
-      if (twistQuat.lengthSq() < 1e-10) continue;
-      swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
-      const signedAngle = 2 * Math.atan2(
-        axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
-        twistQuat.w,
-      );
-      const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
-      if (Math.abs(clampedAngle - signedAngle) < 1e-4) continue;
-      twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
-      clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
-      childQuat.copy(parentQuat).multiply(clampedRelQuat).normalize();
+      let changed = false;
+      if (ragBone.hingeAxisLocal) {
+        const min = ragBone.hingeMin ?? -Math.PI;
+        const max = ragBone.hingeMax ?? Math.PI;
+        axisLocal.copy(ragBone.hingeAxisLocal).normalize();
+        twistVec.set(relQuat.x, relQuat.y, relQuat.z);
+        const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
+        twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
+        if (twistQuat.lengthSq() >= 1e-10) {
+          swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
+          const signedAngle = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
+          const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
+          if (Math.abs(clampedAngle - signedAngle) > 1e-4) {
+            twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
+            clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
+            relQuat.copy(clampedRelQuat);
+            changed = true;
+          }
+        }
+      }
+      if (ragBone.swingLimitRad || ragBone.twistLimitRad) {
+        const twistLimit = ragBone.twistLimitRad ?? Math.PI;
+        const swingLimit = ragBone.swingLimitRad ?? Math.PI;
+        axisLocal.set(0, 1, 0);
+        twistVec.set(relQuat.x, relQuat.y, relQuat.z);
+        const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
+        twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
+        if (twistQuat.lengthSq() >= 1e-10) {
+          swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
+          const signedTwist = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
+          const clampedTwist = THREE.MathUtils.clamp(signedTwist, -twistLimit, twistLimit);
+          const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swingQuat.w, -1, 1));
+          if (Math.abs(clampedTwist - signedTwist) > 1e-4 || swingAngle > swingLimit + 1e-4) {
+            twistQuat.setFromAxisAngle(axisLocal, clampedTwist);
+            if (swingAngle > 1e-5 && swingLimit < Math.PI) {
+              const scale = swingLimit / swingAngle;
+              swingQuat.slerp(new THREE.Quaternion(), 1 - scale).normalize();
+            }
+            clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
+            relQuat.copy(clampedRelQuat);
+            changed = true;
+          }
+        }
+      }
+      if (!changed) continue;
+      childQuat.copy(parentQuat).multiply(relQuat).normalize();
       const pos = ragBone.body.translation();
       childPos.set(pos.x, pos.y, pos.z);
       ragBone.body.setTranslation({ x: childPos.x, y: childPos.y, z: childPos.z }, true);
