@@ -584,11 +584,56 @@ body,
 }
 
 .timeline-canvas-wrap {
-  overflow-x: auto;
-  overflow-y: hidden;
+  position: relative;
+  overflow: hidden;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, rgba(22, 24, 30, 0.92), rgba(12, 13, 16, 0.92));
+  background:
+    radial-gradient(circle at top left, rgba(90, 136, 255, 0.12), transparent 45%),
+    linear-gradient(180deg, rgba(22, 24, 30, 0.92), rgba(12, 13, 16, 0.92));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.timeline-override-range {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.timeline-override-frame {
+  position: absolute;
+  top: 0;
+  height: 0;
+  border: 2px solid rgba(245, 158, 11, 0.95);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.75) inset;
+  pointer-events: none;
+}
+
+.timeline-override-handle {
+  position: absolute;
+  top: 0;
+  height: 0;
+  width: 12px;
+  margin-left: -6px;
+  border-radius: 4px;
+  cursor: ew-resize;
+  box-sizing: border-box;
+}
+
+.timeline-override-handle.start {
+  border: 1px solid rgba(251, 191, 36, 0.95);
+  background: rgba(245, 158, 11, 0.95);
+}
+
+.timeline-override-handle.end {
+  border: 1px solid rgba(254, 240, 138, 0.95);
+  background: rgba(250, 204, 21, 0.95);
 }
 
 .timeline-header {
@@ -651,7 +696,8 @@ body,
 .timeline-controls {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -663,7 +709,7 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 12px;
+  margin-left: 0;
   font-size: 11px;
   text-transform: none;
   letter-spacing: 0;
@@ -682,10 +728,23 @@ body,
 }
 
 .editor-ui canvas[data-timeline] {
-  height: 120px;
+  width: 100%;
+  height: 56px;
   display: block;
   touch-action: none;
   cursor: crosshair;
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 1100px) {
+  .timeline-controls {
+    justify-content: flex-start;
+  }
+
+  .timeline-title {
+    margin-left: 0;
+  }
 }
 
 /* Stylus-specific cursor for precise timeline scrubbing */
@@ -1113,6 +1172,7 @@ body,
   height: 1px;
   margin: 4px 8px;
   background: rgba(255, 255, 255, 0.08);
+}
 .splash-screen {
   position: fixed;
   inset: 0;

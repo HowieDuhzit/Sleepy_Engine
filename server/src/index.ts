@@ -2,6 +2,7 @@ import colyseusPkg from 'colyseus';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer } from 'http';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
@@ -12,10 +13,11 @@ import { RedisPresence } from '@colyseus/redis-presence';
 import { RedisDriver } from '@colyseus/redis-driver';
 
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
+const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const gamesDir =
   process.env.GAMES_DIR ??
   process.env.PROJECTS_DIR ??
-  path.join(process.cwd(), 'server', 'projects');
+  path.join(serverDir, 'projects');
 const redisUrl = process.env.REDIS_URL;
 const { Server } = colyseusPkg as typeof import('colyseus');
 const gameServer = redisUrl

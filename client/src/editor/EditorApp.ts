@@ -127,6 +127,10 @@ export class EditorApp {
   private timelineScrubVelocity = 0;
   private timelineScrubLastX = 0;
   private timelineScrubLastTime = 0;
+  private timelinePaintMode: 'enable' | 'disable' | null = null;
+  private timelinePaintChanged = false;
+  private timelineDownFrame = -1;
+  private disabledFrameCache = new Map<number, BoneFrame>();
   // Multi-touch gesture state
   private activePointers = new Map<number, { x: number; y: number; type: string }>();
   private gestureStartDistance = 0;
@@ -170,6 +174,8 @@ export class EditorApp {
   private ragdollRecording = false;
   private ragdollTime = 0;
   private ragdollNextSample = 0;
+  private overrideRangeStartFrame = 0;
+  private overrideRangeEndFrame = 0;
   private hipsOffset = new THREE.Vector3();
   private dpr = Math.min(window.devicePixelRatio, 2);
   private skeletonHelper: THREE.SkeletonHelper | null = null;
@@ -609,6 +615,10 @@ export class EditorApp {
     this.renderer.domElement.style.display = 'block';
     this.container.appendChild(this.hud);
     this.resizeRenderer();
+    requestAnimationFrame(() => {
+      this.resizeTimeline();
+      this.drawTimeline();
+    });
     this.renderer.domElement.addEventListener('pointerdown', this.handleViewportPick);
     window.addEventListener('pointermove', this.handleRagdollDrag);
     window.addEventListener('pointerup', this.handleRagdollDragEnd);
@@ -628,6 +638,8 @@ export class EditorApp {
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
         this.resizeRenderer();
+        this.resizeTimeline();
+        this.drawTimeline();
         this.fitCameraToVrm();
       });
       this.viewportObserver.observe(this.viewport);
@@ -701,6 +713,7 @@ export class EditorApp {
     this.renderer.setPixelRatio(this.dpr);
     this.resizeRenderer();
     this.resizeTimeline();
+    this.drawTimeline();
     this.fitCameraToVrm();
 
     // Update PSX resolution
@@ -1347,13 +1360,18 @@ export class EditorApp {
       '<span class="timeline-title">Timeline</span>',
       '<button data-override>Override Off</button>',
       '<label class="duration-field"><span>FPS</span><input data-fps type="number" min="5" max="60" step="1" value="30" /></label>',
-      '<label class="duration-field"><span>Duration</span><input data-duration type="number" min="1" max="10" step="0.1" value="5" /></label>',
+      '<label class="duration-field"><span>Frames</span><input data-duration type="number" min="1" max="600" step="1" value="150" /></label>',
       '</div>',
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
       '</div>',
       '<div class="timeline-grid timeline-midi">',
       '<div class="timeline-header" data-timeline-header></div>',
       '<div class="timeline-canvas-wrap" data-timeline-wrap>',
+      '<div class="timeline-override-range" data-override-range style="display:none;">',
+      '<div class="timeline-override-frame" data-override-frame></div>',
+      '<div class="timeline-override-handle start" data-override-start-handle></div>',
+      '<div class="timeline-override-handle end" data-override-end-handle></div>',
+      '</div>',
       '<canvas data-timeline height="64"></canvas>',
       '</div>',
       '</div>',
@@ -1606,6 +1624,8 @@ export class EditorApp {
           panel.style.display = show ? '' : 'none';
         }
         this.resizeRenderer();
+        this.resizeTimeline();
+        this.drawTimeline();
         this.fitCameraToVrm();
       });
     });
@@ -1668,6 +1688,9 @@ export class EditorApp {
     const stepBack = hud.querySelector('[data-step-back]') as HTMLButtonElement;
     const stepForward = hud.querySelector('[data-step-forward]') as HTMLButtonElement;
     const overrideBtn = hud.querySelector('[data-override]') as HTMLButtonElement;
+    const overrideRangeWrap = hud.querySelector('[data-override-range]') as HTMLDivElement;
+    const overrideStartHandle = hud.querySelector('[data-override-start-handle]') as HTMLDivElement;
+    const overrideEndHandle = hud.querySelector('[data-override-end-handle]') as HTMLDivElement;
     const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
     const playerJson = hud.querySelector('[data-player-json]') as HTMLTextAreaElement;
     const playerAvatarSelect = hud.querySelector('[data-player-avatar]') as HTMLSelectElement;
@@ -2068,7 +2091,12 @@ export class EditorApp {
     const posY = hud.querySelector('[data-pos-y]') as HTMLInputElement;
     const posZ = hud.querySelector('[data-pos-z]') as HTMLInputElement;
     this.time = 0;
-    timeInput.value = '0';
+    this.setTotalFrames(this.getTotalFrames());
+    timeInput.value = '0.0000';
+    durationInput.value = String(this.getTotalFrames());
+    this.overrideRangeStartFrame = 0;
+    this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
+    this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, false);
     this.resizeTimeline();
     this.drawTimeline();
     if (boneScaleInput) {
@@ -2478,12 +2506,10 @@ export class EditorApp {
       this.pointerPressure = event.pressure ?? 0.5;
       this.pointerType = event.pointerType as 'mouse' | 'pen' | 'touch';
 
-      const wrap = this.timelineWrap;
       const rect = this.timeline.getBoundingClientRect();
-      const scrollX = wrap ? wrap.scrollLeft : 0;
-      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left)) + scrollX;
-      const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-      const frameIndex = Math.min(totalFrames - 1, Math.floor((x / this.timeline.width) * totalFrames));
+      const x = Math.max(0, Math.min(rect.width - 1e-4, event.clientX - rect.left));
+      const totalFrames = this.getTotalFrames();
+      const frameIndex = Math.min(totalFrames - 1, Math.floor((x / rect.width) * totalFrames));
 
       // Start scrubbing
       this.timelineScrubbing = true;
@@ -2491,23 +2517,28 @@ export class EditorApp {
       this.timelineScrubLastTime = performance.now();
       this.timelineScrubVelocity = 0;
       this.timelineLastFrame = frameIndex;
+      this.timelineDownFrame = frameIndex;
+      this.timelinePaintMode = this.overrideMode
+        ? null
+        : (this.hasFrameAtIndex(frameIndex) ? 'disable' : 'enable');
+      this.timelinePaintChanged = false;
 
       // Set time and scrub to frame
       this.time = frameIndex / this.fps;
       this.applyClipAtTime(this.time);
+      if (this.timelinePaintMode) {
+        this.pushUndo();
+        this.timelinePaintChanged = this.setFrameEnabled(
+          frameIndex,
+          this.timelinePaintMode === 'enable',
+        ) || this.timelinePaintChanged;
+        this.rebuildClipKeyMap();
+        this.drawTimeline();
+      }
 
       // Haptic feedback on frame snap
       if (this.pointerType === 'pen' || this.pointerType === 'touch') {
         this.triggerHapticFeedback('light');
-      }
-
-      // Long-press detection for context menu (touch/pen only)
-      if (this.pointerType === 'pen' || this.pointerType === 'touch') {
-        this.timelineLongPressTimer = window.setTimeout(() => {
-          this.showTimelineContextMenu(frameIndex);
-          this.triggerHapticFeedback('medium');
-          this.timelineScrubbing = false; // Cancel scrubbing on long press
-        }, this.timelineLongPressThreshold);
       }
     });
 
@@ -2524,12 +2555,10 @@ export class EditorApp {
       // Update pointer state
       this.pointerPressure = event.pressure ?? 0.5;
 
-      const wrap = this.timelineWrap;
       const rect = this.timeline.getBoundingClientRect();
-      const scrollX = wrap ? wrap.scrollLeft : 0;
-      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left)) + scrollX;
-      const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-      const frameIndex = Math.min(totalFrames - 1, Math.floor((x / this.timeline.width) * totalFrames));
+      const x = Math.max(0, Math.min(rect.width - 1e-4, event.clientX - rect.left));
+      const totalFrames = this.getTotalFrames();
+      const frameIndex = Math.min(totalFrames - 1, Math.floor((x / rect.width) * totalFrames));
 
       // Calculate velocity for momentum
       const now = performance.now();
@@ -2553,9 +2582,23 @@ export class EditorApp {
 
       // Only update if frame changed
       if (actualFrameIndex !== this.timelineLastFrame) {
+        const previousFrame = this.timelineLastFrame;
         this.timelineLastFrame = actualFrameIndex;
         this.time = actualFrameIndex / this.fps;
         this.applyClipAtTime(this.time);
+        if (this.timelinePaintMode) {
+          const start = Math.min(previousFrame, actualFrameIndex);
+          const end = Math.max(previousFrame, actualFrameIndex);
+          for (let i = start; i <= end; i += 1) {
+            this.timelinePaintChanged = this.setFrameEnabled(
+              i,
+              this.timelinePaintMode === 'enable',
+            ) || this.timelinePaintChanged;
+          }
+          this.rebuildClipKeyMap();
+          this.applyClipAtTime(this.time);
+          this.drawTimeline();
+        }
 
         // Haptic feedback on frame snap
         if (this.pointerType === 'pen' || this.pointerType === 'touch') {
@@ -2564,69 +2607,90 @@ export class EditorApp {
       }
     });
 
-    // Timeline scrubbing end (momentum application)
-    timeline.addEventListener('pointerup', (event) => {
+    // Timeline scrubbing end
+    timeline.addEventListener('pointerup', (_event) => {
       this.timelineScrubbing = false;
+      this.timelinePaintMode = null;
 
       // Cancel long-press
       if (this.timelineLongPressTimer !== null) {
         clearTimeout(this.timelineLongPressTimer);
         this.timelineLongPressTimer = null;
       }
-
-      // Apply momentum for flick gestures (only on touch/pen)
-      if ((this.pointerType === 'pen' || this.pointerType === 'touch') && Math.abs(this.timelineScrubVelocity) > 0.5) {
-        const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-        const momentumFrames = Math.floor(this.timelineScrubVelocity * 50); // Scale velocity to frames
-        const targetFrame = Math.max(0, Math.min(totalFrames - 1, this.timelineLastFrame + momentumFrames));
-
-        // Animate to target frame with easing
-        this.animateTimelineToFrame(targetFrame);
-      } else {
-        // Simple click/tap - toggle keyframe
-        const bone = this.selectedBone ?? this.bones[0];
-        if (bone && !event.movementX && !event.movementY) {
-          this.toggleKeyframe(bone, this.time);
+      this.timelineScrubVelocity = 0;
+      if (this.timelinePaintChanged) {
+        this.updateTimeline();
+      }
+      if (this.overrideMode && this.timelineDownFrame === this.timelineLastFrame) {
+        const overrideBone = this.selectedBone ?? this.bones[0] ?? null;
+        if (overrideBone) {
+          const { startTime, endTime } = this.getOverrideRangeTimes();
+          const overrideTime = THREE.MathUtils.clamp(this.time, startTime, endTime);
+          this.pushUndo();
+          this.applyOverrideOffset(overrideBone, overrideTime);
+          this.refreshJson(jsonBox);
           this.updateTimeline();
           this.triggerHapticFeedback('medium');
         }
       }
-
-      this.timelineScrubVelocity = 0;
+      this.timelinePaintChanged = false;
+      this.timelineDownFrame = -1;
     });
 
     // Cancel scrubbing if pointer leaves timeline
     timeline.addEventListener('pointerleave', () => {
       this.timelineScrubbing = false;
+      this.timelinePaintMode = null;
       if (this.timelineLongPressTimer !== null) {
         clearTimeout(this.timelineLongPressTimer);
         this.timelineLongPressTimer = null;
       }
+      this.timelinePaintChanged = false;
+      this.timelineDownFrame = -1;
     });
 
     timeInput.addEventListener('input', () => {
-      this.time = parseFloat(timeInput.value);
+      const snappedFrame = this.getFrameIndex(parseFloat(timeInput.value));
+      this.time = this.getFrameTime(snappedFrame);
+      timeInput.value = this.time.toFixed(4);
       this.applyClipAtTime(this.time);
     });
 
     durationInput.addEventListener('change', () => {
-      const value = Math.max(1, Math.min(MAX_DURATION, parseFloat(durationInput.value)));
-      this.clip.duration = value;
-      timeInput.max = value.toFixed(2);
+      const maxFrames = Math.max(1, Math.floor(MAX_DURATION * this.fps));
+      const value = Math.max(1, Math.min(maxFrames, Math.round(parseFloat(durationInput.value))));
+      this.setTotalFrames(value);
+      durationInput.value = String(this.getTotalFrames());
+      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle);
       this.drawTimeline();
     });
 
     fpsInput.addEventListener('change', () => {
+      const oldFps = this.fps;
+      const oldTotalFrames = this.getTotalFrames();
       const value = Math.max(5, Math.min(60, parseFloat(fpsInput.value)));
       this.fps = value;
       fpsInput.value = value.toFixed(0);
+      for (const frame of this.clip.frames) {
+        const frameIndex = Math.round(frame.time * oldFps);
+        frame.time = this.getFrameTime(frameIndex);
+      }
+      this.setTotalFrames(oldTotalFrames);
+      durationInput.value = String(this.getTotalFrames());
+      this.normalizeClipToFrameGrid();
+      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle);
       this.drawTimeline();
     });
 
     addBtn.addEventListener('click', () => {
       this.pushUndo();
-      if (this.overrideMode && this.selectedBone) {
-        this.applyOverrideOffset(this.selectedBone, this.time);
+      if (this.overrideMode) {
+        const overrideBone = this.selectedBone ?? this.bones[0] ?? null;
+        if (overrideBone) {
+          const { startTime, endTime } = this.getOverrideRangeTimes();
+          const overrideTime = THREE.MathUtils.clamp(this.time, startTime, endTime);
+          this.applyOverrideOffset(overrideBone, overrideTime);
+        }
       } else {
         this.addKeyframe(this.time);
       }
@@ -2688,7 +2752,44 @@ export class EditorApp {
     overrideBtn.addEventListener('click', () => {
       this.overrideMode = !this.overrideMode;
       overrideBtn.textContent = this.overrideMode ? 'Override On' : 'Override Off';
+      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
     });
+
+    const updateOverrideFrameFromClientX = (clientX: number, edge: 'start' | 'end') => {
+      if (!timelineWrap) return;
+      const rect = timelineWrap.getBoundingClientRect();
+      const totalFrames = this.getTotalFrames();
+      const ratio = THREE.MathUtils.clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 0.999999);
+      const frame = THREE.MathUtils.clamp(Math.floor(ratio * totalFrames), 0, totalFrames - 1);
+      if (edge === 'start') {
+        this.overrideRangeStartFrame = Math.min(frame, this.overrideRangeEndFrame);
+      } else {
+        this.overrideRangeEndFrame = Math.max(frame, this.overrideRangeStartFrame);
+      }
+      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+    };
+
+    const bindOverrideHandleDrag = (handle: HTMLDivElement | null, edge: 'start' | 'end') => {
+      if (!handle) return;
+      handle.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        updateOverrideFrameFromClientX(event.clientX, edge);
+      });
+      handle.addEventListener('pointermove', (event) => {
+        if (!handle.hasPointerCapture(event.pointerId)) return;
+        updateOverrideFrameFromClientX(event.clientX, edge);
+      });
+      const stop = (event: PointerEvent) => {
+        if (handle.hasPointerCapture(event.pointerId)) {
+          handle.releasePointerCapture(event.pointerId);
+        }
+      };
+      handle.addEventListener('pointerup', stop);
+      handle.addEventListener('pointercancel', stop);
+    };
+    bindOverrideHandleDrag(overrideStartHandle, 'start');
+    bindOverrideHandleDrag(overrideEndHandle, 'end');
 
     resetBtn.addEventListener('click', () => {
       this.resetPose();
@@ -2698,7 +2799,11 @@ export class EditorApp {
     clearBtn.addEventListener('click', () => {
       this.pushUndo();
       this.clip.frames = [];
-      this.clip.duration = Math.max(1, Math.min(MAX_DURATION, parseFloat(durationInput.value)));
+      this.setTotalFrames(Math.max(1, Math.round(parseFloat(durationInput.value))));
+      durationInput.value = String(this.getTotalFrames());
+      this.overrideRangeStartFrame = 0;
+      this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
+      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
       this.rebuildClipKeyMap();
       this.refreshJson(jsonBox);
       this.drawTimeline();
@@ -2803,13 +2908,18 @@ export class EditorApp {
         const data = parseClipPayload(payload);
         if (!data) return;
         this.clip = data;
+        this.setTotalFrames(this.getTotalFrames());
+        this.normalizeClipToFrameGrid();
         this.fillEmptyFramesFromPose();
         this.time = 0;
         this.rebuildClipKeyMap();
-        durationInput.value = data.duration.toString();
-        timeInput.max = data.duration.toFixed(2);
-        timeInput.value = '0';
+        durationInput.value = String(this.getTotalFrames());
+        this.overrideRangeStartFrame = 0;
+        this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
+        this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+        timeInput.value = '0.0000';
         this.applyClipAtTime(0);
+        this.refreshJson(jsonBox);
         this.updateTimeline();
         setClipStatus(`Loaded ${name}`, 'ok');
       } catch (err) {
@@ -2981,6 +3091,7 @@ export class EditorApp {
     if (!entry) return;
     this.redoStack.push({ clip: this.cloneClip(), time: this.time });
     this.clip = entry.clip;
+    this.disabledFrameCache.clear();
     this.time = entry.time;
     this.rebuildClipKeyMap();
     this.applyClipAtTime(this.time);
@@ -2993,6 +3104,7 @@ export class EditorApp {
     if (!entry) return;
     this.undoStack.push({ clip: this.cloneClip(), time: this.time });
     this.clip = entry.clip;
+    this.disabledFrameCache.clear();
     this.time = entry.time;
     this.rebuildClipKeyMap();
     this.applyClipAtTime(this.time);
@@ -3001,9 +3113,7 @@ export class EditorApp {
   }
 
   private copyKeyframeAtTime(time: number) {
-    const snap = 1 / this.fps;
-    const t = Math.round(time / snap) * snap;
-    const frame = this.clip.frames.find((f) => Math.abs(f.time - t) < 1e-4);
+    const frame = this.findFrameByIndex(this.getFrameIndex(time));
     if (!frame) return false;
     this.keyframeClipboard = {
       bones: JSON.parse(JSON.stringify(frame.bones)),
@@ -3015,20 +3125,22 @@ export class EditorApp {
   private pasteKeyframeAtTime(time: number) {
     if (!this.keyframeClipboard) return false;
     this.pushUndo();
-    const snap = 1 / this.fps;
-    const t = Math.round(time / snap) * snap;
-    const existing = this.clip.frames.find((f) => Math.abs(f.time - t) < 1e-4);
+    const frameIndex = this.getFrameIndex(time);
+    const t = this.getFrameTime(frameIndex);
+    const existing = this.findFrameByIndex(frameIndex);
     const pasted = {
       bones: JSON.parse(JSON.stringify(this.keyframeClipboard.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
       rootPos: this.keyframeClipboard.rootPos ? { ...this.keyframeClipboard.rootPos } : undefined,
     };
     if (existing) {
+      existing.time = t;
       Object.assign(existing.bones, pasted.bones);
       if (pasted.rootPos) existing.rootPos = pasted.rootPos;
     } else {
       this.clip.frames.push({ time: t, ...pasted });
       this.clip.frames.sort((a, b) => a.time - b.time);
     }
+    this.disabledFrameCache.delete(frameIndex);
     this.rebuildClipKeyMap();
     this.applyClipAtTime(t);
     this.updateTimeline();
@@ -3041,7 +3153,7 @@ export class EditorApp {
 
   private updateTimeline() {
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
-    if (timeInput) timeInput.value = this.time.toFixed(2);
+    if (timeInput) timeInput.value = this.time.toFixed(4);
     this.drawTimeline();
   }
 
@@ -3081,15 +3193,12 @@ export class EditorApp {
 
   private showTimelineContextMenu(frameIndex: number) {
     this.dismissContextMenu();
-    const time = frameIndex / this.fps;
-    const snap = 1 / this.fps;
-    const t = Math.round(time / snap) * snap;
+    const t = this.getFrameTime(frameIndex);
     const bone = this.selectedBone ?? this.bones[0];
     if (!bone) return;
 
-    const key = this.getBoneKey(bone);
-    const existing = this.clip.frames.find((frame) => Math.abs(frame.time - t) < 1e-4);
-    const hasKeyframe = existing && existing.bones[key];
+    const existing = this.findFrameByIndex(frameIndex);
+    const hasKeyframe = !!existing;
 
     const menu = document.createElement('div');
     menu.className = 'context-menu';
@@ -3125,10 +3234,12 @@ export class EditorApp {
 
     // Position near the timeline scrub point
     const rect = this.timeline!.getBoundingClientRect();
-    const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-    const px = rect.left + (frameIndex / totalFrames) * rect.width;
+    const totalFrames = this.getTotalFrames();
+    const cellWidth = rect.width / totalFrames;
+    const px = rect.left + (frameIndex + 0.5) * cellWidth;
+    const py = rect.top;
     menu.style.left = `${Math.min(px, window.innerWidth - 180)}px`;
-    menu.style.top = `${Math.max(0, rect.top - 10)}px`;
+    menu.style.top = `${Math.max(0, py - 8)}px`;
     menu.style.transform = 'translateY(-100%)';
 
     this.container.appendChild(menu);
@@ -3145,6 +3256,8 @@ export class EditorApp {
 
   private addKeyframe(time: number) {
     if (!this.vrm) return;
+    const frameIndex = this.getFrameIndex(time);
+    const frameTime = this.getFrameTime(frameIndex);
     const bones: Record<string, { x: number; y: number; z: number; w: number }> = {};
     for (const bone of this.bones) {
       const q = bone.quaternion;
@@ -3154,7 +3267,16 @@ export class EditorApp {
     const rootPos = root
       ? { x: root.position.x, y: root.position.y, z: root.position.z }
       : undefined;
-    this.clip.frames.push({ time, bones, rootPos });
+    const existing = this.findFrameByIndex(frameIndex);
+    if (existing) {
+      existing.time = frameTime;
+      existing.bones = bones;
+      existing.rootPos = rootPos;
+      this.disabledFrameCache.delete(frameIndex);
+    } else {
+      this.clip.frames.push({ time: frameTime, bones, rootPos });
+      this.disabledFrameCache.delete(frameIndex);
+    }
     this.clip.frames.sort((a, b) => a.time - b.time);
     this.rebuildClipKeyMap();
     this.drawTimeline();
@@ -3162,54 +3284,185 @@ export class EditorApp {
 
   private toggleKeyframe(bone: THREE.Object3D, time: number) {
     this.pushUndo();
-    const snap = 1 / this.fps;
-    const t = Math.round(time / snap) * snap;
-    const key = this.getBoneKey(bone);
+    const frameIndex = this.getFrameIndex(time);
+    const t = this.getFrameTime(frameIndex);
     if (this.overrideMode) {
       this.applyOverrideOffset(bone, t);
       this.drawTimeline();
       return;
     }
-    const existing = this.clip.frames.find((frame) => Math.abs(frame.time - t) < 1e-4);
-    if (existing) {
-      if (existing.bones[key]) {
-        delete existing.bones[key];
-        if (key === ROOT_BONE_KEY) {
-          delete existing.rootPos;
-        }
-      } else {
-        const q = bone.quaternion;
-        existing.bones[key] = { x: q.x, y: q.y, z: q.z, w: q.w };
-        if (key === ROOT_BONE_KEY) {
-          existing.rootPos = { x: bone.position.x, y: bone.position.y, z: bone.position.z };
-        }
-      }
-      if (Object.keys(existing.bones).length === 0) {
-        this.clip.frames = this.clip.frames.filter((frame) => frame !== existing);
-      }
-    } else {
-      const q = bone.quaternion;
-      this.clip.frames.push({
-        time: t,
-        bones: { [key]: { x: q.x, y: q.y, z: q.z, w: q.w } },
-        rootPos: key === ROOT_BONE_KEY
-          ? { x: bone.position.x, y: bone.position.y, z: bone.position.z }
-          : undefined,
-      });
-      this.clip.frames.sort((a, b) => a.time - b.time);
-    }
+    this.setFrameEnabled(frameIndex, !this.hasFrameAtIndex(frameIndex));
     this.rebuildClipKeyMap();
     this.applyClipAtTime(t);
     this.drawTimeline();
   }
 
+  private getFrameIndex(time: number) {
+    const totalFrames = this.getTotalFrames();
+    return THREE.MathUtils.clamp(Math.round(time * this.fps), 0, totalFrames - 1);
+  }
+
+  private getFrameTime(frameIndex: number) {
+    return frameIndex / this.fps;
+  }
+
+  private getOverrideRangeTimes() {
+    const startFrame = Math.min(this.overrideRangeStartFrame, this.overrideRangeEndFrame);
+    const endFrame = Math.max(this.overrideRangeStartFrame, this.overrideRangeEndFrame);
+    return {
+      startTime: this.getFrameTime(startFrame),
+      endTime: this.getFrameTime(endFrame),
+    };
+  }
+
+  private getTotalFrames() {
+    return Math.max(1, Math.round(this.clip.duration * this.fps));
+  }
+
+  private setTotalFrames(totalFrames: number) {
+    const clamped = Math.max(1, totalFrames);
+    this.clip.duration = clamped / this.fps;
+    this.time = THREE.MathUtils.clamp(this.time, 0, this.clip.duration);
+    const durationInput = this.hud?.querySelector('[data-duration]') as HTMLInputElement | null;
+    const timeInput = this.hud?.querySelector('[data-time]') as HTMLInputElement | null;
+    if (durationInput) {
+      durationInput.max = String(Math.max(1, Math.floor(MAX_DURATION * this.fps)));
+      durationInput.value = String(clamped);
+    }
+    if (timeInput) {
+      timeInput.max = this.clip.duration.toFixed(4);
+      timeInput.step = (1 / this.fps).toFixed(4);
+      timeInput.value = this.time.toFixed(4);
+    }
+  }
+
+  private computeTimelineLaneMetrics(totalFrames: number, width: number, height: number, scale = 1) {
+    const lanePadX = Math.max(6, Math.floor(8 * scale));
+    const lanePadY = Math.max(2, Math.floor(4 * scale));
+    const usableWidth = Math.max(1, width - lanePadX * 2);
+    const stepPitch = usableWidth / Math.max(1, totalFrames);
+    const gap = stepPitch > 3 ? Math.min(stepPitch * 0.22, 3 * scale) : 0;
+    const cellSize = Math.max(1, Math.min(stepPitch - gap, height - lanePadY * 2));
+    const laneY = lanePadY;
+    return { lanePadX, usableWidth, stepPitch, gap, cellSize, laneY };
+  }
+
+  private normalizeClipToFrameGrid() {
+    const totalFrames = this.getTotalFrames();
+    const dedup = new Map<number, BoneFrame>();
+    for (const frame of this.clip.frames) {
+      const idx = THREE.MathUtils.clamp(Math.round(frame.time * this.fps), 0, totalFrames - 1);
+      dedup.set(idx, {
+        time: this.getFrameTime(idx),
+        bones: JSON.parse(JSON.stringify(frame.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+        rootPos: frame.rootPos ? { ...frame.rootPos } : undefined,
+      });
+    }
+    this.clip.frames = Array.from(dedup.values()).sort((a, b) => a.time - b.time);
+  }
+
+  private syncOverrideRangeUi(
+    wrap: HTMLDivElement | null,
+    startHandle: HTMLDivElement | null,
+    endHandle: HTMLDivElement | null,
+    enabled = this.overrideMode,
+  ) {
+    const totalFrames = this.getTotalFrames();
+    const maxFrame = Math.max(0, totalFrames - 1);
+    this.overrideRangeStartFrame = THREE.MathUtils.clamp(this.overrideRangeStartFrame, 0, maxFrame);
+    this.overrideRangeEndFrame = THREE.MathUtils.clamp(this.overrideRangeEndFrame, 0, maxFrame);
+    if (this.overrideRangeStartFrame > this.overrideRangeEndFrame) {
+      const temp = this.overrideRangeStartFrame;
+      this.overrideRangeStartFrame = this.overrideRangeEndFrame;
+      this.overrideRangeEndFrame = temp;
+    }
+    if (wrap) wrap.style.display = enabled ? 'block' : 'none';
+    const frameEl = wrap?.querySelector('[data-override-frame]') as HTMLDivElement | null;
+    if (frameEl) {
+      const start = Math.min(this.overrideRangeStartFrame, this.overrideRangeEndFrame);
+      const end = Math.max(this.overrideRangeStartFrame, this.overrideRangeEndFrame);
+      if (!wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const metrics = this.computeTimelineLaneMetrics(totalFrames, rect.width, rect.height, 1);
+      const frameLeft = metrics.lanePadX + start * metrics.stepPitch + metrics.gap * 0.5;
+      const frameWidth = Math.max(metrics.stepPitch - metrics.gap, (end - start + 1) * metrics.stepPitch - metrics.gap);
+      frameEl.style.left = `${frameLeft}px`;
+      frameEl.style.width = `${frameWidth}px`;
+      frameEl.style.top = `${metrics.laneY}px`;
+      frameEl.style.height = `${metrics.cellSize}px`;
+      if (startHandle) {
+        startHandle.style.left = `${frameLeft}px`;
+        startHandle.style.top = `${metrics.laneY}px`;
+        startHandle.style.height = `${metrics.cellSize}px`;
+      }
+      if (endHandle) {
+        endHandle.style.left = `${frameLeft + frameWidth}px`;
+        endHandle.style.top = `${metrics.laneY}px`;
+        endHandle.style.height = `${metrics.cellSize}px`;
+      }
+    }
+  }
+
+  private hasFrameAtIndex(frameIndex: number) {
+    return !!this.findFrameByIndex(frameIndex);
+  }
+
+  private findFrameByIndex(frameIndex: number) {
+    return this.clip.frames.find((frame) => Math.round(frame.time * this.fps) === frameIndex);
+  }
+
+  private cloneFrame(frame: BoneFrame, frameTime: number): BoneFrame {
+    return {
+      time: frameTime,
+      bones: JSON.parse(JSON.stringify(frame.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+      rootPos: frame.rootPos ? { ...frame.rootPos } : undefined,
+    };
+  }
+
+  private setFrameEnabled(frameIndex: number, enabled: boolean) {
+    const frameTime = this.getFrameTime(frameIndex);
+    const existing = this.findFrameByIndex(frameIndex);
+    if (enabled) {
+      if (existing) return false;
+      const cached = this.disabledFrameCache.get(frameIndex);
+      if (cached) {
+        this.clip.frames.push(this.cloneFrame(cached, frameTime));
+        this.clip.frames.sort((a, b) => a.time - b.time);
+        this.disabledFrameCache.delete(frameIndex);
+        return true;
+      }
+      // Sample current evaluated pose at the target frame so re-enabled keys blend naturally.
+      this.applyClipAtTime(frameTime);
+      const bones: Record<string, { x: number; y: number; z: number; w: number }> = {};
+      for (const b of this.bones) {
+        const q = b.quaternion;
+        bones[this.getBoneKey(b)] = { x: q.x, y: q.y, z: q.z, w: q.w };
+      }
+      const root = this.boneByKey.get(ROOT_BONE_KEY);
+      const rootPos = root
+        ? { x: root.position.x, y: root.position.y, z: root.position.z }
+        : undefined;
+      this.clip.frames.push({ time: frameTime, bones, rootPos });
+      this.clip.frames.sort((a, b) => a.time - b.time);
+      this.disabledFrameCache.delete(frameIndex);
+      return true;
+    }
+    if (!existing) return false;
+    this.disabledFrameCache.set(frameIndex, this.cloneFrame(existing, frameTime));
+    this.clip.frames = this.clip.frames.filter((frame) => frame !== existing);
+    return true;
+  }
+
   private applyOverrideOffset(bone: THREE.Object3D, time: number) {
     if (this.clip.frames.length === 0) return;
+    const { startTime: rangeStart, endTime: rangeEnd } = this.getOverrideRangeTimes();
+    if (time < rangeStart || time > rangeEnd) return;
     const key = this.getBoneKey(bone);
     let prev: BoneFrame | null = null;
     let next: BoneFrame | null = null;
     for (let i = 0; i < this.clip.frames.length; i += 1) {
       const frame = this.clip.frames[i]!;
+      if (frame.time < rangeStart || frame.time > rangeEnd) continue;
       if (!frame.bones[key]) continue;
       if (frame.time <= time) prev = frame;
       if (frame.time >= time) {
@@ -3233,6 +3486,7 @@ export class EditorApp {
     const offset = current.multiply(base.clone().invert());
 
     for (const frame of this.clip.frames) {
+      if (frame.time < rangeStart || frame.time > rangeEnd) continue;
       const entry = frame.bones[key];
       if (!entry) continue;
       const q = new THREE.Quaternion(entry.x, entry.y, entry.z, entry.w);
@@ -3248,6 +3502,7 @@ export class EditorApp {
       let nextRoot: BoneFrame | null = null;
       for (let i = 0; i < this.clip.frames.length; i += 1) {
         const frame = this.clip.frames[i]!;
+        if (frame.time < rangeStart || frame.time > rangeEnd) continue;
         if (!frame.rootPos) continue;
         if (frame.time <= time) prevRoot = frame;
         if (frame.time >= time) {
@@ -3269,6 +3524,7 @@ export class EditorApp {
           const currentPos = bone.position.clone();
           const offsetPos = currentPos.sub(basePos);
           for (const frame of this.clip.frames) {
+            if (frame.time < rangeStart || frame.time > rangeEnd) continue;
             if (!frame.rootPos) continue;
             frame.rootPos = {
               x: frame.rootPos.x + offsetPos.x,
@@ -4372,8 +4628,11 @@ export class EditorApp {
     action.play();
     action.paused = true;
     const frames: BoneFrame[] = [];
-    const duration = Math.min(MAX_DURATION, retargeted.duration);
-    for (let t = 0; t <= duration + 1e-4; t += 1 / SAMPLE_RATE) {
+    const rawDuration = Math.min(MAX_DURATION, retargeted.duration);
+    const totalFrames = Math.max(1, Math.round(rawDuration * this.fps));
+    const duration = totalFrames / this.fps;
+    for (let f = 0; f <= totalFrames; f += 1) {
+      const t = Math.min(duration, this.getFrameTime(f));
       action.time = t;
       this.mixer.update(0);
       const bones: Record<string, { x: number; y: number; z: number; w: number }> = {};
@@ -4389,15 +4648,25 @@ export class EditorApp {
     }
     action.stop();
     this.clip = { duration, frames };
+    this.normalizeClipToFrameGrid();
     this.time = 0;
+    this.overrideRangeStartFrame = 0;
+    this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
     this.rebuildClipKeyMap();
     this.updateTimeline();
     this.refreshJson(jsonBox);
     this.drawTimeline();
     const durationInput = this.hud.querySelector('[data-duration]') as HTMLInputElement;
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
-    if (durationInput) durationInput.value = duration.toFixed(2);
-    if (timeInput) timeInput.max = duration.toFixed(2);
+    const overrideRangeWrap = this.hud.querySelector('[data-override-range]') as HTMLDivElement;
+    const overrideStartHandle = this.hud.querySelector('[data-override-start-handle]') as HTMLDivElement;
+    const overrideEndHandle = this.hud.querySelector('[data-override-end-handle]') as HTMLDivElement;
+    if (durationInput) durationInput.value = String(this.getTotalFrames());
+    if (timeInput) {
+      timeInput.max = duration.toFixed(4);
+      timeInput.step = (1 / this.fps).toFixed(4);
+    }
+    this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
     status.textContent = `Mixamo: baked ${entry.name}`;
   }
 
@@ -4751,24 +5020,29 @@ export class EditorApp {
   private startRagdollRecording() {
     this.pushUndo();
     this.clip.frames = [];
-    this.clip.duration = MAX_DURATION;
+    this.setTotalFrames(Math.max(1, Math.round(MAX_DURATION * this.fps)));
     this.ragdollTime = 0;
     this.ragdollNextSample = 0;
+    this.overrideRangeStartFrame = 0;
+    this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
+    const overrideRangeWrap = this.hud.querySelector('[data-override-range]') as HTMLDivElement;
+    const overrideStartHandle = this.hud.querySelector('[data-override-start-handle]') as HTMLDivElement;
+    const overrideEndHandle = this.hud.querySelector('[data-override-end-handle]') as HTMLDivElement;
+    this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
     this.ragdollRecording = true;
     this.drawTimeline();
   }
 
   private resizeTimeline() {
     if (!this.timeline) return;
+    const wrapRect = this.timelineWrap?.getBoundingClientRect();
     const rect = this.timeline.getBoundingClientRect();
+    const cssWidth = Math.max(1, Math.floor(wrapRect?.width ?? rect.width ?? 1));
     const rowHeight = 28;
     const heightPx = Math.max(rect.height, rowHeight);
-    const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-    const cellWidth = 18;
-    const widthPx = Math.max(rect.width, totalFrames * cellWidth);
-    this.timeline.width = Math.max(1, Math.floor(widthPx * this.dpr));
+    this.timeline.width = Math.max(1, Math.floor(cssWidth * this.dpr));
     this.timeline.height = Math.max(1, Math.floor(heightPx * this.dpr));
-    this.timeline.style.width = `${widthPx}px`;
+    this.timeline.style.width = '100%';
   }
 
   private drawTimeline() {
@@ -4777,42 +5051,58 @@ export class EditorApp {
     if (!ctx) return;
     const width = this.timeline.width;
     const height = this.timeline.height;
-    const rowHeight = 28 * this.dpr;
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#121418';
+    ctx.fillStyle = '#0f131b';
     ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    ctx.lineWidth = 1 * this.dpr;
-    const totalFrames = Math.max(1, Math.floor(this.clip.duration * this.fps));
-    const cellWidth = width / totalFrames;
-    for (let i = 0; i <= totalFrames; i += 1) {
-      const x = i * cellWidth;
-      const isMajor = i % this.fps === 0;
-      ctx.globalAlpha = isMajor ? 0.6 : 0.2;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
-      ctx.stroke();
+
+    const totalFrames = this.getTotalFrames();
+    const { lanePadX, usableWidth, stepPitch, gap, cellSize, laneY } = this.computeTimelineLaneMetrics(
+      totalFrames,
+      width,
+      height,
+      this.dpr,
+    );
+    const cellOffsetY = laneY;
+    const keyBorder = Math.max(1, Math.floor(this.dpr * 1.1));
+    const gridBorder = Math.max(1, Math.floor(this.dpr * 0.75));
+
+    const keyedFrames = new Set<number>();
+    for (const frame of this.clip.frames) {
+      keyedFrames.add(THREE.MathUtils.clamp(Math.round(frame.time * this.fps), 0, totalFrames - 1));
     }
-    ctx.globalAlpha = 1;
-    const boxWidth = cellWidth;
-    const boxHeight = rowHeight * 0.7;
-    const rowY = (height - boxHeight) * 0.5;
-    const bone = this.selectedBone ?? this.bones[0];
-    const boneKey = bone ? this.getBoneKey(bone) : null;
+
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.fillRect(lanePadX, laneY - Math.max(1, Math.floor(4 * this.dpr)), usableWidth, cellSize + Math.max(2, Math.floor(8 * this.dpr)));
+
     for (let f = 0; f < totalFrames; f += 1) {
-      const x = f * boxWidth;
-      const t = f / this.fps;
-      const frame = this.clip.frames.find((fr) => Math.abs(fr.time - t) < 1e-4);
-      const hasKey = boneKey ? frame && frame.bones[boneKey] : false;
-      ctx.fillStyle = hasKey ? '#f5c84c' : 'rgba(255,255,255,0.08)';
-      ctx.fillRect(x + 1, rowY, Math.max(1, boxWidth - 2), boxHeight);
+      const x = lanePadX + f * stepPitch + gap * 0.5;
+      const hasKey = keyedFrames.has(f);
+
+      if (f % this.fps === 0) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = Math.max(1, Math.floor(this.dpr * 0.7));
+        ctx.beginPath();
+        ctx.moveTo(Math.floor(x) + 0.5, laneY - Math.max(4, Math.floor(6 * this.dpr)));
+        ctx.lineTo(Math.floor(x) + 0.5, laneY - Math.max(1, Math.floor(2 * this.dpr)));
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = hasKey ? '#f5c84c' : 'rgba(255,255,255,0.1)';
+      ctx.fillRect(x, cellOffsetY, Math.max(1, cellSize), Math.max(1, cellSize));
+      ctx.strokeStyle = hasKey ? 'rgba(245,200,76,0.95)' : 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = hasKey ? keyBorder : gridBorder;
+      ctx.strokeRect(x + 0.5, cellOffsetY + 0.5, Math.max(1, cellSize - 1), Math.max(1, cellSize - 1));
     }
-    const playX = (this.time / this.clip.duration) * width;
+
+    const playFrame = THREE.MathUtils.clamp(Math.round(this.time * this.fps), 0, totalFrames - 1);
+    const playX = lanePadX + playFrame * stepPitch + gap * 0.5;
     ctx.strokeStyle = '#fef08a';
-    ctx.beginPath();
-    ctx.moveTo(playX, 0);
-    ctx.lineTo(playX, height);
-    ctx.stroke();
+    ctx.lineWidth = Math.max(1, Math.floor(this.dpr * 1.6));
+    ctx.strokeRect(
+      playX - Math.max(1, Math.floor(1 * this.dpr)),
+      cellOffsetY - Math.max(1, Math.floor(1 * this.dpr)),
+      Math.max(2, cellSize + Math.max(2, Math.floor(2 * this.dpr))),
+      Math.max(2, cellSize + Math.max(2, Math.floor(2 * this.dpr))),
+    );
   }
 }
