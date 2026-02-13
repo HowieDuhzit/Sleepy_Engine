@@ -4782,7 +4782,10 @@ export class EditorApp {
     const defs = this.ragdollDefs;
 
     const tmpVec = new THREE.Vector3();
+    const tmpVec2 = new THREE.Vector3();
     const tmpQuat = new THREE.Quaternion();
+    const tmpQuat2 = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
     const jointStiffness = 65;
     const jointDamping = 7;
     const spineStiffness = 95;
@@ -4829,15 +4832,35 @@ export class EditorApp {
       this.hipsOffset.copy(tmpVec).sub(this.vrm.scene.position);
     }
 
+    const childByParent = new Map<string, string>();
+    for (const def of defs) {
+      if (def.parent && !childByParent.has(def.parent)) childByParent.set(def.parent, def.name);
+    }
+
     for (const def of defs) {
       const bone = getBone(def.name);
       if (!bone) continue;
       bone.getWorldPosition(tmpVec);
-      bone.getWorldQuaternion(tmpQuat);
+      const childName = childByParent.get(def.name);
+      const child = childName ? getBone(childName) : null;
+      const axis = new THREE.Vector3(0, 1, 0);
+      const center = tmpVec.clone();
+      if (child) {
+        child.getWorldPosition(tmpVec2);
+        const dir = tmpVec2.clone().sub(tmpVec);
+        if (dir.lengthSq() > 1e-8) {
+          axis.copy(dir.normalize());
+          center.copy(tmpVec).add(tmpVec2).multiplyScalar(0.5);
+        }
+      } else {
+        bone.getWorldQuaternion(tmpQuat2);
+        axis.copy(up).applyQuaternion(tmpQuat2).normalize();
+      }
+      tmpQuat.setFromUnitVectors(up, axis);
       const halfHeight = segmentHalfHeights[def.name] ?? 0.1;
       const radius = segmentRadii[def.name] ?? 0.05;
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(tmpVec.x, tmpVec.y, tmpVec.z)
+        .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
         .setLinearDamping(2)
         .setAngularDamping(2.8);
@@ -4863,6 +4886,7 @@ export class EditorApp {
         bone,
         body,
         baseLength: halfHeight * 2,
+        axis,
       };
       this.ragdollBones.set(def.name, ragBone);
     }
@@ -4878,13 +4902,23 @@ export class EditorApp {
       if (!childBone || !parentBone) continue;
       const parentBody = parentBone.body;
       const childBody = childBone.body;
-      const pos1 = parentBody.translation();
-      const pos2 = childBody.translation();
-      const midX = (pos1.x + pos2.x) * 0.5;
-      const midY = (pos1.y + pos2.y) * 0.5;
-      const midZ = (pos1.z + pos2.z) * 0.5;
-      const anchor1 = new RAPIER.Vector3(midX - pos1.x, midY - pos1.y, midZ - pos1.z);
-      const anchor2 = new RAPIER.Vector3(midX - pos2.x, midY - pos2.y, midZ - pos2.z);
+      const jointWorld = childBone.bone.getWorldPosition(new THREE.Vector3());
+      const pPos = parentBody.translation();
+      const pRot = parentBody.rotation();
+      const cPos = childBody.translation();
+      const cRot = childBody.rotation();
+      const pQuatInv = new THREE.Quaternion(pRot.x, pRot.y, pRot.z, pRot.w).invert();
+      const cQuatInv = new THREE.Quaternion(cRot.x, cRot.y, cRot.z, cRot.w).invert();
+      const anchorParent = jointWorld
+        .clone()
+        .sub(new THREE.Vector3(pPos.x, pPos.y, pPos.z))
+        .applyQuaternion(pQuatInv);
+      const anchorChild = jointWorld
+        .clone()
+        .sub(new THREE.Vector3(cPos.x, cPos.y, cPos.z))
+        .applyQuaternion(cQuatInv);
+      const anchor1 = new RAPIER.Vector3(anchorParent.x, anchorParent.y, anchorParent.z);
+      const anchor2 = new RAPIER.Vector3(anchorChild.x, anchorChild.y, anchorChild.z);
       const hinge = hingeJoints[def.name];
       const isSpineJoint = spineJointChildren.has(def.name);
       const stiffness = isSpineJoint ? spineStiffness : jointStiffness;
@@ -4911,25 +4945,22 @@ export class EditorApp {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
     this.ragdollWorld.timestep = Math.min(1 / 30, delta);
     this.ragdollWorld.step();
-    this.vrm.scene.updateMatrixWorld(true);
+    const parentWorld = new THREE.Quaternion();
+    const invParent = new THREE.Quaternion();
     const bodyQuat = new THREE.Quaternion();
     const bodyPos = new THREE.Vector3();
-    const parentWorldQuat = new THREE.Quaternion();
-    const parentWorldInv = new THREE.Matrix4();
     for (const ragBone of this.ragdollBones.values()) {
       const { bone, body } = ragBone;
-      if (!bone.parent) continue;
-      const pos = body.translation();
       const rot = body.rotation();
-      bodyPos.set(pos.x, pos.y, pos.z);
       bodyQuat.set(rot.x, rot.y, rot.z, rot.w);
-      bone.parent.updateMatrixWorld(true);
-      parentWorldInv.copy(bone.parent.matrixWorld).invert();
-      bodyPos.applyMatrix4(parentWorldInv);
-      bone.parent.getWorldQuaternion(parentWorldQuat).invert();
-      bodyQuat.premultiply(parentWorldQuat);
-      bone.position.copy(bodyPos);
-      bone.quaternion.copy(bodyQuat);
+      if (bone.parent) {
+        bone.parent.getWorldQuaternion(parentWorld);
+        invParent.copy(parentWorld).invert();
+        const rel = invParent.clone().multiply(bodyQuat);
+        bone.quaternion.copy(rel);
+      } else {
+        bone.quaternion.copy(bodyQuat);
+      }
     }
     this.vrm.scene.updateMatrixWorld(true);
     for (const mesh of this.ragdollDebugMeshes) {
