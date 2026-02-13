@@ -70,6 +70,8 @@ type RagdollBone = {
   child: THREE.Object3D | null;
   body: RAPIER.RigidBody;
   bodyToBone?: THREE.Quaternion;
+  targetLocalQuat?: THREE.Quaternion;
+  muscleScale?: number;
   hingeAxisLocal?: THREE.Vector3;
   hingeMin?: number;
   hingeMax?: number;
@@ -511,6 +513,12 @@ export class EditorApp {
     cameraMinPitch: 0.2,
     cameraMaxPitch: Math.PI - 0.2,
     targetSmoothSpeed: 15,
+    ragdollMuscle: {
+      enabled: true,
+      stiffness: 180,
+      damping: 22,
+      maxTorque: 220,
+    },
     ragdollRig: {} as Record<
       string,
       { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
@@ -4866,6 +4874,26 @@ export class EditorApp {
       rightLowerLeg: 44,
       rightFoot: 34,
     };
+    const muscleScaleByBone: Record<string, number> = {
+      hips: 1.25,
+      spine: 1.2,
+      chest: 1.15,
+      upperChest: 1.1,
+      neck: 1.0,
+      head: 0.9,
+      leftUpperArm: 0.85,
+      leftLowerArm: 0.75,
+      leftHand: 0.65,
+      rightUpperArm: 0.85,
+      rightLowerArm: 0.75,
+      rightHand: 0.65,
+      leftUpperLeg: 1.0,
+      leftLowerLeg: 0.9,
+      leftFoot: 0.75,
+      rightUpperLeg: 1.0,
+      rightLowerLeg: 0.9,
+      rightFoot: 0.75,
+    };
     const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
       leftLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
       rightLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
@@ -5014,6 +5042,7 @@ export class EditorApp {
         child,
         body,
         bodyToBone,
+        muscleScale: muscleScaleByBone[def.name] ?? 1,
         baseLength: segmentLength,
         radius,
         axis,
@@ -5087,11 +5116,15 @@ export class EditorApp {
         revoluteJoint.setLimits?.(hinge.min, hinge.max);
       }
       childBone.parent = parentBone;
+      const parentWorldQuat = parentBone.bone.getWorldQuaternion(new THREE.Quaternion());
+      const childWorldQuat = childBone.bone.getWorldQuaternion(new THREE.Quaternion());
+      childBone.targetLocalQuat = parentWorldQuat.invert().multiply(childWorldQuat).normalize();
     }
   }
 
   private stepRagdoll(delta: number) {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
+    this.applyRagdollMuscles(delta);
     this.ragdollWorld.timestep = Math.min(1 / 30, delta);
     this.ragdollWorld.step();
     const parentQuat = new THREE.Quaternion();
@@ -5215,6 +5248,61 @@ export class EditorApp {
       }
     }
     this.updateRagdollHandles();
+  }
+
+  private applyRagdollMuscles(delta: number) {
+    if (!this.ragdollEnabled || delta <= 0) return;
+    const cfg = this.playerConfig.ragdollMuscle ?? { enabled: true, stiffness: 180, damping: 22, maxTorque: 220 };
+    if (!cfg.enabled) return;
+    const kpBase = Math.max(0, Number(cfg.stiffness) || 0);
+    const kdBase = Math.max(0, Number(cfg.damping) || 0);
+    const maxTorqueBase = Math.max(0, Number(cfg.maxTorque) || 0);
+    if (kpBase <= 0 || maxTorqueBase <= 0) return;
+    const parentQuat = new THREE.Quaternion();
+    const childQuat = new THREE.Quaternion();
+    const parentInv = new THREE.Quaternion();
+    const currentRel = new THREE.Quaternion();
+    const errorQuat = new THREE.Quaternion();
+    const axisLocal = new THREE.Vector3();
+    const axisWorld = new THREE.Vector3();
+    const parentAngVel = new THREE.Vector3();
+    const childAngVel = new THREE.Vector3();
+    const relAngVel = new THREE.Vector3();
+    for (const ragBone of this.ragdollBones.values()) {
+      if (!ragBone.parent || !ragBone.targetLocalQuat) continue;
+      const pRot = ragBone.parent.body.rotation();
+      const cRot = ragBone.body.rotation();
+      parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
+      childQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
+      parentInv.copy(parentQuat).invert();
+      currentRel.copy(parentInv).multiply(childQuat).normalize();
+      errorQuat.copy(currentRel).invert().multiply(ragBone.targetLocalQuat).normalize();
+      if (errorQuat.w < 0) {
+        errorQuat.set(-errorQuat.x, -errorQuat.y, -errorQuat.z, -errorQuat.w);
+      }
+      axisLocal.set(errorQuat.x, errorQuat.y, errorQuat.z);
+      const axisLen = axisLocal.length();
+      if (axisLen < 1e-6) continue;
+      axisLocal.multiplyScalar(1 / axisLen);
+      let angle = 2 * Math.atan2(axisLen, errorQuat.w);
+      if (angle > Math.PI) angle -= Math.PI * 2;
+      axisWorld.copy(axisLocal).applyQuaternion(parentQuat).normalize();
+      const pVel = ragBone.parent.body.angvel();
+      const cVel = ragBone.body.angvel();
+      parentAngVel.set(pVel.x, pVel.y, pVel.z);
+      childAngVel.set(cVel.x, cVel.y, cVel.z);
+      relAngVel.copy(childAngVel).sub(parentAngVel);
+      const axisVel = relAngVel.dot(axisWorld);
+      const muscleScale = ragBone.muscleScale ?? 1;
+      const kp = kpBase * muscleScale;
+      const kd = kdBase * Math.sqrt(Math.max(0.2, muscleScale));
+      const maxTorque = maxTorqueBase * muscleScale;
+      const torqueMag = THREE.MathUtils.clamp(kp * angle - kd * axisVel, -maxTorque, maxTorque);
+      if (!Number.isFinite(torqueMag) || Math.abs(torqueMag) < 1e-4) continue;
+      const impulse = axisWorld.clone().multiplyScalar(torqueMag * delta);
+      ragBone.body.applyTorqueImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
+      ragBone.parent.body.applyTorqueImpulse({ x: -impulse.x, y: -impulse.y, z: -impulse.z }, true);
+    }
   }
 
   private updateRagdollDebugFromBones() {
