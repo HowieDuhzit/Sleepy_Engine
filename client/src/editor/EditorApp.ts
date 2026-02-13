@@ -69,6 +69,7 @@ type RagdollBone = {
   bone: THREE.Object3D;
   child: THREE.Object3D | null;
   body: RAPIER.RigidBody;
+  bodyToBone?: THREE.Quaternion;
   parent?: RagdollBone;
   baseLength?: number;
   radius?: number;
@@ -4877,6 +4878,8 @@ export class EditorApp {
       const segmentLength = Math.max(0.08, start.distanceTo(end));
       const center = start.clone().add(end).multiplyScalar(0.5);
       tmpQuat.setFromUnitVectors(up, axis);
+      const boneWorldQuat = bone.getWorldQuaternion(new THREE.Quaternion());
+      const bodyToBone = tmpQuat.clone().invert().multiply(boneWorldQuat);
       let radius = segmentRadii[def.name] ?? 0.05;
       radius = Math.min(radius, segmentLength * 0.35);
       radius = Math.max(0.02, radius);
@@ -4916,6 +4919,7 @@ export class EditorApp {
         bone,
         child,
         body,
+        bodyToBone,
         baseLength: segmentLength,
         radius,
         axis,
@@ -4980,18 +4984,23 @@ export class EditorApp {
     const parentWorld = new THREE.Quaternion();
     const invParent = new THREE.Quaternion();
     const bodyQuat = new THREE.Quaternion();
+    const targetWorld = new THREE.Quaternion();
     const bodyPos = new THREE.Vector3();
     for (const ragBone of this.ragdollBones.values()) {
       const { bone, body } = ragBone;
       const rot = body.rotation();
       bodyQuat.set(rot.x, rot.y, rot.z, rot.w);
+      targetWorld.copy(bodyQuat);
+      if (ragBone.bodyToBone) {
+        targetWorld.multiply(ragBone.bodyToBone);
+      }
       if (bone.parent) {
         bone.parent.getWorldQuaternion(parentWorld);
         invParent.copy(parentWorld).invert();
-        const rel = invParent.clone().multiply(bodyQuat);
+        const rel = invParent.clone().multiply(targetWorld);
         bone.quaternion.copy(rel);
       } else {
-        bone.quaternion.copy(bodyQuat);
+        bone.quaternion.copy(targetWorld);
       }
     }
     this.vrm.scene.updateMatrixWorld(true);
