@@ -70,6 +70,9 @@ type RagdollBone = {
   child: THREE.Object3D | null;
   body: RAPIER.RigidBody;
   bodyToBone?: THREE.Quaternion;
+  hingeAxisLocal?: THREE.Vector3;
+  hingeMin?: number;
+  hingeMax?: number;
   parent?: RagdollBone;
   baseLength?: number;
   radius?: number;
@@ -4924,6 +4927,12 @@ export class EditorApp {
         radius,
         axis,
       };
+      const hinge = hingeJoints[def.name];
+      if (hinge) {
+        ragBone.hingeAxisLocal = new THREE.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]).normalize();
+        ragBone.hingeMin = hinge.min;
+        ragBone.hingeMax = hinge.max;
+      }
       this.ragdollBones.set(def.name, ragBone);
     }
     const pelvis = this.ragdollBones.get('hips');
@@ -4981,6 +4990,48 @@ export class EditorApp {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
     this.ragdollWorld.timestep = Math.min(1 / 30, delta);
     this.ragdollWorld.step();
+    const parentQuat = new THREE.Quaternion();
+    const parentQuatInv = new THREE.Quaternion();
+    const childQuat = new THREE.Quaternion();
+    const relQuat = new THREE.Quaternion();
+    const twistQuat = new THREE.Quaternion();
+    const swingQuat = new THREE.Quaternion();
+    const clampedRelQuat = new THREE.Quaternion();
+    const childPos = new THREE.Vector3();
+    const axisLocal = new THREE.Vector3();
+    const twistVec = new THREE.Vector3();
+    // Hard-clamp hinge joints (knees/elbows) so they cannot hyperextend.
+    for (const ragBone of this.ragdollBones.values()) {
+      if (!ragBone.parent || !ragBone.hingeAxisLocal) continue;
+      const min = ragBone.hingeMin ?? -Math.PI;
+      const max = ragBone.hingeMax ?? Math.PI;
+      const pRot = ragBone.parent.body.rotation();
+      const cRot = ragBone.body.rotation();
+      parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
+      childQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
+      parentQuatInv.copy(parentQuat).invert();
+      relQuat.copy(parentQuatInv).multiply(childQuat).normalize();
+      axisLocal.copy(ragBone.hingeAxisLocal).normalize();
+      twistVec.set(relQuat.x, relQuat.y, relQuat.z);
+      const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
+      twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
+      if (twistQuat.lengthSq() < 1e-10) continue;
+      swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
+      const signedAngle = 2 * Math.atan2(
+        axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
+        twistQuat.w,
+      );
+      const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
+      if (Math.abs(clampedAngle - signedAngle) < 1e-4) continue;
+      twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
+      clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
+      childQuat.copy(parentQuat).multiply(clampedRelQuat).normalize();
+      const pos = ragBone.body.translation();
+      childPos.set(pos.x, pos.y, pos.z);
+      ragBone.body.setTranslation({ x: childPos.x, y: childPos.y, z: childPos.z }, true);
+      ragBone.body.setRotation({ x: childQuat.x, y: childQuat.y, z: childQuat.z, w: childQuat.w }, true);
+      ragBone.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
     const parentWorld = new THREE.Quaternion();
     const invParent = new THREE.Quaternion();
     const bodyQuat = new THREE.Quaternion();
