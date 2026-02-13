@@ -4813,10 +4813,10 @@ export class EditorApp {
     const tmpQuat = new THREE.Quaternion();
     const tmpQuat2 = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
-    const jointStiffness = 65;
-    const jointDamping = 7;
-    const spineStiffness = 95;
-    const spineDamping = 9;
+    const jointStiffness = 40;
+    const jointDamping = 13;
+    const spineStiffness = 58;
+    const spineDamping = 16;
     const fallbackLengths: Record<string, number> = {
       hips: 0.28,
       spine: 0.22,
@@ -4904,23 +4904,23 @@ export class EditorApp {
       rightLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.35 },
     };
     const jointTuning: Record<string, { stiffness: number; damping: number }> = {
-      spine: { stiffness: 105, damping: 10 },
-      chest: { stiffness: 105, damping: 10 },
-      upperChest: { stiffness: 105, damping: 10 },
-      neck: { stiffness: 80, damping: 9 },
-      head: { stiffness: 78, damping: 9 },
-      leftUpperArm: { stiffness: 68, damping: 8 },
-      rightUpperArm: { stiffness: 68, damping: 8 },
-      leftLowerArm: { stiffness: 74, damping: 8 },
-      rightLowerArm: { stiffness: 74, damping: 8 },
-      leftHand: { stiffness: 56, damping: 7 },
-      rightHand: { stiffness: 56, damping: 7 },
-      leftUpperLeg: { stiffness: 82, damping: 9 },
-      rightUpperLeg: { stiffness: 82, damping: 9 },
-      leftLowerLeg: { stiffness: 86, damping: 9 },
-      rightLowerLeg: { stiffness: 86, damping: 9 },
-      leftFoot: { stiffness: 62, damping: 8 },
-      rightFoot: { stiffness: 62, damping: 8 },
+      spine: { stiffness: 58, damping: 16 },
+      chest: { stiffness: 58, damping: 16 },
+      upperChest: { stiffness: 56, damping: 16 },
+      neck: { stiffness: 45, damping: 14 },
+      head: { stiffness: 40, damping: 13 },
+      leftUpperArm: { stiffness: 32, damping: 12 },
+      rightUpperArm: { stiffness: 32, damping: 12 },
+      leftLowerArm: { stiffness: 34, damping: 12 },
+      rightLowerArm: { stiffness: 34, damping: 12 },
+      leftHand: { stiffness: 24, damping: 10 },
+      rightHand: { stiffness: 24, damping: 10 },
+      leftUpperLeg: { stiffness: 44, damping: 14 },
+      rightUpperLeg: { stiffness: 44, damping: 14 },
+      leftLowerLeg: { stiffness: 46, damping: 14 },
+      rightLowerLeg: { stiffness: 46, damping: 14 },
+      leftFoot: { stiffness: 30, damping: 11 },
+      rightFoot: { stiffness: 30, damping: 11 },
     };
     const ballJointLimits: Record<string, { swingDeg: number; twistDeg: number }> = {
       spine: { swingDeg: 20, twistDeg: 20 },
@@ -5007,8 +5007,8 @@ export class EditorApp {
       const halfHeight = Math.max(0, segmentLength * 0.5 - radius);
       const limb = def.name.includes('Arm') || def.name.includes('Leg') || def.name.includes('Hand') || def.name.includes('Foot');
       const axial = def.name === 'hips' || def.name === 'spine' || def.name === 'chest' || def.name === 'upperChest';
-      const linearDamping = axial ? 2.6 : limb ? 2.0 : 2.2;
-      const angularDamping = axial ? 3.2 : limb ? 2.6 : 2.8;
+      const linearDamping = axial ? 4.2 : limb ? 3.2 : 3.6;
+      const angularDamping = axial ? 6.5 : limb ? 5.2 : 5.8;
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
@@ -5073,7 +5073,7 @@ export class EditorApp {
     }
     const pelvis = this.ragdollBones.get('hips');
     if (pelvis) {
-      pelvis.body.applyImpulse({ x: 0, y: -2, z: 0 }, true);
+      pelvis.body.applyImpulse({ x: 0, y: -0.35, z: 0 }, true);
     }
 
     for (const def of defs) {
@@ -5146,6 +5146,7 @@ export class EditorApp {
     const swingQuat = new THREE.Quaternion();
     const clampedRelQuat = new THREE.Quaternion();
     const childPos = new THREE.Vector3();
+    const childAng = new THREE.Vector3();
     const axisLocal = new THREE.Vector3();
     const twistVec = new THREE.Vector3();
     // Hard-clamp anatomical joints so they cannot exceed human ranges.
@@ -5203,11 +5204,10 @@ export class EditorApp {
       }
       if (!changed) continue;
       childQuat.copy(parentQuat).multiply(relQuat).normalize();
-      const pos = ragBone.body.translation();
-      childPos.set(pos.x, pos.y, pos.z);
-      ragBone.body.setTranslation({ x: childPos.x, y: childPos.y, z: childPos.z }, true);
       ragBone.body.setRotation({ x: childQuat.x, y: childQuat.y, z: childQuat.z, w: childQuat.w }, true);
-      ragBone.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      const avNow = ragBone.body.angvel();
+      childAng.set(avNow.x, avNow.y, avNow.z).multiplyScalar(0.35);
+      ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, true);
     }
     // Safety clamps: cap runaway velocities that cause floor tunneling and flailing spirals.
     const maxLinVel = 16;
@@ -5217,6 +5217,8 @@ export class EditorApp {
     for (const ragBone of this.ragdollBones.values()) {
       const lv = ragBone.body.linvel();
       lin.set(lv.x, lv.y, lv.z);
+      lin.multiplyScalar(0.985);
+      ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
       const linLen = lin.length();
       if (linLen > maxLinVel) {
         lin.multiplyScalar(maxLinVel / linLen);
@@ -5224,6 +5226,8 @@ export class EditorApp {
       }
       const av = ragBone.body.angvel();
       ang.set(av.x, av.y, av.z);
+      ang.multiplyScalar(0.88);
+      ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
       const angLen = ang.length();
       if (angLen > maxAngVel) {
         ang.multiplyScalar(maxAngVel / angLen);
