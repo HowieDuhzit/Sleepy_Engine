@@ -73,6 +73,7 @@ type RagdollBone = {
   hingeAxisLocal?: THREE.Vector3;
   hingeMin?: number;
   hingeMax?: number;
+  twistAxisLocal?: THREE.Vector3;
   swingLimitRad?: number;
   twistLimitRad?: number;
   parent?: RagdollBone;
@@ -4837,6 +4838,8 @@ export class EditorApp {
       head: { swingDeg: 45, twistDeg: 55 },
       leftUpperArm: { swingDeg: 105, twistDeg: 85 },
       rightUpperArm: { swingDeg: 105, twistDeg: 85 },
+      leftUpperLeg: { swingDeg: 95, twistDeg: 55 },
+      rightUpperLeg: { swingDeg: 95, twistDeg: 55 },
     };
     const spineJointChildren = new Set(['spine', 'chest', 'head']);
 
@@ -4944,6 +4947,13 @@ export class EditorApp {
       if (ballLimit) {
         ragBone.swingLimitRad = THREE.MathUtils.degToRad(ballLimit.swingDeg);
         ragBone.twistLimitRad = THREE.MathUtils.degToRad(ballLimit.twistDeg);
+        if (def.parent) {
+          const parentBone = getBone(def.parent);
+          if (parentBone) {
+            const parentWorldQuat = parentBone.getWorldQuaternion(new THREE.Quaternion());
+            ragBone.twistAxisLocal = axis.clone().applyQuaternion(parentWorldQuat.invert()).normalize();
+          }
+        }
       }
       this.ragdollBones.set(def.name, ragBone);
     }
@@ -5044,7 +5054,7 @@ export class EditorApp {
       if (ragBone.swingLimitRad || ragBone.twistLimitRad) {
         const twistLimit = ragBone.twistLimitRad ?? Math.PI;
         const swingLimit = ragBone.swingLimitRad ?? Math.PI;
-        axisLocal.set(0, 1, 0);
+        axisLocal.copy(ragBone.twistAxisLocal ?? new THREE.Vector3(0, 1, 0)).normalize();
         twistVec.set(relQuat.x, relQuat.y, relQuat.z);
         const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
         twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
