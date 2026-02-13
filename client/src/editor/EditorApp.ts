@@ -514,7 +514,7 @@ export class EditorApp {
     cameraMaxPitch: Math.PI - 0.2,
     targetSmoothSpeed: 15,
     ragdollMuscle: {
-      enabled: true,
+      enabled: false,
       stiffness: 70,
       damping: 16,
       maxTorque: 70,
@@ -5126,7 +5126,7 @@ export class EditorApp {
 
   private stepRagdoll(delta: number) {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
-    this.applyRagdollMuscles(delta);
+    // Keep default behavior passive/stable unless muscle controller is explicitly re-enabled.
     this.ragdollWorld.timestep = Math.min(1 / 30, delta);
     this.ragdollWorld.step();
     const parentQuat = new THREE.Quaternion();
