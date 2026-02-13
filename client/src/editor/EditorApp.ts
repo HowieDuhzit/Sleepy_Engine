@@ -4793,7 +4793,10 @@ export class EditorApp {
     this.ragdollWorld = world;
     const ground = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const groundBody = world.createRigidBody(ground);
-    const groundCollider = RAPIER.ColliderDesc.cuboid(25, 0.05, 25).setTranslation(0, -0.05, 0);
+    const groundCollider = RAPIER.ColliderDesc.cuboid(25, 0.5, 25)
+      .setTranslation(0, -0.5, 0)
+      .setFriction(1.05)
+      .setRestitution(0);
     world.createCollider(groundCollider, groundBody);
     this.ragdollBones.clear();
     for (const mesh of this.ragdollDebugMeshes) {
@@ -5010,13 +5013,14 @@ export class EditorApp {
         .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
         .setLinearDamping(linearDamping)
-        .setAngularDamping(angularDamping);
+        .setAngularDamping(angularDamping)
+        .setCcdEnabled(true);
       const body = world.createRigidBody(bodyDesc);
       const collider = (
         halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
       )
         .setCollisionGroups((0x0002 << 16) | 0x0001);
-      collider.setDensity(segmentDensity[def.name] ?? 40);
+      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(0.9).setRestitution(0);
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
         color: 0x6ee7b7,
@@ -5127,8 +5131,13 @@ export class EditorApp {
   private stepRagdoll(delta: number) {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
     // Keep default behavior passive/stable unless muscle controller is explicitly re-enabled.
-    this.ragdollWorld.timestep = Math.min(1 / 30, delta);
-    this.ragdollWorld.step();
+    const clampedDelta = THREE.MathUtils.clamp(delta, 1 / 180, 1 / 20);
+    const substeps = Math.max(1, Math.min(4, Math.ceil(clampedDelta / (1 / 90))));
+    const stepDt = clampedDelta / substeps;
+    this.ragdollWorld.timestep = stepDt;
+    for (let i = 0; i < substeps; i += 1) {
+      this.ragdollWorld.step();
+    }
     const parentQuat = new THREE.Quaternion();
     const parentQuatInv = new THREE.Quaternion();
     const childQuat = new THREE.Quaternion();
@@ -5199,6 +5208,27 @@ export class EditorApp {
       ragBone.body.setTranslation({ x: childPos.x, y: childPos.y, z: childPos.z }, true);
       ragBone.body.setRotation({ x: childQuat.x, y: childQuat.y, z: childQuat.z, w: childQuat.w }, true);
       ragBone.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+    // Safety clamps: cap runaway velocities that cause floor tunneling and flailing spirals.
+    const maxLinVel = 16;
+    const maxAngVel = 12;
+    const lin = new THREE.Vector3();
+    const ang = new THREE.Vector3();
+    for (const ragBone of this.ragdollBones.values()) {
+      const lv = ragBone.body.linvel();
+      lin.set(lv.x, lv.y, lv.z);
+      const linLen = lin.length();
+      if (linLen > maxLinVel) {
+        lin.multiplyScalar(maxLinVel / linLen);
+        ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
+      }
+      const av = ragBone.body.angvel();
+      ang.set(av.x, av.y, av.z);
+      const angLen = ang.length();
+      if (angLen > maxAngVel) {
+        ang.multiplyScalar(maxAngVel / angLen);
+        ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
+      }
     }
     const parentWorld = new THREE.Quaternion();
     const invParent = new THREE.Quaternion();
