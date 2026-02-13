@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GameApp } from '../game/GameApp';
 import { EditorApp } from '../editor/EditorApp';
-import { createMenu } from '../ui/Menu';
 import { createSplash } from '../ui/Splash';
+import { MainMenu } from './MainMenu';
 
 type LegacyApp = { start: () => void; stop: () => void };
 
@@ -44,14 +44,6 @@ export function AppShell() {
     host.innerHTML = '';
 
     if (state.mode === 'menu') {
-      const menu = createMenu((choice, gameId, scene) => {
-        if (choice === 'game') {
-          setState({ mode: 'game', gameId, scene });
-          return;
-        }
-        setState({ mode: 'editor', gameId });
-      });
-      host.appendChild(menu);
       return;
     }
 
@@ -80,5 +72,19 @@ export function AppShell() {
     };
   }, []);
 
-  return React.createElement('div', { ref: hostRef, className: 'app-shell' });
+  return React.createElement(
+    React.Fragment,
+    null,
+    state.mode === 'menu'
+      ? React.createElement(MainMenu, {
+          onPlay: (gameId: string, scene: string) => setState({ mode: 'game', gameId, scene }),
+          onEditor: (gameId: string) => setState({ mode: 'editor', gameId }),
+        })
+      : null,
+    React.createElement('div', {
+      ref: hostRef,
+      className: 'app-shell',
+      style: { display: state.mode === 'menu' ? 'none' : 'block' },
+    })
+  );
 }

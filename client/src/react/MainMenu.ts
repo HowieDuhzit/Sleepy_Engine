@@ -1,0 +1,152 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { getGameScenes, listGames } from '../services/game-api';
+import { PSXSettingsPanel } from '../ui/PSXSettingsPanel';
+
+type MainMenuProps = {
+  onPlay: (gameId: string, scene: string) => void;
+  onEditor: (gameId: string, scene: string) => void;
+};
+
+type GameEntry = { id: string; name: string };
+
+const h = React.createElement;
+
+export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
+  const [games, setGames] = useState<GameEntry[]>([]);
+  const [currentGameId, setCurrentGameId] = useState<string>('');
+  const [currentStartScene, setCurrentStartScene] = useState<string>('main');
+  const [showSettings, setShowSettings] = useState(false);
+  const settingsHostRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadGames = async () => {
+      try {
+        const items = await listGames();
+        if (!mounted) return;
+
+        setGames(items);
+        const nextId = items.find((g) => g.id === 'prototype')?.id ?? items[0]?.id ?? '';
+        setCurrentGameId(nextId);
+      } catch (error) {
+        console.error('Failed to load games:', error);
+        if (!mounted) return;
+        setGames([]);
+        setCurrentGameId('');
+      }
+    };
+
+    void loadGames();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!currentGameId) {
+      setCurrentStartScene('main');
+      return;
+    }
+
+    const loadStartScene = async () => {
+      try {
+        const data = await getGameScenes(currentGameId);
+        if (!mounted) return;
+        setCurrentStartScene(data.scenes?.[0]?.name ?? 'main');
+      } catch (error) {
+        console.error('Failed to load game scenes:', error);
+        if (!mounted) return;
+        setCurrentStartScene('main');
+      }
+    };
+
+    void loadStartScene();
+
+    return () => {
+      mounted = false;
+    };
+  }, [currentGameId]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const host = settingsHostRef.current;
+    if (!host) return;
+
+    host.innerHTML = '';
+    const panel = new PSXSettingsPanel();
+    host.appendChild(panel.getElement());
+
+    return () => {
+      host.innerHTML = '';
+    };
+  }, [showSettings]);
+
+  const disabled = useMemo(() => !currentGameId, [currentGameId]);
+
+  const gameOptions = games.map((game) => h('option', { key: game.id, value: game.id }, game.name));
+
+  const menuCard = h(
+    'div',
+    { className: 'menu-card' },
+    h('h1', { className: 'menu-title' }, 'Sleepy Engine'),
+    h('p', { className: 'menu-description' }, 'Choose a game'),
+    h(
+      'label',
+      { className: 'menu-field' },
+      h('span', null, 'Game'),
+      h(
+        'select',
+        {
+          value: currentGameId,
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setCurrentGameId(event.target.value),
+        },
+        gameOptions
+      )
+    ),
+    h(
+      'button',
+      {
+        className: 'ui-button ui-button-primary',
+        onClick: () => currentGameId && onPlay(currentGameId, currentStartScene),
+        disabled,
+      },
+      'Play'
+    ),
+    h(
+      'button',
+      {
+        className: 'ui-button',
+        onClick: () => currentGameId && onEditor(currentGameId, currentStartScene),
+        disabled,
+      },
+      'Editor'
+    ),
+    h(
+      'button',
+      {
+        className: 'ui-button ui-button-ghost',
+        onClick: () => setShowSettings(true),
+      },
+      'Settings'
+    )
+  );
+
+  const settingsCard = h(
+    'div',
+    { className: 'menu-settings' },
+    h('div', { ref: settingsHostRef }),
+    h(
+      'button',
+      {
+        className: 'ui-button menu-back-button',
+        onClick: () => setShowSettings(false),
+      },
+      'Back to Menu'
+    )
+  );
+
+  return h('div', { className: 'menu' }, showSettings ? settingsCard : menuCard);
+}
