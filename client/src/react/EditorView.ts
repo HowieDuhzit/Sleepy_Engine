@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { EditorApp } from '../editor/EditorApp';
 import { LegacyAppHost } from './LegacyAppHost';
-import { UiButton } from './ui-primitives';
+import { UiButton, UiCard, UiSectionTitle, UiSelect } from './ui-primitives';
 
 type EditorViewProps = {
   gameId?: string;
@@ -45,16 +45,16 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
     'div',
     { className: 'editor-react-layout' },
     h(
-      'div',
+      UiCard,
       { className: 'react-mode-header editor-react-header' },
       h(UiButton, { onClick: onBackToMenu }, 'Back to Menu'),
-      h('div', { className: 'editor-react-title' }, 'Sleepy Engine Editor'),
+      h(UiSectionTitle, { className: 'editor-react-title' }, 'Sleepy Engine Editor'),
       h(
         'label',
         { className: 'editor-react-game' },
         h('span', null, 'Game'),
         h(
-          'select',
+          UiSelect,
           {
             value: selectedGame,
             onChange: async (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -88,7 +88,7 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
       ),
       h(
         'div',
-        { className: 'editor-react-tabs' },
+        { className: 'editor-react-tabs shad-tabs' },
         ...(['animation', 'player', 'level', 'settings'] as EditorTab[]).map((tabName) =>
           h(
             UiButton,
@@ -106,9 +106,13 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
         )
       )
     ),
-    h('div', { className: 'editor-react-main' },
-      h('div', { ref: leftHostRef, className: 'editor-react-left' }),
-      h('div', { className: 'editor-react-viewport' },
+    h(
+      'div',
+      { className: 'editor-react-main' },
+      h('div', { ref: leftHostRef, className: 'editor-react-left shad-dock' }),
+      h(
+        'div',
+        { className: 'editor-react-viewport' },
         h(LegacyAppHost<EditorApp>, {
           createApp,
           onAppReady: async (app) => {
@@ -128,6 +132,6 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
         })
       )
     ),
-    h('div', { ref: bottomHostRef, className: 'editor-react-bottom' })
+    h('div', { ref: bottomHostRef, className: 'editor-react-bottom shad-dock' })
   );
 }

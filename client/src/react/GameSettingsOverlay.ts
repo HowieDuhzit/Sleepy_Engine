@@ -1,6 +1,6 @@
 import React from 'react';
 import { ReactPSXSettingsPanel } from './ReactPSXSettingsPanel';
-import { UiButton } from './ui-primitives';
+import { UiButton, UiCard, UiRangeRow, UiSectionTitle, UiSwitchRow } from './ui-primitives';
 
 const h = React.createElement;
 
@@ -25,67 +25,43 @@ export function GameSettingsOverlay({ open, camera, onClose, onCameraChange }: P
     'div',
     { className: 'game-settings-overlay' },
     h(
-      'div',
-      { className: 'settings-menu ui-card game-settings-panel' },
+      UiCard,
+      { className: 'settings-menu game-settings-panel' },
       h('h2', { className: 'settings-menu-title' }, 'Settings'),
       h(ReactPSXSettingsPanel),
-      h('h3', { className: 'settings-menu-subtitle' }, 'Camera'),
-      h(
-        'label',
-        { className: 'settings-menu-field' },
-        'Camera Distance: ',
-        h('span', null, camera.orbitRadius.toFixed(1), 'm'),
-        h('input', {
-          type: 'range',
-          min: 1,
-          max: 15,
-          step: 0.5,
-          value: camera.orbitRadius,
-          onInput: (event: React.FormEvent<HTMLInputElement>) =>
-            onCameraChange({ orbitRadius: parseFloat(event.currentTarget.value) }),
-        })
-      ),
-      h(
-        'label',
-        { className: 'settings-menu-field' },
-        'Camera Smoothing: ',
-        h('span', null, `${Math.round(camera.cameraSmoothing * 100)}%`),
-        h('input', {
-          type: 'range',
-          min: 0,
-          max: 100,
-          step: 5,
-          value: Math.round(camera.cameraSmoothing * 100),
-          onInput: (event: React.FormEvent<HTMLInputElement>) =>
-            onCameraChange({ cameraSmoothing: parseFloat(event.currentTarget.value) / 100 }),
-        })
-      ),
-      h(
-        'label',
-        { className: 'settings-menu-field' },
-        'Camera Sensitivity: ',
-        h('span', null, `${camera.cameraSensitivity.toFixed(1)}x`),
-        h('input', {
-          type: 'range',
-          min: 0.1,
-          max: 3,
-          step: 0.1,
-          value: camera.cameraSensitivity,
-          onInput: (event: React.FormEvent<HTMLInputElement>) =>
-            onCameraChange({ cameraSensitivity: parseFloat(event.currentTarget.value) }),
-        })
-      ),
-      h(
-        'label',
-        { className: 'settings-menu-check' },
-        h('input', {
-          type: 'checkbox',
-          checked: camera.firstPersonMode,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
-            onCameraChange({ firstPersonMode: event.target.checked }),
-        }),
-        'First Person Mode'
-      ),
+      h(UiSectionTitle, { className: 'settings-menu-subtitle' }, 'Camera'),
+      h(UiRangeRow, {
+        label: 'Camera Distance',
+        valueLabel: `${camera.orbitRadius.toFixed(1)}m`,
+        min: 1,
+        max: 15,
+        step: 0.5,
+        value: camera.orbitRadius,
+        onInput: (value) => onCameraChange({ orbitRadius: value }),
+      }),
+      h(UiRangeRow, {
+        label: 'Camera Smoothing',
+        valueLabel: `${Math.round(camera.cameraSmoothing * 100)}%`,
+        min: 0,
+        max: 100,
+        step: 5,
+        value: Math.round(camera.cameraSmoothing * 100),
+        onInput: (value) => onCameraChange({ cameraSmoothing: value / 100 }),
+      }),
+      h(UiRangeRow, {
+        label: 'Camera Sensitivity',
+        valueLabel: `${camera.cameraSensitivity.toFixed(1)}x`,
+        min: 0.1,
+        max: 3,
+        step: 0.1,
+        value: camera.cameraSensitivity,
+        onInput: (value) => onCameraChange({ cameraSensitivity: value }),
+      }),
+      h(UiSwitchRow, {
+        label: 'First Person Mode',
+        checked: camera.firstPersonMode,
+        onChange: (value) => onCameraChange({ firstPersonMode: value }),
+      }),
       h(UiButton, { className: 'menu-back-button', onClick: onClose }, 'Close')
     )
   );
