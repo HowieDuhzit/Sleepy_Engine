@@ -81,6 +81,7 @@ type RagdollBone = {
   parent?: RagdollBone;
   baseLength?: number;
   radius?: number;
+  settleTime?: number;
   axis?: THREE.Vector3;
   basePos?: THREE.Vector3;
   baseRot?: THREE.Quaternion;
@@ -5310,6 +5311,7 @@ export class EditorApp {
         muscleScale: muscleScaleByBone[def.name] ?? 1,
         baseLength: scaledLength,
         radius,
+        settleTime: 0,
         axis,
         basePos: center.clone(),
         baseRot: tmpQuat.clone(),
@@ -5422,6 +5424,8 @@ export class EditorApp {
     // Hard-clamp anatomical joints so they cannot exceed human ranges.
     for (const ragBone of this.ragdollBones.values()) {
       if (!ragBone.parent) continue;
+      const isSleeping = (ragBone.body as unknown as { isSleeping?: () => boolean }).isSleeping?.() ?? false;
+      if (isSleeping) continue;
       const pRot = ragBone.parent.body.rotation();
       const cRot = ragBone.body.rotation();
       parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
@@ -5479,11 +5483,11 @@ export class EditorApp {
       currentWorldQuat.slerp(childQuat, THREE.MathUtils.clamp(sim.limitBlend, 0, 1)).normalize();
       ragBone.body.setRotation(
         { x: currentWorldQuat.x, y: currentWorldQuat.y, z: currentWorldQuat.z, w: currentWorldQuat.w },
-        true,
+        false,
       );
       const avNow = ragBone.body.angvel();
       childAng.set(avNow.x, avNow.y, avNow.z).multiplyScalar(0.35);
-      ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, true);
+      ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, false);
     }
     // Safety clamps: cap runaway velocities that cause floor tunneling and flailing spirals.
     const maxLinVel = Math.max(0.1, sim.maxLinearVelocity);
@@ -5502,25 +5506,30 @@ export class EditorApp {
         lin.z = 0;
       }
       lin.multiplyScalar(THREE.MathUtils.clamp(sim.linearBleed, 0, 1));
-      ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
+      ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, false);
       const linLen = lin.length();
       if (linLen > maxLinVel) {
         lin.multiplyScalar(maxLinVel / linLen);
-        ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
+        ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, false);
       }
       const av = ragBone.body.angvel();
       ang.set(av.x, av.y, av.z);
       ang.multiplyScalar(THREE.MathUtils.clamp(sim.angularBleed, 0, 1));
-      ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
+      ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, false);
       const angLen = ang.length();
       if (angLen > maxAngVel) {
         ang.multiplyScalar(maxAngVel / angLen);
-        ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
+        ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, false);
       }
       const settleLin = Math.hypot(lin.x, lin.z);
       const settleY = Math.abs(lin.y);
       const settleAng = ang.length();
       if (settleLin < 0.05 && settleY < 0.06 && settleAng < 0.08) {
+        ragBone.settleTime = (ragBone.settleTime ?? 0) + clampedDelta;
+      } else {
+        ragBone.settleTime = 0;
+      }
+      if ((ragBone.settleTime ?? 0) > 0.35) {
         ragBone.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
         ragBone.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         ragBone.body.sleep();
