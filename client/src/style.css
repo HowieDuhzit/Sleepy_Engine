@@ -372,6 +372,15 @@ body,
   box-sizing: border-box;
 }
 
+.overlay-clip-panel {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .editor-view canvas {
   width: 100%;
   height: 100%;

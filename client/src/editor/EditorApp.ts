@@ -1369,7 +1369,7 @@ export class EditorApp {
       '<button data-mixamo-stop>Stop</button>',
       '</div>',
       '<div class="clip-status" data-mixamo-status>Mixamo: none</div>',
-      '<div class="panel" data-clip-panel>',
+      '<div class="overlay-clip-panel" data-clip-panel>',
       '<div class="panel-title">Clip Data</div>',
       '<label class="field"><span>Name</span><input data-clip-name type="text" placeholder="idle" /></label>',
       '<label class="field"><span>File</span><select data-clip-files></select></label>',
