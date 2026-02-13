@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm -C client dev",
     "dev:server": "pnpm -C server dev",
+    "dev:all": "concurrently --kill-others-on-fail -n server,client -c blue,magenta \"pnpm -C server dev\" \"pnpm -C client dev\"",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test"

@@ -9,19 +9,20 @@ services:
       NODE_ENV: production
 
       # Server configuration paths
-      ANIMATIONS_DIR: /app/animations
-      CONFIG_DIR: /app/config
+      PROJECTS_DIR: /app/projects
 
       # Coolify magic variable for the service URL
       # This will be auto-populated by Coolify with the assigned domain
       APP_URL: ${SERVICE_FQDN_GAME_80}
 
-    volumes:
-      # Persistent storage for animations
-      - game-animations:/app/animations
+      # Database (Postgres)
+      DATABASE_URL: postgres://sleepy:sleepy@db:5432/sleepy_engine
+      # Redis (optional)
+      REDIS_URL: redis://redis:6379
 
-      # Persistent storage for config
-      - game-config:/app/config
+    volumes:
+      # Persistent storage for projects
+      - game-projects:/app/projects
 
       # Persistent storage for any runtime data
       - game-data:/app/data
@@ -37,10 +38,26 @@ services:
       # Coolify labels for service management
       coolify.managed: "true"
 
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sleepy
+      POSTGRES_PASSWORD: sleepy
+      POSTGRES_DB: sleepy_engine
+    volumes:
+      - game-db:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - game-redis:/data
+
 volumes:
-  game-animations:
-    driver: local
-  game-config:
+  game-projects:
     driver: local
   game-data:
+    driver: local
+  game-db:
+    driver: local
+  game-redis:
     driver: local

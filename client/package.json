@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "lint": "eslint .",
+    "lint": "eslint src",
     "test": "echo 'no tests yet'"
   },
   "dependencies": {

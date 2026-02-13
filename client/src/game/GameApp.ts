@@ -5,13 +5,23 @@ import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
+import {
+  getGameAnimation,
+  getGameAvatarUrl,
+  getGamePlayer,
+  getGameScenes,
+  listGameAnimations,
+} from '../services/game-api';
+import { PSXRenderer } from '../rendering/PSXRenderer';
+import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
+import { PSXMaterial } from '../materials/PSXMaterial';
+import { psxSettings } from '../settings/PSXSettings';
 import { buildAnimationClipFromData, isClipData, mirrorClipData, parseClipPayload, type ClipData } from './clip';
 import { retargetMixamoClip } from './retarget';
 import {
   PlayerSnapshot,
   PlayerInput,
   WorldSnapshot,
-  OBSTACLES,
   PLAYER_RADIUS,
   MOVE_SPEED,
   SPRINT_MULTIPLIER,
@@ -30,7 +40,13 @@ import {
 } from '@sleepy/shared';
 
 export class GameApp {
+  private sceneName: string;
+  private gameId: string;
+  private obstacles: Array<{ id: string; position: { x: number; y: number; z: number }; size: { x: number; y: number; z: number } }> = [];
+  private obstacleGroup: THREE.Group | null = null;
+  private groundMesh: THREE.Mesh | null = null;
   private playerConfig = {
+    avatar: '',
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
@@ -56,6 +72,8 @@ export class GameApp {
   };
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
+  private psxRenderer: PSXRenderer | null = null;
+  private psxPostProcessor: PSXPostProcessor | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private orbitYaw = 0;
@@ -105,7 +123,7 @@ export class GameApp {
   private gltfLoader = new GLTFLoader();
   private fbxLoader = new FBXLoader();
   private vrms: VRM[] = [];
-  private readonly vrmUrl = '/avatars/default.vrm';
+  private localAvatarName = 'default.vrm';
   private mixamoClips: Record<string, { clip: THREE.AnimationClip; rig: THREE.Object3D }> = {};
   private jsonClips: Record<string, ClipData> = {};
   private mixamoReady: Promise<void>;
@@ -146,6 +164,14 @@ export class GameApp {
   private hudVisible = false;
   private perfHud: HTMLDivElement;
   private perfVisible = false;
+  private touchControls: HTMLDivElement | null = null;
+  private touchMoveActive = false;
+  private touchLookActive = false;
+  private touchMoveId: number | null = null;
+  private touchLookId: number | null = null;
+  private touchMoveOrigin = new THREE.Vector2();
+  private touchLookOrigin = new THREE.Vector2();
+  private touchLookDelta = new THREE.Vector2();
   private perfFrames = 0;
   private perfAccum = 0;
   private perfFps = 0;
@@ -159,8 +185,12 @@ export class GameApp {
     debug?: { idleTracks: number; walkTracks: number; idleName?: string; walkName?: string };
   }> = [];
   private crowdTemplate: VRM | null = null;
-  private readonly crowdVrmUrl = '/avatars/crowd.vrm';
+  private crowdAvatarName = 'crowd.vrm';
+  private crowdEnabled = false;
+  private crowdLoaded = false;
   private localPlayer: THREE.Object3D;
+  private localAvatarLoaded = false;
+  private playerAvatarEnabled = false;
   private localVelocityY = 0;
   private localVelocityX = 0;
   private localVelocityZ = 0;
@@ -219,14 +249,71 @@ export class GameApp {
     crowd: 'crowd: none',
   };
   private inputDebugTimer = 0;
+  private settingsMenu: HTMLDivElement | null = null;
+  private backButton: HTMLButtonElement | null = null;
+  private onBackToMenu: (() => void) | null = null;
+  private handleContainerClick = () => {
+    this.container.focus();
+  };
+  private handleDebugKeyDown = (event: KeyboardEvent) => {
+    const value = `raw: ${event.code || event.key}`;
+    this.statusLines.key = `key: ${value}`;
+    const node = this.hud.querySelector('[data-hud-key]');
+    if (node) node.textContent = `key: ${value}`;
+    if (event.code === 'KeyH') {
+      this.hudVisible = !this.hudVisible;
+      this.hud.style.display = this.hudVisible ? 'block' : 'none';
+    }
+    if (event.code === 'KeyP') {
+      this.perfVisible = !this.perfVisible;
+      this.perfHud.style.display = this.perfVisible ? 'block' : 'none';
+    }
+    if (event.code === 'KeyV') {
+      this.firstPersonMode = !this.firstPersonMode;
+      const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement | null;
+      if (toggle) toggle.checked = this.firstPersonMode;
+    }
+  };
+  private handleEscapeMenuKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !this.settingsMenu) return;
+    const isVisible = this.settingsMenu.style.display !== 'none';
+    this.settingsMenu.style.display = isVisible ? 'none' : 'block';
+    this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
+  };
 
-  constructor(container: HTMLElement | null) {
+  private parseSceneGround(input: unknown) {
+    if (!input || typeof input !== 'object') return null;
+    const ground = input as {
+      type?: string;
+      width?: number;
+      depth?: number;
+      y?: number;
+      textureRepeat?: number;
+    };
+    return {
+      type: ground.type === 'concrete' ? 'concrete' : 'concrete',
+      width: Math.max(1, Number(ground.width ?? 120)),
+      depth: Math.max(1, Number(ground.depth ?? 120)),
+      y: Number(ground.y ?? 0),
+      textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+    };
+  }
+
+  constructor(
+    container: HTMLElement | null,
+    sceneName = 'main',
+    gameId = 'prototype',
+    onBackToMenu: (() => void) | null = null,
+  ) {
     if (!container) {
       throw new Error('Missing #app container');
     }
     this.container = container;
+    this.sceneName = sceneName;
+    this.gameId = gameId;
+    this.onBackToMenu = onBackToMenu;
     this.container.tabIndex = 0;
-    this.container.addEventListener('click', () => this.container.focus());
+    this.container.addEventListener('click', this.handleContainerClick);
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
     this.mixamoReady = this.loadMixamoClips();
     void this.loadPlayerConfig();
@@ -241,6 +328,42 @@ export class GameApp {
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 300);
     this.camera.position.set(0, 4, 6);
     this.camera.lookAt(0, 0, 0);
+
+    // Initialize PSX rendering system
+    const psxRes = psxSettings.getResolution();
+    this.psxRenderer = new PSXRenderer(this.renderer, {
+      baseWidth: psxRes.width,
+      baseHeight: psxRes.height,
+      enabled: psxSettings.config.enabled,
+      pixelated: psxSettings.config.pixelated,
+    });
+
+    this.psxPostProcessor = new PSXPostProcessor(
+      this.renderer,
+      this.scene,
+      this.camera,
+      {
+        enabled: psxSettings.config.enabled,
+        blur: psxSettings.config.blur,
+        blurStrength: psxSettings.config.blurStrength,
+        colorQuantization: psxSettings.config.colorQuantization,
+        colorBits: psxSettings.config.colorBits,
+        dithering: psxSettings.config.dithering,
+        ditherStrength: psxSettings.config.ditherStrength,
+        crtEffects: psxSettings.config.crtEffects,
+        scanlineIntensity: psxSettings.config.scanlineIntensity,
+        curvature: psxSettings.config.curvature,
+        vignette: psxSettings.config.vignette,
+        brightness: psxSettings.config.brightness,
+        chromaticAberration: psxSettings.config.chromaticAberration,
+        chromaticOffset: psxSettings.config.chromaticOffset,
+        contrast: psxSettings.config.contrast,
+        saturation: psxSettings.config.saturation,
+        gamma: psxSettings.config.gamma,
+        exposure: psxSettings.config.exposure,
+      }
+    );
+
     this.orbitRadius = this.playerConfig.cameraDistance ?? this.orbitRadius;
     this.cameraSensitivity = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
     this.cameraSmoothing = this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
@@ -254,6 +377,7 @@ export class GameApp {
     this.hud = this.createHud();
     this.perfHud = this.createPerfHud();
     this.createSettingsMenu();
+    void this.loadSceneConfig();
     this.crowd = this.createCrowd();
     this.input = new InputState();
     const env = (import.meta as any).env || {};
@@ -272,36 +396,26 @@ export class GameApp {
     this.localPlayer = this.createPlayer();
 
     this.container.appendChild(this.renderer.domElement);
+    this.backButton = document.createElement('button');
+    this.backButton.textContent = 'Back to Menu';
+    this.backButton.className = 'mode-back-button';
+    this.backButton.style.position = 'absolute';
+    this.backButton.style.top = '14px';
+    this.backButton.style.right = '14px';
+    this.backButton.style.zIndex = '20';
+    this.backButton.addEventListener('click', () => {
+      this.onBackToMenu?.();
+    });
+    this.container.appendChild(this.backButton);
     this.container.appendChild(this.hud);
     this.container.appendChild(this.perfHud);
     this.hud.style.display = this.hudVisible ? 'block' : 'none';
+    this.touchControls = this.createTouchControls();
+    if (this.touchControls) this.container.appendChild(this.touchControls);
     this.container.focus();
-    window.addEventListener('keydown', (event) => {
-      const value = `raw: ${event.code || event.key}`;
-      this.statusLines.key = `key: ${value}`;
-      const node = this.hud.querySelector('[data-hud-key]');
-      if (node) node.textContent = `key: ${value}`;
-      if (event.code === 'KeyH') {
-        this.hudVisible = !this.hudVisible;
-        this.hud.style.display = this.hudVisible ? 'block' : 'none';
-      }
-      if (event.code === 'KeyP') {
-        this.perfVisible = !this.perfVisible;
-        this.perfHud.style.display = this.perfVisible ? 'block' : 'none';
-      }
-      if (event.code === 'KeyV') {
-        this.firstPersonMode = !this.firstPersonMode;
-        const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement;
-        if (toggle) toggle.checked = this.firstPersonMode;
-      }
-    });
-    this.scene.add(
-      this.createLights(),
-      this.createGround(),
-      this.createObstacles(),
-      this.localPlayer,
-      this.crowd,
-    );
+    window.addEventListener('keydown', this.handleDebugKeyDown);
+    this.obstacleGroup = this.createObstacles();
+    this.scene.add(this.createLights(), this.obstacleGroup, this.localPlayer, this.crowd);
 
     this.renderer.domElement.addEventListener('mousedown', this.handleMouseDown);
     window.addEventListener('mousemove', this.handleMouseMove);
@@ -311,7 +425,34 @@ export class GameApp {
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
 
     window.addEventListener('resize', this.handleResize);
+
+    // Listen for global PSX settings changes
+    window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
   }
+
+  private handlePSXSettingsChange = () => {
+    // Update PSX renderers when settings change globally
+    if (this.psxRenderer) {
+      const res = psxSettings.getResolution();
+      this.psxRenderer.setEnabled(psxSettings.config.enabled);
+      this.psxRenderer.setResolution(res.width, res.height);
+      this.psxRenderer.setPixelated(psxSettings.config.pixelated);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
+      this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
+      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
+      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
+      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
+      this.psxPostProcessor.setContrast(psxSettings.config.contrast);
+      this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
+      this.psxPostProcessor.setGamma(psxSettings.config.gamma);
+      this.psxPostProcessor.setExposure(psxSettings.config.exposure);
+    }
+  };
 
   start() {
     if (this.animationId !== null) return;
@@ -326,7 +467,27 @@ export class GameApp {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
+    this.container.removeEventListener('click', this.handleContainerClick);
+    window.removeEventListener('keydown', this.handleDebugKeyDown);
+    window.removeEventListener('keydown', this.handleEscapeMenuKeyDown);
+    this.renderer.domElement.removeEventListener('mousedown', this.handleMouseDown);
+    window.removeEventListener('mousemove', this.handleMouseMove);
+    window.removeEventListener('mouseup', this.handleMouseUp);
+    this.renderer.domElement.removeEventListener('wheel', this.handleWheel);
+    this.renderer.domElement.removeEventListener('click', this.requestPointerLock);
+    document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
+    this.pointerLocked = false;
+    if (document.pointerLockElement === this.renderer.domElement) {
+      document.exitPointerLock();
+    }
+    this.input.dispose();
+    void this.roomClient.disconnect();
+    this.settingsMenu?.remove();
+    this.settingsMenu = null;
+    this.backButton?.remove();
+    this.backButton = null;
   }
 
   private tick = () => {
@@ -367,7 +528,24 @@ export class GameApp {
 
     // Apply visual offset for rendering (hides network corrections)
     this.localPlayer.position.add(this.localVisualOffset);
-    this.renderer.render(this.scene, this.camera);
+
+    // Update PSX material resolutions before rendering
+    if (psxSettings.config.enabled && this.psxRenderer) {
+      const res = this.psxRenderer.getResolution();
+      this.scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
+          obj.material.updateResolution(res.width, res.height);
+        }
+      });
+    }
+
+    // Render with PSX effects or standard
+    if (psxSettings.config.enabled && this.psxPostProcessor) {
+      this.psxPostProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     // Restore physics position
     this.localPlayer.position.sub(this.localVisualOffset);
 
@@ -380,6 +558,16 @@ export class GameApp {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
+
+    // Update PSX resolution
+    if (this.psxRenderer) {
+      const psxRes = psxSettings.getResolution();
+      this.psxRenderer.setResolution(psxRes.width, psxRes.height);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setSize(innerWidth, innerHeight);
+    }
   };
 
   private createLights() {
@@ -393,9 +581,10 @@ export class GameApp {
     return group;
   }
 
-  private createGround() {
-    const geometry = new THREE.PlaneGeometry(120, 120, 1, 1);
+  private createGround(config: { width: number; depth: number; y: number; textureRepeat: number }) {
+    const geometry = new THREE.PlaneGeometry(config.width, config.depth, 1, 1);
     const texture = this.createConcreteTexture();
+    texture.repeat.set(config.textureRepeat, config.textureRepeat);
     const material = new THREE.MeshStandardMaterial({
       map: texture,
       roughness: 0.95,
@@ -404,7 +593,7 @@ export class GameApp {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 0;
+    mesh.position.y = config.y;
     return mesh;
   }
 
@@ -473,7 +662,7 @@ export class GameApp {
   private createObstacles() {
     const group = new THREE.Group();
     const material = new THREE.MeshStandardMaterial({ color: 0x2a2f3c, roughness: 0.85, metalness: 0.1 });
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const geometry = new THREE.BoxGeometry(
         obstacle.size.x,
         obstacle.size.y,
@@ -488,7 +677,7 @@ export class GameApp {
 
   private sampleGroundHeight(x: number, z: number) {
     let height = GROUND_Y;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
       if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
@@ -515,15 +704,33 @@ export class GameApp {
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
     group.position.set(0, GROUND_Y, 0);
-    void this.loadVrmInto(group, 'local');
     return group;
   }
 
   private createCrowd() {
     const group = new THREE.Group();
     group.name = 'crowd';
-    void this.loadCrowdTemplate(group);
     return group;
+  }
+
+  private getAvatarUrl(name: string) {
+    return getGameAvatarUrl(this.gameId, name);
+  }
+
+  private showCapsuleFallback(group: THREE.Object3D, color: number) {
+    const capsule = group.userData.capsule as
+      | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
+      | undefined;
+    if (!capsule) return;
+    const material = capsule.mesh.material;
+    if (material instanceof THREE.MeshStandardMaterial) {
+      material.color.set(color);
+      material.opacity = 0.85;
+      material.transparent = true;
+      material.emissive.set(color);
+      material.emissiveIntensity = 0.25;
+    }
+    capsule.mesh.visible = true;
   }
 
   private computeVrmGroundOffset(vrm: VRM) {
@@ -554,8 +761,9 @@ export class GameApp {
   }
 
   private async loadCrowdTemplate(group: THREE.Group) {
+    const crowdUrl = this.getAvatarUrl(this.crowdAvatarName);
     this.gltfLoader.load(
-      this.crowdVrmUrl,
+      crowdUrl,
       async (gltf) => {
         const vrm = gltf.userData.vrm as VRM | undefined;
         if (!vrm) {
@@ -564,6 +772,7 @@ export class GameApp {
         }
         vrm.humanoid.autoUpdateHumanBones = true;
         this.crowdTemplate = vrm;
+        this.crowdLoaded = true;
         await this.mixamoReady;
         const crowdPrefix = 'crowd_';
         const normalized = (vrm.humanoid.normalizedHumanBones ?? {}) as Record<
@@ -672,8 +881,10 @@ export class GameApp {
         }
       },
       undefined,
-      (error) => {
-        console.warn('Crowd VRM load failed:', error);
+      () => {
+        this.statusLines.crowd = `crowd: missing ${this.crowdAvatarName}`;
+        const node = this.hud.querySelector('[data-hud-crowd]');
+        if (node) node.textContent = this.statusLines.crowd;
       },
     );
   }
@@ -694,11 +905,16 @@ export class GameApp {
     mesh.visible = false; // Hide collider
     group.add(mesh);
     group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
-    void this.loadVrmInto(group, id);
+    if (this.playerAvatarEnabled) {
+      void this.loadVrmInto(group, id);
+    } else {
+      this.showCapsuleFallback(group, 0xff6b6b);
+    }
     return group;
   }
 
   private animateCrowd(time: number, delta: number) {
+    if (!this.crowdEnabled) return;
     if (this.crowdAvatars.length === 0) return;
     if (this.crowdAvatars[0]?.debug) {
       const dbg = this.crowdAvatars[0].debug!;
@@ -776,7 +992,7 @@ export class GameApp {
       '<div>Objective: ignite 3 hotspots</div>',
       '<div>WASD move, Shift sprint, Space jump, C/Ctrl crouch, F attack</div>',
       '<div>Attack: short-range knockback + damage (server-authoritative)</div>',
-      '<div>VRM: place a model at /avatars/default.vrm</div>',
+      `<div>VRM: ${this.playerAvatarEnabled ? `/api/games/${this.gameId}/avatars/${this.localAvatarName}` : 'none (capsule fallback)'}</div>`,
       '<div>Press H to toggle HUD</div>',
     ].join('');
     return hud;
@@ -820,6 +1036,44 @@ export class GameApp {
     menu.innerHTML = `
       <h2 style="margin-top: 0;">Settings (ESC to close)</h2>
 
+      <h3>Console Graphics</h3>
+      <label style="display: block; margin: 10px 0;">
+        Console Preset:
+        <select id="console-preset" style="width: 100%; padding: 5px;">
+          <option value="ps1" ${psxSettings.config.consolePreset === 'ps1' ? 'selected' : ''}>PlayStation 1 (1994)</option>
+          <option value="n64" ${psxSettings.config.consolePreset === 'n64' ? 'selected' : ''}>Nintendo 64 (1996)</option>
+          <option value="dreamcast" ${psxSettings.config.consolePreset === 'dreamcast' ? 'selected' : ''}>Sega Dreamcast (1998)</option>
+          <option value="xbox" ${psxSettings.config.consolePreset === 'xbox' ? 'selected' : ''}>Xbox (2001)</option>
+          <option value="modern" ${psxSettings.config.consolePreset === 'modern' ? 'selected' : ''}>Modern (No Effects)</option>
+        </select>
+      </label>
+
+      <h3>Color & Lighting</h3>
+      <label style="display: block; margin: 10px 0;">
+        Brightness: <span id="brightness-value">${psxSettings.config.brightness.toFixed(2)}</span>
+        <input type="range" id="brightness" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.brightness}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Contrast: <span id="contrast-value">${psxSettings.config.contrast.toFixed(2)}</span>
+        <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.contrast}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Saturation: <span id="saturation-value">${psxSettings.config.saturation.toFixed(2)}</span>
+        <input type="range" id="saturation" min="0.0" max="2.0" step="0.05" value="${psxSettings.config.saturation}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Gamma: <span id="gamma-value">${psxSettings.config.gamma.toFixed(2)}</span>
+        <input type="range" id="gamma" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.gamma}" style="width: 100%;">
+      </label>
+
+      <label style="display: block; margin: 10px 0;">
+        Exposure: <span id="exposure-value">${psxSettings.config.exposure.toFixed(2)}</span>
+        <input type="range" id="exposure" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.exposure}" style="width: 100%;">
+      </label>
+
       <h3>Camera</h3>
       <label style="display: block; margin: 10px 0;">
         Camera Distance: <span id="camera-distance-value">6.0</span>m
@@ -842,16 +1096,12 @@ export class GameApp {
       </label>
 
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #666;">
-        <small>Tips: If movement feels jittery, try:</small>
-        <ul style="font-size: 12px; margin: 5px 0;">
-          <li>Set smoothing to 0% (instant camera)</li>
-          <li>Increase camera distance</li>
-          <li>Try first-person mode</li>
-        </ul>
+        <small>Tips: Choose between PS1, N64, Dreamcast, Xbox, or Modern rendering styles!</small>
       </div>
     `;
 
     document.body.appendChild(menu);
+    this.settingsMenu = menu;
 
     // Wire up settings
     const distanceSlider = menu.querySelector('#camera-distance') as HTMLInputElement;
@@ -881,28 +1131,83 @@ export class GameApp {
       this.firstPersonMode = firstPersonToggle.checked;
     });
 
-    // ESC to toggle menu
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const isVisible = menu.style.display !== 'none';
-        menu.style.display = isVisible ? 'none' : 'block';
-        if (!isVisible) {
-          // Pause gameplay when menu open
-          this.container.style.pointerEvents = 'none';
-        } else {
-          this.container.style.pointerEvents = 'auto';
-        }
-      }
+    // Console Preset Settings
+    const consolePreset = menu.querySelector('#console-preset') as HTMLSelectElement;
+    const brightnessSlider = menu.querySelector('#brightness') as HTMLInputElement;
+    const brightnessValue = menu.querySelector('#brightness-value') as HTMLElement;
+    const contrastSlider = menu.querySelector('#contrast') as HTMLInputElement;
+    const contrastValue = menu.querySelector('#contrast-value') as HTMLElement;
+    const saturationSlider = menu.querySelector('#saturation') as HTMLInputElement;
+    const saturationValue = menu.querySelector('#saturation-value') as HTMLElement;
+    const gammaSlider = menu.querySelector('#gamma') as HTMLInputElement;
+    const gammaValue = menu.querySelector('#gamma-value') as HTMLElement;
+    const exposureSlider = menu.querySelector('#exposure') as HTMLInputElement;
+    const exposureValue = menu.querySelector('#exposure-value') as HTMLElement;
+
+    consolePreset.addEventListener('change', () => {
+      psxSettings.applyConsolePreset(consolePreset.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
+      // Update UI to reflect preset values
+      brightnessSlider.value = psxSettings.config.brightness.toString();
+      brightnessValue.textContent = psxSettings.config.brightness.toFixed(2);
+      contrastSlider.value = psxSettings.config.contrast.toString();
+      contrastValue.textContent = psxSettings.config.contrast.toFixed(2);
+      saturationSlider.value = psxSettings.config.saturation.toString();
+      saturationValue.textContent = psxSettings.config.saturation.toFixed(2);
+      gammaSlider.value = psxSettings.config.gamma.toString();
+      gammaValue.textContent = psxSettings.config.gamma.toFixed(2);
+      exposureSlider.value = psxSettings.config.exposure.toString();
+      exposureValue.textContent = psxSettings.config.exposure.toFixed(2);
+      // Trigger update via event
+      window.dispatchEvent(new CustomEvent('psx-settings-changed'));
     });
+
+    brightnessSlider.addEventListener('input', () => {
+      const value = parseFloat(brightnessSlider.value);
+      brightnessValue.textContent = value.toFixed(2);
+      psxSettings.update({ brightness: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setBrightness(value);
+    });
+
+    contrastSlider.addEventListener('input', () => {
+      const value = parseFloat(contrastSlider.value);
+      contrastValue.textContent = value.toFixed(2);
+      psxSettings.update({ contrast: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setContrast(value);
+    });
+
+    saturationSlider.addEventListener('input', () => {
+      const value = parseFloat(saturationSlider.value);
+      saturationValue.textContent = value.toFixed(2);
+      psxSettings.update({ saturation: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setSaturation(value);
+    });
+
+    gammaSlider.addEventListener('input', () => {
+      const value = parseFloat(gammaSlider.value);
+      gammaValue.textContent = value.toFixed(2);
+      psxSettings.update({ gamma: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setGamma(value);
+    });
+
+    exposureSlider.addEventListener('input', () => {
+      const value = parseFloat(exposureSlider.value);
+      exposureValue.textContent = value.toFixed(2);
+      psxSettings.update({ exposure: value });
+      if (this.psxPostProcessor) this.psxPostProcessor.setExposure(value);
+    });
+
+    // ESC to toggle menu
+    window.addEventListener('keydown', this.handleEscapeMenuKeyDown);
   }
 
   private async connect() {
     try {
-      await this.roomClient.connect();
+      await this.roomClient.connect({ gameId: this.gameId, sceneName: this.sceneName });
       this.localId = this.roomClient.getSessionId();
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
       this.roomClient.onCrowd((snapshot) => {
+        if (!this.crowdEnabled) return;
         const now = performance.now() / 1000;
         // Update received agents
         for (const agent of snapshot.agents) {
@@ -1092,7 +1397,7 @@ export class GameApp {
     }
 
     let resolved = next;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
     }
     for (const entry of this.crowdAgents.values()) {
@@ -1116,7 +1421,7 @@ export class GameApp {
     if (dir.lengthSq() < 0.2) return false;
     const forward = 1.1;
     const pos = this.localPlayer.position;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       const ox = obstacle.position.x;
@@ -1134,7 +1439,7 @@ export class GameApp {
     if (dir.lengthSq() < 0.2) return false;
     const forward = 0.9;
     const pos = this.localPlayer.position;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       const ox = obstacle.position.x;
@@ -1157,7 +1462,7 @@ export class GameApp {
     const probeX = pos.x + dir.x * forward;
     const probeZ = pos.z + dir.z * forward;
     let best = 0;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
       if (Math.abs(probeX - obstacle.position.x) <= halfX && Math.abs(probeZ - obstacle.position.z) <= halfZ) {
@@ -1518,8 +1823,8 @@ export class GameApp {
     }
   }
 
-  private async loadVrmInto(group: THREE.Group, actorId: string) {
-    const url = this.vrmUrl;
+  private async loadVrmInto(group: THREE.Object3D, actorId: string) {
+    const url = this.getAvatarUrl(this.localAvatarName);
     this.gltfLoader.load(
       url,
       async (gltf) => {
@@ -1531,7 +1836,8 @@ export class GameApp {
         }
     const vrm = gltf.userData.vrm as VRM | undefined;
     if (!vrm) {
-      console.warn('VRM load failed: no VRM in glTF');
+      const isLocal = actorId === 'local';
+      this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
       return;
     }
     vrm.humanoid.autoUpdateHumanBones = true;
@@ -1549,13 +1855,14 @@ export class GameApp {
         this.setupVrmActor(vrm, actorId);
       },
       undefined,
-      (error) => {
-        console.warn('VRM load failed:', error);
+      () => {
+        const isLocal = actorId === 'local';
+        this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
       },
     );
   }
 
-  private updateCapsuleToVrm(group: THREE.Group, vrm: VRM) {
+  private updateCapsuleToVrm(group: THREE.Object3D, vrm: VRM) {
     const capsule = group.userData.capsule as
       | { mesh: THREE.Mesh; baseRadius: number; baseLength: number; hip: THREE.Object3D | null }
       | undefined;
@@ -1592,9 +1899,7 @@ export class GameApp {
 
   private async loadPlayerConfig() {
     try {
-      const res = await fetch('/config/player.json', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = (await res.json()) as Partial<typeof this.playerConfig>;
+      const data = await getGamePlayer<Partial<typeof this.playerConfig>>(this.gameId);
       this.playerConfig = { ...this.playerConfig, ...data };
       if (typeof this.playerConfig.cameraDistance === 'number') {
         this.orbitRadius = this.playerConfig.cameraDistance;
@@ -1610,8 +1915,95 @@ export class GameApp {
         if (group) this.updateCapsuleToVrm(group, vrm);
       }
     } catch (error) {
+      if (error instanceof Error && error.message.includes('request_failed:404')) return;
       console.warn('Player config load failed', error);
     }
+  }
+
+  private async loadSceneConfig() {
+    try {
+      const data = await getGameScenes(this.gameId);
+      const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
+      const sceneAvatar = typeof (scene as any)?.player?.avatar === 'string' ? String((scene as any).player.avatar) : '';
+      const configAvatar = typeof (this.playerConfig as any).avatar === 'string' ? String((this.playerConfig as any).avatar) : '';
+      const playerAvatar = sceneAvatar || configAvatar;
+      this.playerAvatarEnabled = playerAvatar.length > 0;
+      if (this.playerAvatarEnabled) {
+        this.localAvatarName = playerAvatar;
+        if (!this.localAvatarLoaded) {
+          this.localAvatarLoaded = true;
+          void this.loadVrmInto(this.localPlayer, 'local');
+        }
+      } else {
+        this.showCapsuleFallback(this.localPlayer, 0x6be9ff);
+      }
+
+      const crowdConfig = (scene as any)?.crowd as { enabled?: boolean; avatar?: string } | undefined;
+      this.crowdEnabled = crowdConfig?.enabled === true;
+      if (typeof crowdConfig?.avatar === 'string' && crowdConfig.avatar.length > 0) {
+        this.crowdAvatarName = crowdConfig.avatar;
+      }
+      if (this.crowdEnabled && !this.crowdLoaded) {
+        void this.loadCrowdTemplate(this.crowd);
+      }
+      if (!this.crowdEnabled) {
+        this.crowd.clear();
+        this.crowdAvatars = [];
+        this.crowdAgents.clear();
+        this.statusLines.crowd = 'crowd: off';
+        const crowdNode = this.hud.querySelector('[data-hud-crowd]');
+        if (crowdNode) crowdNode.textContent = this.statusLines.crowd;
+      }
+
+      this.rebuildGroundMesh(this.parseSceneGround((scene as any)?.ground));
+      // Convert editor format {x, y, z, width, height, depth} to game format
+      this.obstacles = (scene?.obstacles ?? []).map((obs: any, index: number) => {
+        // If already in game format (has position and size), use as-is
+        if (obs.position && obs.size) {
+          return obs;
+        }
+        // Convert from editor format
+        return {
+          id: obs.id || `obstacle_${index}`,
+          position: {
+            x: obs.x ?? 0,
+            y: obs.y ?? 0,
+            z: obs.z ?? 0,
+          },
+          size: {
+            x: obs.width ?? 1,
+            y: obs.height ?? 1,
+            z: obs.depth ?? 1,
+          },
+        };
+      });
+      this.rebuildObstacleMeshes();
+    } catch (err) {
+      console.error('Failed to load scene config:', err);
+    }
+  }
+
+  private rebuildObstacleMeshes() {
+    if (this.obstacleGroup) {
+      this.scene.remove(this.obstacleGroup);
+    }
+    this.obstacleGroup = this.createObstacles();
+    this.scene.add(this.obstacleGroup);
+  }
+
+  private rebuildGroundMesh(groundConfig: { width: number; depth: number; y: number; textureRepeat: number } | null) {
+    if (this.groundMesh) {
+      this.scene.remove(this.groundMesh);
+      this.groundMesh.geometry.dispose();
+      if (this.groundMesh.material instanceof THREE.MeshStandardMaterial) {
+        this.groundMesh.material.map?.dispose();
+        this.groundMesh.material.dispose();
+      }
+      this.groundMesh = null;
+    }
+    if (!groundConfig) return;
+    this.groundMesh = this.createGround(groundConfig);
+    this.scene.add(this.groundMesh);
   }
 
   private updateVrms(delta: number) {
@@ -1657,14 +2049,14 @@ export class GameApp {
       return base;
     };
 
+    // Load animations from game API
     let manifest: string[] | null = null;
     try {
-      const res = await fetch('/animations/manifest.json', { cache: 'no-store' });
-      if (res.ok) {
-        const data = (await res.json()) as { files?: string[] };
-        if (Array.isArray(data.files)) {
-          manifest = data.files;
-        }
+      console.log('Loading animations from game:', this.gameId);
+      const data = await listGameAnimations(this.gameId);
+      if (Array.isArray(data.files)) {
+        manifest = data.files;
+        console.log('Found', data.files.length, 'animation files');
       }
     } catch (error) {
       console.warn('Failed to load animations manifest:', error);
@@ -1674,12 +2066,12 @@ export class GameApp {
       (name) => name.toLowerCase().endsWith('.json') && !name.toLowerCase().startsWith('none'),
     );
 
+    console.log('Loading', jsonEntries.length, 'animations from game');
+
     await Promise.all(
       jsonEntries.map(async (name) => {
         try {
-          const res = await fetch(`/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
-          if (!res.ok) return;
-          const payload = (await res.json()) as unknown;
+          const payload = await getGameAnimation(this.gameId, name);
           const data = parseClipPayload(payload);
           if (!data) return;
           const key = resolveKey(name);
@@ -1691,7 +2083,7 @@ export class GameApp {
     );
 
     if (Object.keys(this.jsonClips).length === 0) {
-      console.warn('JSON clips failed to load.');
+      console.log('No JSON clips found for this game yet.');
     }
 
     const maybeMirror = (leftKey: string, rightKey: string) => {
@@ -2193,6 +2585,137 @@ export class GameApp {
     this.statusLines.input = value;
     const node = this.hud.querySelector('[data-hud-input]');
     if (node) node.textContent = value;
+  }
+
+  private createTouchControls() {
+    const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (!isTouch) return null;
+
+    const root = document.createElement('div');
+    root.className = 'touch-controls';
+    root.innerHTML = [
+      '<div class="touch-left">',
+      '<div class="touch-stick" data-touch-stick>',
+      '<div class="touch-stick-thumb" data-touch-thumb></div>',
+      '</div>',
+      '</div>',
+      '<div class="touch-right">',
+      '<button class="touch-btn" data-touch-jump>Jump</button>',
+      '<button class="touch-btn" data-touch-sprint>Sprint</button>',
+      '<button class="touch-btn" data-touch-crouch>Crouch</button>',
+      '<button class="touch-btn" data-touch-attack>Attack</button>',
+      '</div>',
+      '<div class="touch-look" data-touch-look></div>',
+    ].join('');
+
+    const stick = root.querySelector('[data-touch-stick]') as HTMLDivElement;
+    const thumb = root.querySelector('[data-touch-thumb]') as HTMLDivElement;
+    const lookZone = root.querySelector('[data-touch-look]') as HTMLDivElement;
+    const jumpBtn = root.querySelector('[data-touch-jump]') as HTMLButtonElement;
+    const sprintBtn = root.querySelector('[data-touch-sprint]') as HTMLButtonElement;
+    const crouchBtn = root.querySelector('[data-touch-crouch]') as HTMLButtonElement;
+    const attackBtn = root.querySelector('[data-touch-attack]') as HTMLButtonElement;
+
+    const setThumb = (dx: number, dy: number) => {
+      thumb.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+
+    const handleMoveStart = (event: PointerEvent) => {
+      event.preventDefault();
+      if (this.touchMoveActive) return;
+      this.touchMoveActive = true;
+      this.touchMoveId = event.pointerId;
+      stick.setPointerCapture(event.pointerId);
+      this.touchMoveOrigin.set(event.clientX, event.clientY);
+      setThumb(0, 0);
+    };
+
+    const handleMove = (event: PointerEvent) => {
+      event.preventDefault();
+      if (!this.touchMoveActive || event.pointerId !== this.touchMoveId) return;
+      const dx = event.clientX - this.touchMoveOrigin.x;
+      const dy = event.clientY - this.touchMoveOrigin.y;
+      const radius = 50;
+      const dist = Math.hypot(dx, dy);
+      const scale = dist > radius ? radius / dist : 1;
+      const clampedX = dx * scale;
+      const clampedY = dy * scale;
+      setThumb(clampedX, clampedY);
+      this.input.setTouchVector(clampedX / radius, -clampedY / radius);
+    };
+
+    const handleMoveEnd = (event: PointerEvent) => {
+      event.preventDefault();
+      if (event.pointerId !== this.touchMoveId) return;
+      this.touchMoveActive = false;
+      this.touchMoveId = null;
+      this.input.setTouchVector(0, 0);
+      setThumb(0, 0);
+    };
+
+    const handleLookStart = (event: PointerEvent) => {
+      event.preventDefault();
+      if (this.touchLookActive) return;
+      this.touchLookActive = true;
+      this.touchLookId = event.pointerId;
+      lookZone.setPointerCapture(event.pointerId);
+      this.touchLookOrigin.set(event.clientX, event.clientY);
+      this.touchLookDelta.set(0, 0);
+    };
+
+    const handleLook = (event: PointerEvent) => {
+      event.preventDefault();
+      if (!this.touchLookActive || event.pointerId !== this.touchLookId) return;
+      const dx = event.clientX - this.touchLookOrigin.x;
+      const dy = event.clientY - this.touchLookOrigin.y;
+      this.touchLookOrigin.set(event.clientX, event.clientY);
+      this.touchLookDelta.set(dx, dy);
+      const scale = 0.04;
+      this.input.setTouchLook(dx * scale, dy * scale);
+    };
+
+    const handleLookEnd = (event: PointerEvent) => {
+      event.preventDefault();
+      if (event.pointerId !== this.touchLookId) return;
+      this.touchLookActive = false;
+      this.touchLookId = null;
+      this.input.setTouchLook(0, 0);
+    };
+
+    stick.addEventListener('pointerdown', handleMoveStart);
+    stick.addEventListener('pointermove', handleMove);
+    stick.addEventListener('pointerup', handleMoveEnd);
+    stick.addEventListener('pointercancel', handleMoveEnd);
+
+    lookZone.addEventListener('pointerdown', handleLookStart);
+    lookZone.addEventListener('pointermove', handleLook);
+    lookZone.addEventListener('pointerup', handleLookEnd);
+    lookZone.addEventListener('pointercancel', handleLookEnd);
+
+    const setFlag = (name: 'jump' | 'sprint' | 'crouch' | 'attack', active: boolean) => {
+      this.input.setTouchFlags({ [name]: active } as any);
+    };
+
+    const bindButton = (btn: HTMLButtonElement, name: 'jump' | 'sprint' | 'crouch' | 'attack') => {
+      btn.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        setFlag(name, true);
+      });
+      const clear = (event: PointerEvent) => {
+        event.preventDefault();
+        setFlag(name, false);
+      };
+      btn.addEventListener('pointerup', clear);
+      btn.addEventListener('pointerleave', clear);
+      btn.addEventListener('pointercancel', clear);
+    };
+
+    bindButton(jumpBtn, 'jump');
+    bindButton(sprintBtn, 'sprint');
+    bindButton(crouchBtn, 'crouch');
+    bindButton(attackBtn, 'attack');
+
+    return root;
   }
 
   private updateKeyHud() {

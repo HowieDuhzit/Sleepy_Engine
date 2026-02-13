@@ -1,5 +1,6 @@
 import colyseusPkg from 'colyseus';
 import { RiotState, PlayerState } from '../state/RiotState.js';
+import { loadSceneConfig } from './scene-obstacle-loader.js';
 import {
   PROTOCOL,
   PlayerInput,
@@ -24,12 +25,12 @@ import {
   GRAVITY,
   JUMP_SPEED,
   GROUND_Y,
-  STEP_HEIGHT,
   ATTACK_RANGE,
   ATTACK_COOLDOWN,
   ATTACK_DAMAGE,
   ATTACK_KNOCKBACK,
   OBSTACLES,
+  type Obstacle,
   resolveCircleAabb,
   resolveCircleCircle,
 } from '@sleepy/shared';
@@ -38,6 +39,10 @@ const { Room } = colyseusPkg as typeof import('colyseus');
 type Client = import('colyseus').Client;
 
 type NavCell = { i: number; j: number };
+type RoomOptions = {
+  gameId?: string;
+  sceneName?: string;
+};
 
 class NavGrid {
   private half: number;
@@ -46,7 +51,7 @@ class NavGrid {
   private rows: number;
   private blocked = new Set<string>();
 
-  constructor(half: number, cell: number, obstacles: typeof OBSTACLES) {
+  constructor(half: number, cell: number, obstacles: Obstacle[]) {
     this.half = half;
     this.cell = cell;
     this.cols = Math.floor((half * 2) / cell);
@@ -65,7 +70,7 @@ class NavGrid {
     return `${i},${j}`;
   }
 
-  private isBlocked(x: number, z: number, obstacles: typeof OBSTACLES) {
+  private isBlocked(x: number, z: number, obstacles: Obstacle[]) {
     for (const obstacle of obstacles) {
       const halfX = obstacle.size.x / 2 + CROWD_RADIUS;
       const halfZ = obstacle.size.z / 2 + CROWD_RADIUS;
@@ -158,7 +163,10 @@ class NavGrid {
 
 export class RiotRoom extends Room {
   declare state: RiotState;
+  private obstacles: Obstacle[] = OBSTACLES;
+  private crowdEnabled = false;
   private inputBuffer = new Map<string, PlayerInput>();
+  private lastInputSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
   private readonly navCell = 2.5;
@@ -189,7 +197,7 @@ export class RiotRoom extends Room {
 
   private sampleGroundHeight(x: number, z: number) {
     let height = GROUND_Y;
-    for (const obstacle of OBSTACLES) {
+    for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
       if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
@@ -199,15 +207,49 @@ export class RiotRoom extends Room {
     return height;
   }
 
-  onCreate() {
+  private async loadRoomObstacles(options?: RoomOptions) {
+    const sceneConfig = await loadSceneConfig(options);
+    this.obstacles = sceneConfig.obstacles;
+    this.crowdEnabled = sceneConfig.crowdEnabled;
+    if (!this.crowdEnabled) {
+      this.crowd = [];
+    }
+  }
+
+  private sanitizeInput(input: PlayerInput): PlayerInput {
+    const clampUnit = (value: number) => Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
+    const sanitizeBool = (value: unknown) => value === true;
+    const sanitizeNumber = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
+    return {
+      seq: Math.max(0, Math.floor(sanitizeNumber(input.seq))),
+      moveX: clampUnit(input.moveX),
+      moveZ: clampUnit(input.moveZ),
+      lookYaw: sanitizeNumber(input.lookYaw),
+      lookPitch: sanitizeNumber(input.lookPitch),
+      animState: typeof input.animState === 'string' ? input.animState : 'idle',
+      animTime: sanitizeNumber(input.animTime),
+      sprint: sanitizeBool(input.sprint),
+      attack: sanitizeBool(input.attack),
+      interact: sanitizeBool(input.interact),
+      jump: sanitizeBool(input.jump),
+      crouch: sanitizeBool(input.crouch),
+    };
+  }
+
+  async onCreate(options?: RoomOptions) {
     this.setState(new RiotState());
     this.maxClients = 16;
     this.setPrivate(false);
+    await this.loadRoomObstacles(options);
     this.setSimulationInterval((dt) => this.update(dt), 1000 / 20);
-    this.navGrid = new NavGrid(this.navHalf, this.navCell, OBSTACLES);
+    this.navGrid = new NavGrid(this.navHalf, this.navCell, this.obstacles);
 
     this.onMessage(PROTOCOL.input, (client, message: PlayerInput) => {
-      this.inputBuffer.set(client.sessionId, message);
+      const input = this.sanitizeInput(message);
+      const lastSeq = this.lastInputSeq.get(client.sessionId) ?? -1;
+      if (input.seq <= lastSeq) return;
+      this.lastInputSeq.set(client.sessionId, input.seq);
+      this.inputBuffer.set(client.sessionId, input);
     });
   }
 
@@ -224,6 +266,7 @@ export class RiotRoom extends Room {
   onLeave(client: Client) {
     this.state.players.delete(client.sessionId);
     this.inputBuffer.delete(client.sessionId);
+    this.lastInputSeq.delete(client.sessionId);
   }
 
   private update(dt: number) {
@@ -277,7 +320,7 @@ export class RiotRoom extends Room {
       player.z += player.vz * delta;
 
       let resolved = { x: player.x, y: player.y, z: player.z };
-      for (const obstacle of OBSTACLES) {
+      for (const obstacle of this.obstacles) {
         resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
       }
       player.x = resolved.x;
@@ -415,7 +458,7 @@ export class RiotRoom extends Room {
       agent.z = Math.max(-CROWD_BOUNDS, Math.min(CROWD_BOUNDS, agent.z));
 
       let resolved = { x: agent.x, y: agent.y, z: agent.z };
-      for (const obstacle of OBSTACLES) {
+      for (const obstacle of this.obstacles) {
         resolved = resolveCircleAabb(resolved, CROWD_RADIUS, obstacle);
       }
       agent.x = resolved.x;

@@ -5,7 +5,22 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { VRM, VRMUtils, VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { PSXRenderer } from '../rendering/PSXRenderer';
+import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
+import { PSXMaterial } from '../materials/PSXMaterial';
+import { psxSettings } from '../settings/PSXSettings';
 import { retargetMixamoClip } from '../game/retarget';
+import {
+  createGame,
+  getGameAnimation,
+  getGameAvatarUrl,
+  listGameAvatars,
+  getGameScenes,
+  listGames,
+  saveGameAnimation,
+  uploadGameAvatar,
+  saveGameScenes,
+} from '../services/game-api';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
 import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
 
@@ -25,6 +40,29 @@ type RestPose = {
 };
 
 type Vec3 = { x: number; y: number; z: number };
+type LevelObstacle = {
+  id?: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  width?: number;
+  height?: number;
+  depth?: number;
+};
+type LevelGround = {
+  type?: 'concrete';
+  width?: number;
+  depth?: number;
+  y?: number;
+  textureRepeat?: number;
+};
+type LevelScene = {
+  name: string;
+  obstacles?: LevelObstacle[];
+  ground?: LevelGround;
+  player?: { avatar?: string };
+  crowd?: { enabled?: boolean; avatar?: string };
+};
 
 type RagdollBone = {
   name: string;
@@ -48,7 +86,19 @@ const UNDO_MAX = 50;
 export class EditorApp {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
-  private scene: THREE.Scene;
+  private psxRenderer: PSXRenderer | null = null;
+  private psxPostProcessor: PSXPostProcessor | null = null;
+
+  // Separate scenes for each tab
+  private characterScene: THREE.Scene; // Shared by animation and player tabs
+  private levelScene: THREE.Scene;
+  private settingsScene: THREE.Scene;
+
+  // Legacy scene reference (points to current active scene)
+  private get scene(): THREE.Scene {
+    return this.getActiveScene();
+  }
+
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls | null = null;
   private viewport: HTMLDivElement | null = null;
@@ -137,6 +187,25 @@ export class EditorApp {
   private ragdollHandleLine = new THREE.Line3();
   private ragdollHandleTemp = new THREE.Vector3();
   private ragdollHandleTemp2 = new THREE.Vector3();
+  private levelTransform: TransformControls | null = null;
+  private levelObstacleGroup = new THREE.Group();
+  private levelGroundMesh: THREE.Mesh | null = null;
+  private levelCrowdMarker: THREE.Group | null = null;
+  private levelObstacleMeshes = new Map<string, THREE.Mesh>();
+  private selectedLevelObstacleId: string | null = null;
+  private levelSceneListEl: HTMLSelectElement | null = null;
+  private levelSceneObstaclesEl: HTMLTextAreaElement | null = null;
+  private levelSceneJsonEl: HTMLTextAreaElement | null = null;
+  private levelObjectSelectEl: HTMLSelectElement | null = null;
+  private levelSceneStateRef: { scenes: LevelScene[] } | null = null;
+
+  // Game management
+  private currentGameId: string | null = null;
+  private initialGameId: string | null = null;
+  private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
+  private refreshClipsFunction: (() => Promise<void>) | null = null;
+  private refreshScenesFunction: (() => Promise<void>) | null = null;
+  private onBackToMenu: (() => void) | null = null;
 
   private closestPointOnLineToRay(line: THREE.Line3, ray: THREE.Ray, target: THREE.Vector3) {
     const p1 = line.start;
@@ -382,7 +451,7 @@ export class EditorApp {
   };
   private boneVisualsVisible = true;
   private overrideMode = false;
-  private currentTab: 'animation' | 'player' = 'animation';
+  public updateLevelVisualization: (obstacles: LevelObstacle[]) => void = () => {};
   private readonly ragdollDefs: { name: string; parent?: string }[] = [
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
@@ -404,6 +473,7 @@ export class EditorApp {
     { name: 'rightFoot', parent: 'rightLowerLeg' },
   ];
   private playerConfig = {
+    avatar: 'default.vrm',
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
     capsuleHeightScale: 1,
@@ -432,9 +502,15 @@ export class EditorApp {
     >,
   };
 
-  constructor(container: HTMLElement | null) {
+  constructor(
+    container: HTMLElement | null,
+    initialGameId: string | null = null,
+    onBackToMenu: (() => void) | null = null,
+  ) {
     if (!container) throw new Error('Missing #app container');
     this.container = container;
+    this.initialGameId = initialGameId;
+    this.onBackToMenu = onBackToMenu;
     this.container.tabIndex = 0;
 
     this.gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
@@ -443,12 +519,55 @@ export class EditorApp {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(0x0b0c12, 1);
 
-    this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+    // Initialize scenes
+    this.characterScene = new THREE.Scene();
+    this.characterScene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+
+    this.levelScene = new THREE.Scene();
+    this.levelScene.fog = new THREE.Fog(0x0b0c12, 12, 90);
+
+    this.settingsScene = new THREE.Scene();
+    this.settingsScene.background = new THREE.Color(0x1a1a1a);
 
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
     this.camera.position.set(0, 1.6, -4.2);
     this.camera.lookAt(0, 1.4, 0);
+
+    // Initialize PSX rendering system
+    const psxRes = psxSettings.getResolution();
+    this.psxRenderer = new PSXRenderer(this.renderer, {
+      baseWidth: psxRes.width,
+      baseHeight: psxRes.height,
+      enabled: psxSettings.config.enabled,
+      pixelated: psxSettings.config.pixelated,
+    });
+
+    this.psxPostProcessor = new PSXPostProcessor(
+      this.renderer,
+      this.scene,
+      this.camera,
+      {
+        enabled: psxSettings.config.enabled,
+        blur: psxSettings.config.blur,
+        blurStrength: psxSettings.config.blurStrength,
+        colorQuantization: psxSettings.config.colorQuantization,
+        colorBits: psxSettings.config.colorBits,
+        dithering: psxSettings.config.dithering,
+        ditherStrength: psxSettings.config.ditherStrength,
+        crtEffects: psxSettings.config.crtEffects,
+        scanlineIntensity: psxSettings.config.scanlineIntensity,
+        curvature: psxSettings.config.curvature,
+        vignette: psxSettings.config.vignette,
+        brightness: psxSettings.config.brightness,
+        chromaticAberration: psxSettings.config.chromaticAberration,
+        chromaticOffset: psxSettings.config.chromaticOffset,
+        contrast: psxSettings.config.contrast,
+        saturation: psxSettings.config.saturation,
+        gamma: psxSettings.config.gamma,
+        exposure: psxSettings.config.exposure,
+      }
+    );
+
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -463,7 +582,25 @@ export class EditorApp {
     this.ragdollTransform.addEventListener('dragging-changed', (event) => {
       if (this.controls) this.controls.enabled = !event.value;
     });
-    this.scene.add(this.ragdollTransform as unknown as THREE.Object3D);
+    // Add TransformControls internal root to scene
+    // @ts-expect-error - TransformControls has internal _root property
+    if (this.ragdollTransform._root) {
+      // @ts-expect-error
+      this.characterScene.add(this.ragdollTransform._root);
+    }
+
+    this.levelTransform = new TransformControls(this.camera, this.renderer.domElement);
+    (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    this.levelTransform.setMode('translate');
+    this.levelTransform.addEventListener('dragging-changed', (event) => {
+      if (this.controls) this.controls.enabled = !event.value;
+    });
+    this.levelTransform.addEventListener('objectChange', this.handleLevelTransformObjectChange);
+    // @ts-expect-error
+    if (this.levelTransform._root) {
+      // @ts-expect-error
+      this.levelScene.add(this.levelTransform._root);
+    }
 
     this.hud = this.createHud();
     this.viewport?.appendChild(this.renderer.domElement);
@@ -487,6 +624,7 @@ export class EditorApp {
 
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('keydown', this.handleKeyboard);
+    window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
         this.resizeRenderer();
@@ -494,8 +632,34 @@ export class EditorApp {
       });
       this.viewportObserver.observe(this.viewport);
     }
-    this.loadVrm();
+    this.createCharacterScene();
+    this.createLevelScene();
+    this.createSettingsScene();
   }
+
+  private handlePSXSettingsChange = () => {
+    // Update PSX renderers when settings change globally
+    if (this.psxRenderer) {
+      const res = psxSettings.getResolution();
+      this.psxRenderer.setEnabled(psxSettings.config.enabled);
+      this.psxRenderer.setResolution(res.width, res.height);
+      this.psxRenderer.setPixelated(psxSettings.config.pixelated);
+    }
+
+    if (this.psxPostProcessor) {
+      this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
+      this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
+      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
+      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
+      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
+      this.psxPostProcessor.setContrast(psxSettings.config.contrast);
+      this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
+      this.psxPostProcessor.setGamma(psxSettings.config.gamma);
+      this.psxPostProcessor.setExposure(psxSettings.config.exposure);
+    }
+  };
 
   start() {
     if (this.animationId !== null) return;
@@ -510,6 +674,7 @@ export class EditorApp {
     }
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyboard);
+    window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
     window.removeEventListener('pointermove', this.handleRagdollDrag);
     window.removeEventListener('pointerup', this.handleRagdollDragEnd);
@@ -527,6 +692,7 @@ export class EditorApp {
     this.viewport?.removeEventListener('drop', this.handleDrop);
     this.viewport?.removeEventListener('dragleave', this.handleDragLeave);
     this.renderer.dispose();
+    this.levelTransform?.removeEventListener('objectChange', this.handleLevelTransformObjectChange);
     this.container.innerHTML = '';
   }
 
@@ -536,6 +702,17 @@ export class EditorApp {
     this.resizeRenderer();
     this.resizeTimeline();
     this.fitCameraToVrm();
+
+    // Update PSX resolution
+    if (this.psxRenderer) {
+      const psxRes = psxSettings.getResolution();
+      this.psxRenderer.setResolution(psxRes.width, psxRes.height);
+    }
+
+    if (this.psxPostProcessor) {
+      const { innerWidth, innerHeight } = window;
+      this.psxPostProcessor.setSize(innerWidth, innerHeight);
+    }
   };
 
   private handleKeyboard = (e: KeyboardEvent) => {
@@ -546,6 +723,370 @@ export class EditorApp {
     else if (mod && e.key === 'c') { e.preventDefault(); this.copyKeyframeAtTime(this.time); }
     else if (mod && e.key === 'v') { e.preventDefault(); this.pasteKeyframeAtTime(this.time); }
   };
+
+  private getActiveScene(): THREE.Scene {
+    switch (this.currentTab) {
+      case 'animation':
+      case 'player':
+        return this.characterScene;
+      case 'level':
+        return this.levelScene;
+      case 'settings':
+        return this.settingsScene;
+      default:
+        return this.characterScene;
+    }
+  }
+
+  private switchToTab(tab: 'animation' | 'player' | 'level' | 'settings') {
+    this.currentTab = tab;
+
+    // VRM stays in character scene for both animation and player tabs
+    // No need to move it between scenes anymore since they're consolidated
+
+    // Update PSX post-processor to use the new scene
+    if (this.psxPostProcessor) {
+      // We need to recreate the post-processor with the new scene
+      this.psxPostProcessor.dispose();
+      this.psxPostProcessor = new PSXPostProcessor(
+        this.renderer,
+        this.getActiveScene(),
+        this.camera,
+        {
+          enabled: psxSettings.config.enabled,
+          blur: psxSettings.config.blur,
+          blurStrength: psxSettings.config.blurStrength,
+          colorQuantization: psxSettings.config.colorQuantization,
+          colorBits: psxSettings.config.colorBits,
+          dithering: psxSettings.config.dithering,
+          ditherStrength: psxSettings.config.ditherStrength,
+          crtEffects: psxSettings.config.crtEffects,
+          scanlineIntensity: psxSettings.config.scanlineIntensity,
+          curvature: psxSettings.config.curvature,
+          vignette: psxSettings.config.vignette,
+          brightness: psxSettings.config.brightness,
+          chromaticAberration: psxSettings.config.chromaticAberration,
+          chromaticOffset: psxSettings.config.chromaticOffset,
+          contrast: psxSettings.config.contrast,
+          saturation: psxSettings.config.saturation,
+          gamma: psxSettings.config.gamma,
+          exposure: psxSettings.config.exposure,
+        }
+      );
+    }
+
+    // Adjust camera for different tabs
+    if (tab === 'level') {
+      this.camera.position.set(0, 5, 10);
+      if (this.controls) {
+        this.controls.target.set(0, 0, 0);
+      }
+    } else if (tab === 'settings') {
+      // Minimal camera setup for settings
+      this.camera.position.set(0, 2, 5);
+      if (this.controls) {
+        this.controls.target.set(0, 1, 0);
+      }
+    } else {
+      // Animation and player tabs
+      this.camera.position.set(0, 1.6, -4.2);
+      if (this.controls) {
+        this.controls.target.set(0, 1.2, 0);
+      }
+    }
+  }
+
+  private normalizeLevelObstacle(obstacle: LevelObstacle, index: number): Required<LevelObstacle> {
+    return {
+      id: obstacle.id ?? `obstacle_${index + 1}`,
+      x: Number(obstacle.x ?? 0),
+      y: Number(obstacle.y ?? 0),
+      z: Number(obstacle.z ?? 0),
+      width: Math.max(0.1, Number(obstacle.width ?? 1)),
+      height: Math.max(0.1, Number(obstacle.height ?? 1)),
+      depth: Math.max(0.1, Number(obstacle.depth ?? 1)),
+    };
+  }
+
+  private normalizeLevelGround(ground: LevelGround | undefined): Required<LevelGround> | null {
+    if (!ground) return null;
+    return {
+      type: 'concrete',
+      width: Math.max(1, Number(ground.width ?? 120)),
+      depth: Math.max(1, Number(ground.depth ?? 120)),
+      y: Number(ground.y ?? 0),
+      textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+    };
+  }
+
+  private createEditorConcreteTexture() {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.wrapS = THREE.RepeatWrapping;
+      fallback.wrapT = THREE.RepeatWrapping;
+      fallback.repeat.set(12, 12);
+      return fallback;
+    }
+    ctx.fillStyle = '#4a4f57';
+    ctx.fillRect(0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const n = (Math.random() * 0.2 - 0.1) * 255;
+      data[i] = Math.min(255, Math.max(0, data[i]! + n));
+      data[i + 1] = Math.min(255, Math.max(0, data[i + 1]! + n));
+      data[i + 2] = Math.min(255, Math.max(0, data[i + 2]! + n));
+    }
+    ctx.putImageData(imageData, 0, 0);
+    ctx.globalAlpha = 0.1;
+    ctx.strokeStyle = '#2f343b';
+    for (let i = 0; i < size; i += 32) {
+      ctx.beginPath();
+      ctx.moveTo(i, 0);
+      ctx.lineTo(i, size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i);
+      ctx.lineTo(size, i);
+      ctx.stroke();
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(12, 12);
+    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    return texture;
+  }
+
+  private getCurrentLevelSceneEntry() {
+    const sceneState = this.levelSceneStateRef;
+    const sceneList = this.levelSceneListEl;
+    if (!sceneState || !sceneList) return null;
+    return sceneState.scenes.find((scene) => scene.name === sceneList.value) ?? null;
+  }
+
+  private syncLevelTextEditors() {
+    const scene = this.getCurrentLevelSceneEntry();
+    if (!scene || !this.levelSceneObstaclesEl || !this.levelSceneJsonEl || !this.levelSceneStateRef) return;
+    this.levelSceneObstaclesEl.value = JSON.stringify(scene.obstacles ?? [], null, 2);
+    this.levelSceneJsonEl.value = JSON.stringify(this.levelSceneStateRef, null, 2);
+  }
+
+  private refreshLevelObjectSelect() {
+    if (!this.levelObjectSelectEl) return;
+    const scene = this.getCurrentLevelSceneEntry();
+    this.levelObjectSelectEl.innerHTML = '';
+    const obstacles = scene?.obstacles ?? [];
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const item = this.normalizeLevelObstacle(obstacles[i] ?? {}, i);
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.id;
+      this.levelObjectSelectEl.appendChild(option);
+    }
+    if (this.selectedLevelObstacleId && this.levelObstacleMeshes.has(this.selectedLevelObstacleId)) {
+      this.levelObjectSelectEl.value = this.selectedLevelObstacleId;
+    } else if (obstacles.length > 0) {
+      const first = this.normalizeLevelObstacle(obstacles[0] ?? {}, 0);
+      this.levelObjectSelectEl.value = first.id;
+      this.selectLevelObstacle(first.id);
+    } else {
+      this.selectLevelObstacle(null);
+    }
+  }
+
+  private updateLevelVisualizationFromState(obstacles: LevelObstacle[]) {
+    const scene = this.getCurrentLevelSceneEntry();
+    const ground = this.normalizeLevelGround(scene?.ground);
+    if (this.levelGroundMesh) {
+      this.levelScene.remove(this.levelGroundMesh);
+      this.levelGroundMesh.geometry.dispose();
+      if (this.levelGroundMesh.material instanceof THREE.Material) this.levelGroundMesh.material.dispose();
+      this.levelGroundMesh = null;
+    }
+    if (ground) {
+      const concreteTexture = this.createEditorConcreteTexture();
+      concreteTexture.repeat.set(ground.textureRepeat, ground.textureRepeat);
+      this.levelGroundMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(ground.width, ground.depth),
+        new THREE.MeshStandardMaterial({
+          map: concreteTexture,
+          roughness: 0.95,
+          metalness: 0.05,
+          color: 0xffffff,
+        }),
+      );
+      this.levelGroundMesh.rotation.x = -Math.PI / 2;
+      this.levelGroundMesh.position.y = ground.y;
+      this.levelScene.add(this.levelGroundMesh);
+    }
+
+    const crowdEnabled = scene?.crowd?.enabled === true;
+    if (this.levelCrowdMarker) {
+      this.levelScene.remove(this.levelCrowdMarker);
+      this.levelCrowdMarker = null;
+    }
+    if (crowdEnabled) {
+      const marker = new THREE.Group();
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(12, 0.12, 8, 48),
+        new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0x4a2a08, emissiveIntensity: 0.5 }),
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = (ground?.y ?? 0) + 0.05;
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 2.5, 12),
+        new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x4a2a08, emissiveIntensity: 0.35 }),
+      );
+      pillar.position.set(0, (ground?.y ?? 0) + 1.25, 0);
+      marker.add(ring, pillar);
+      this.levelCrowdMarker = marker;
+      this.levelScene.add(marker);
+    }
+
+    this.levelObstacleMeshes.clear();
+    this.levelObstacleGroup.clear();
+
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const obstacle = this.normalizeLevelObstacle(obstacles[i] ?? {}, i);
+      if (!obstacles[i]?.id) obstacles[i] = obstacle;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 }),
+      );
+      mesh.position.set(obstacle.x, obstacle.y + obstacle.height / 2, obstacle.z);
+      mesh.scale.set(obstacle.width, obstacle.height, obstacle.depth);
+      mesh.userData.levelObstacleId = obstacle.id;
+      this.levelObstacleGroup.add(mesh);
+      this.levelObstacleMeshes.set(obstacle.id, mesh);
+    }
+    this.refreshLevelObjectSelect();
+  }
+
+  private selectLevelObstacle(obstacleId: string | null) {
+    this.selectedLevelObstacleId = obstacleId;
+
+    for (const [id, mesh] of this.levelObstacleMeshes) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.color.set(id === obstacleId ? 0xf59e0b : 0x666666);
+      mat.emissive.set(id === obstacleId ? 0x201008 : 0x000000);
+      mat.emissiveIntensity = id === obstacleId ? 0.5 : 0;
+    }
+
+    if (this.levelObjectSelectEl) {
+      this.levelObjectSelectEl.value = obstacleId ?? '';
+    }
+
+    if (!this.levelTransform) return;
+    const mesh = obstacleId ? this.levelObstacleMeshes.get(obstacleId) : null;
+    if (mesh) {
+      this.levelTransform.attach(mesh);
+      (this.levelTransform as unknown as THREE.Object3D).visible = true;
+    } else {
+      this.levelTransform.detach();
+      (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    }
+  }
+
+  private handleLevelTransformObjectChange = () => {
+    const selectedId = this.selectedLevelObstacleId;
+    if (!selectedId) return;
+    const scene = this.getCurrentLevelSceneEntry();
+    const mesh = this.levelObstacleMeshes.get(selectedId);
+    if (!scene || !mesh) return;
+    const obstacles = scene.obstacles ?? [];
+    const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
+    if (index < 0) return;
+
+    obstacles[index] = {
+      id: selectedId,
+      x: mesh.position.x,
+      y: mesh.position.y - mesh.scale.y / 2,
+      z: mesh.position.z,
+      width: Math.max(0.1, mesh.scale.x),
+      height: Math.max(0.1, mesh.scale.y),
+      depth: Math.max(0.1, mesh.scale.z),
+    };
+    scene.obstacles = obstacles;
+    this.syncLevelTextEditors();
+  };
+
+  private pickLevelObstacle = (event: PointerEvent) => {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(Array.from(this.levelObstacleMeshes.values()), false);
+    const hitId = hits[0]?.object.userData.levelObstacleId as string | undefined;
+    if (hitId) {
+      this.selectLevelObstacle(hitId);
+      this.triggerHapticFeedback('light');
+    }
+  };
+
+  // Get API path for animations (game-scoped only)
+  private getAnimationsPath(): string | null {
+    if (this.currentGameId) {
+      return `/api/games/${this.currentGameId}/animations`;
+    }
+    return null; // No game selected
+  }
+
+  // Get API path for scenes (game-scoped only)
+  private getScenesPath(): string | null {
+    if (this.currentGameId) {
+      return `/api/games/${this.currentGameId}/scenes`;
+    }
+    return null; // No game selected
+  }
+
+  // Load assets for current game (triggers refresh of animations and scenes)
+  private async loadGameAssets(retryCount = 0) {
+    console.log('Loading assets for game:', this.currentGameId, `(attempt ${retryCount + 1})`);
+    console.log('refreshClipsFunction available:', !!this.refreshClipsFunction);
+    console.log('refreshScenesFunction available:', !!this.refreshScenesFunction);
+    this.loadVrm();
+
+    // If functions aren't ready yet, retry after a delay (max 5 retries)
+    if ((!this.refreshClipsFunction || !this.refreshScenesFunction) && retryCount < 5) {
+      console.log('Refresh functions not ready, retrying in 200ms...');
+      setTimeout(() => {
+        this.loadGameAssets(retryCount + 1);
+      }, 200);
+      return;
+    }
+
+    // Trigger refresh of animations list
+    if (this.refreshClipsFunction) {
+      console.log('Calling refreshClipsFunction...');
+      try {
+        await this.refreshClipsFunction();
+        console.log('✓ Animations loaded successfully');
+      } catch (err) {
+        console.error('✗ Failed to load animations:', err);
+      }
+    } else {
+      console.error('✗ refreshClipsFunction not available after retries');
+    }
+
+    // Trigger refresh of scenes
+    if (this.refreshScenesFunction) {
+      console.log('Calling refreshScenesFunction...');
+      try {
+        await this.refreshScenesFunction();
+        console.log('✓ Scenes loaded successfully');
+      } catch (err) {
+        console.error('✗ Failed to load scenes:', err);
+      }
+    } else {
+      console.error('✗ refreshScenesFunction not available after retries');
+    }
+  }
 
   private tick = () => {
     const delta = this.clock.getDelta();
@@ -574,7 +1115,24 @@ export class EditorApp {
     this.updateBoneMarkers();
     this.updateBoneGizmos();
     this.drawAxisWidget();
-    this.renderer.render(this.scene, this.camera);
+
+    // Update PSX material resolutions before rendering
+    if (psxSettings.config.enabled && this.psxRenderer) {
+      const res = this.psxRenderer.getResolution();
+      this.scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
+          obj.material.updateResolution(res.width, res.height);
+        }
+      });
+    }
+
+    // Render with PSX effects or standard
+    if (psxSettings.config.enabled && this.psxPostProcessor) {
+      this.psxPostProcessor.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     this.animationId = requestAnimationFrame(this.tick);
   };
 
@@ -584,9 +1142,21 @@ export class EditorApp {
     hud.innerHTML = [
       '<div class="editor-header">',
       '<div class="editor-title">Sleepy Engine Editor</div>',
+      '<button class="mode-back-button" data-back-menu>Back to Menu</button>',
+      '<div class="editor-game-selector">',
+      '<label style="display: flex; align-items: center; gap: 8px;">',
+      '<span style="font-weight: 500;">Game:</span>',
+      '<select data-game-select style="padding: 5px 10px; border-radius: 4px; border: 1px solid #444; background: #2a2a2a; color: #fff; min-width: 200px;">',
+      '<option value="">-- Select Game --</option>',
+      '</select>',
+      '<button data-new-game style="padding: 5px 12px; border-radius: 4px; border: 1px solid #444; background: #3a3a3a; color: #fff; cursor: pointer;">New Game</button>',
+      '</label>',
+      '</div>',
       '<div class="editor-tabs">',
       '<button class="editor-tab active" data-tab="animation">Animation</button>',
       '<button class="editor-tab" data-tab="player">Player</button>',
+      '<button class="editor-tab" data-tab="level">Level</button>',
+      '<button class="editor-tab" data-tab="settings">Settings</button>',
       '</div>',
       '</div>',
       '<div class="editor-shell">',
@@ -637,6 +1207,13 @@ export class EditorApp {
       '<label class="field"><span>Min Pitch</span><input data-cam-min-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Max Pitch</span><input data-cam-max-pitch type="number" step="0.05" /></label>',
       '<label class="field"><span>Target Smooth</span><input data-cam-target-smooth type="number" step="1" /></label>',
+      '<label class="field"><span>Avatar</span><select data-player-avatar></select></label>',
+      '<label class="field"><span>Upload VRM/GLB</span><input data-player-avatar-file type="file" accept=".vrm,.glb,.gltf" /></label>',
+      '<div class="panel-actions">',
+      '<button data-player-avatar-refresh>Refresh Avatars</button>',
+      '<button data-player-avatar-load>Load Avatar</button>',
+      '<button data-player-avatar-save>Save Avatar</button>',
+      '</div>',
       '<div class="panel-actions">',
       '<button data-player-load>Load</button>',
       '<button data-player-save>Save</button>',
@@ -664,6 +1241,37 @@ export class EditorApp {
       '</div>',
       '</div>',
       '</div>',
+      '<div class="editor-left" data-tab-panel="level" style="display:none;">',
+      '<div class="panel">',
+      '<div class="panel-title">Scene</div>',
+      '<label class="field"><span>Scenes</span><select data-scene-list></select></label>',
+      '<label class="field"><span>Name</span><input data-scene-name type="text" placeholder="main" /></label>',
+      '<div class="panel-actions">',
+      '<button data-scene-new>New</button>',
+      '<button data-scene-load>Load</button>',
+      '<button data-scene-save>Save</button>',
+      '<button data-scene-delete>Delete</button>',
+      '</div>',
+      '<div class="clip-status" data-scene-status></div>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Obstacles JSON</div>',
+      '<textarea data-scene-obstacles rows="12" style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Level Tools</div>',
+      '<label class="field"><span>Objects</span><select data-level-object></select></label>',
+      '<div class="panel-actions">',
+      '<button data-level-add>Add Box</button>',
+      '<button data-level-duplicate>Duplicate</button>',
+      '<button data-level-delete>Delete</button>',
+      '</div>',
+      '<label class="field"><span>Transform Mode</span><select data-level-transform-mode><option value="translate">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option></select></label>',
+      '<label class="field"><span>Snap Step</span><input data-level-snap type="number" min="0" step="0.1" value="0.5" /></label>',
+      '<button data-level-focus>Focus Selected</button>',
+      '<div class="clip-status" data-level-status>Select an object in viewport or list to edit transform.</div>',
+      '</div>',
+      '</div>',
       '<div class="editor-view" data-viewport>',
       '<div class="viewport-overlay">',
       '<div class="overlay-stack">',
@@ -675,13 +1283,6 @@ export class EditorApp {
       '</label>',
       '<button class="icon-btn" data-reset title="Reset Pose">R</button>',
       '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
-      '</div>',
-      '<div class="overlay-group">',
-      '<button class="icon-btn" data-ragdoll title="Ragdoll">RG</button>',
-      '<button class="icon-btn" data-ragdoll-visual title="Ragdoll Visual">RV</button>',
-      '<button class="icon-btn" data-ragdoll-reset title="Ragdoll Reset">RR</button>',
-      '<button class="icon-btn" data-ragdoll-record title="Ragdoll Record">REC</button>',
-      '<button class="icon-btn" data-ragdoll-stop title="Ragdoll Stop">STP</button>',
       '</div>',
       '</div>',
       '<div class="overlay-bottom-left">',
@@ -749,7 +1350,6 @@ export class EditorApp {
       '<label class="duration-field"><span>Duration</span><input data-duration type="number" min="1" max="10" step="0.1" value="5" /></label>',
       '</div>',
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
-      '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
       '</div>',
       '<div class="timeline-grid timeline-midi">',
       '<div class="timeline-header" data-timeline-header></div>',
@@ -766,11 +1366,198 @@ export class EditorApp {
       '</div>',
       '<div class="panel">',
       '<div class="panel-title">Notes</div>',
-      '<div class="clip-status">Edit values above, then Save to write /config/player.json for the game.</div>',
+      '<div class="clip-status">Edit values above, then Save to write the game player.json.</div>',
       '</div>',
+      '</div>',
+      '</div>',
+      '<div class="editor-bottom player-bottom" data-tab-panel="level" style="display:none;">',
+      '<div class="player-bottom-grid">',
+      '<div class="panel">',
+      '<div class="panel-title">Scene JSON (Read-only)</div>',
+      '<textarea data-scene-json rows="10" readonly style="width: 100%; font-family: monospace; font-size: 12px; background: #1a1a1a; color: #ddd;"></textarea>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Tips</div>',
+      '<div class="clip-status">Edit obstacles in the Obstacles JSON panel above. Changes are automatically synced to Scene JSON. Click Save to write to the selected game.</div>',
+      '</div>',
+      '</div>',
+      '</div>',
+      '<div class="editor-left" data-tab-panel="settings" style="display:none;">',
+      '<div class="panel">',
+      '<div class="panel-title">Console Graphics</div>',
+      '<label class="field">',
+      '<span>Console Preset</span>',
+      '<select data-console-preset style="width: 100%;">',
+      '<option value="ps1">PlayStation 1 (1994)</option>',
+      '<option value="n64">Nintendo 64 (1996)</option>',
+      '<option value="dreamcast">Sega Dreamcast (1998)</option>',
+      '<option value="xbox">Xbox (2001)</option>',
+      '<option value="modern">Modern (No Effects)</option>',
+      '</select>',
+      '</label>',
+      '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Color & Lighting</div>',
+      '<label class="field">',
+      '<span>Brightness: <strong data-brightness-val>1.00</strong></span>',
+      '<input data-brightness type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Contrast: <strong data-contrast-val>1.00</strong></span>',
+      '<input data-contrast type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Saturation: <strong data-saturation-val>1.00</strong></span>',
+      '<input data-saturation type="range" min="0.0" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Gamma: <strong data-gamma-val>1.00</strong></span>',
+      '<input data-gamma type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
+      '<label class="field">',
+      '<span>Exposure: <strong data-exposure-val>1.00</strong></span>',
+      '<input data-exposure type="range" min="0.5" max="2.0" step="0.05" value="1.0" style="width: 100%;" />',
+      '</label>',
       '</div>',
       '</div>',
     ].join('');
+
+    // ============================================================================
+    // GAME MANAGEMENT
+    // ============================================================================
+
+    const gameSelect = hud.querySelector('[data-game-select]') as HTMLSelectElement;
+    const newGameBtn = hud.querySelector('[data-new-game]') as HTMLButtonElement;
+    const backMenuBtn = hud.querySelector('[data-back-menu]') as HTMLButtonElement;
+    backMenuBtn.addEventListener('click', () => {
+      this.onBackToMenu?.();
+    });
+
+    // Fetch and populate games list
+    const loadGamesList = async () => {
+      try {
+        const games = await listGames();
+        gameSelect.innerHTML = '<option value="">-- Select Game --</option>';
+        for (const game of games) {
+          const option = document.createElement('option');
+          option.value = game.id;
+          option.textContent = game.name;
+          gameSelect.appendChild(option);
+        }
+
+        // Load saved game from localStorage, or default to prototype
+        const savedGameId = localStorage.getItem('editorGameId');
+        const prototypeGame = games.find((p) => p.id === 'prototype');
+        const initialGameExists = this.initialGameId && games.find((p) => p.id === this.initialGameId);
+
+        if (initialGameExists && this.initialGameId) {
+          // Main menu launch selection takes precedence
+          this.currentGameId = this.initialGameId;
+          gameSelect.value = this.initialGameId;
+          localStorage.setItem('editorGameId', this.initialGameId);
+        } else if (savedGameId && games.find((p) => p.id === savedGameId)) {
+          // Saved game exists, use it
+          this.currentGameId = savedGameId;
+          gameSelect.value = savedGameId;
+        } else if (prototypeGame) {
+          // No saved game, fall back to prototype if it exists
+          this.currentGameId = 'prototype';
+          gameSelect.value = 'prototype';
+          localStorage.setItem('editorGameId', 'prototype');
+        } else if (games[0]) {
+          this.currentGameId = games[0].id;
+          gameSelect.value = games[0].id;
+          localStorage.setItem('editorGameId', games[0].id);
+        }
+
+        // Schedule asset loading (will retry if functions not ready yet)
+        if (this.currentGameId) {
+          // First verify API endpoints are working
+          setTimeout(async () => {
+            console.log('=== Editor Initialization Debug ===');
+            console.log('Selected game:', this.currentGameId);
+
+            // Test animations endpoint
+            try {
+              const animPath = `/api/games/${this.currentGameId}/animations`;
+              console.log('Testing:', animPath);
+              const res = await fetch(animPath);
+              if (res.ok) {
+                const data = await res.json();
+                console.log('✓ Animations API response:', data);
+              } else {
+                console.error('✗ Animations API failed:', res.status);
+              }
+            } catch (err) {
+              console.error('✗ Animations API error:', err);
+            }
+
+            // Test scenes endpoint
+            try {
+              const scenesPath = `/api/games/${this.currentGameId}/scenes`;
+              console.log('Testing:', scenesPath);
+              const res = await fetch(scenesPath);
+              if (res.ok) {
+                const data = await res.json();
+                console.log('✓ Scenes API response:', data);
+              } else {
+                console.error('✗ Scenes API failed:', res.status);
+              }
+            } catch (err) {
+              console.error('✗ Scenes API error:', err);
+            }
+
+            console.log('Starting asset loading...');
+            this.loadGameAssets(0);
+          }, 100);
+        }
+      } catch (err) {
+        console.error('Error loading games list:', err);
+      }
+    };
+
+    // Game selection handler
+    gameSelect.addEventListener('change', async () => {
+      const gameId = gameSelect.value;
+      if (!gameId) {
+        this.currentGameId = null;
+        localStorage.removeItem('editorGameId');
+        return;
+      }
+      this.currentGameId = gameId;
+      localStorage.setItem('editorGameId', gameId);
+      // Reload assets for this game
+      await this.loadGameAssets();
+    });
+
+    // New game handler
+    newGameBtn.addEventListener('click', async () => {
+      const name = prompt('Enter game name:');
+      if (!name) return;
+
+      const description = prompt('Enter game description (optional):') || '';
+
+      try {
+        const data = await createGame({ name, description });
+        this.currentGameId = data.id;
+        localStorage.setItem('editorGameId', data.id);
+
+        // Refresh games list
+        await loadGamesList();
+        gameSelect.value = data.id;
+
+        // Load empty assets for new game
+        await this.loadGameAssets();
+
+        alert(`Game "${data.name}" created successfully!`);
+      } catch (err) {
+        console.error('Error creating game:', err);
+        alert(`Error creating game: ${String(err)}`);
+      }
+    });
+
+    // Load games list on startup
+    loadGamesList();
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
@@ -805,10 +1592,12 @@ export class EditorApp {
     }
     tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        const tab = button.dataset.tab as 'animation' | 'player';
-        this.currentTab = tab;
+        const tab = button.dataset.tab as 'animation' | 'player' | 'level' | 'settings';
+        this.switchToTab(tab);
         hud.classList.toggle('mode-animation', tab === 'animation');
         hud.classList.toggle('mode-player', tab === 'player');
+        hud.classList.toggle('mode-level', tab === 'level');
+        hud.classList.toggle('mode-settings', tab === 'settings');
         for (const btn of tabButtons) {
           btn.classList.toggle('active', btn.dataset.tab === tab);
         }
@@ -867,12 +1656,12 @@ export class EditorApp {
     const mixamoBake = hud.querySelector('[data-mixamo-bake]') as HTMLButtonElement;
     const mixamoStop = hud.querySelector('[data-mixamo-stop]') as HTMLButtonElement;
     const mixamoStatus = hud.querySelector('[data-mixamo-status]') as HTMLSpanElement;
-    const ragdollBtn = hud.querySelector('[data-ragdoll]') as HTMLButtonElement;
-    const ragdollVisualBtn = hud.querySelector('[data-ragdoll-visual]') as HTMLButtonElement;
-    const ragdollResetBtn = hud.querySelector('[data-ragdoll-reset]') as HTMLButtonElement;
-    const ragdollRecordBtn = hud.querySelector('[data-ragdoll-record]') as HTMLButtonElement;
-    const ragdollStopBtn = hud.querySelector('[data-ragdoll-stop]') as HTMLButtonElement;
-    const ragdollStatus = hud.querySelector('[data-ragdoll-status]') as HTMLSpanElement;
+    const ragdollBtn = hud.querySelector('[data-ragdoll]') as HTMLButtonElement | null;
+    const ragdollVisualBtn = hud.querySelector('[data-ragdoll-visual]') as HTMLButtonElement | null;
+    const ragdollResetBtn = hud.querySelector('[data-ragdoll-reset]') as HTMLButtonElement | null;
+    const ragdollRecordBtn = hud.querySelector('[data-ragdoll-record]') as HTMLButtonElement | null;
+    const ragdollStopBtn = hud.querySelector('[data-ragdoll-stop]') as HTMLButtonElement | null;
+    const ragdollStatus = hud.querySelector('[data-ragdoll-status]') as HTMLSpanElement | null;
     const timeline = hud.querySelector('[data-timeline]') as HTMLCanvasElement;
     const timelineHeader = hud.querySelector('[data-timeline-header]') as HTMLDivElement;
     const timelineWrap = hud.querySelector('[data-timeline-wrap]') as HTMLDivElement;
@@ -881,6 +1670,11 @@ export class EditorApp {
     const overrideBtn = hud.querySelector('[data-override]') as HTMLButtonElement;
     const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
     const playerJson = hud.querySelector('[data-player-json]') as HTMLTextAreaElement;
+    const playerAvatarSelect = hud.querySelector('[data-player-avatar]') as HTMLSelectElement;
+    const playerAvatarFileInput = hud.querySelector('[data-player-avatar-file]') as HTMLInputElement;
+    const playerAvatarRefreshButton = hud.querySelector('[data-player-avatar-refresh]') as HTMLButtonElement;
+    const playerAvatarLoadButton = hud.querySelector('[data-player-avatar-load]') as HTMLButtonElement;
+    const playerAvatarSaveButton = hud.querySelector('[data-player-avatar-save]') as HTMLButtonElement;
     const moveSpeedInput = hud.querySelector('[data-move-speed]') as HTMLInputElement;
     const sprintMultInput = hud.querySelector('[data-sprint-mult]') as HTMLInputElement;
     const crouchMultInput = hud.querySelector('[data-crouch-mult]') as HTMLInputElement;
@@ -920,6 +1714,345 @@ export class EditorApp {
     const rigResetButton = hud.querySelector('[data-rig-reset]') as HTMLButtonElement;
     const playerLoadButton = hud.querySelector('[data-player-load]') as HTMLButtonElement;
     const playerSaveButton = hud.querySelector('[data-player-save]') as HTMLButtonElement;
+    const sceneList = hud.querySelector('[data-scene-list]') as HTMLSelectElement;
+    const sceneNameInput = hud.querySelector('[data-scene-name]') as HTMLInputElement;
+    const sceneNewBtn = hud.querySelector('[data-scene-new]') as HTMLButtonElement;
+    const sceneLoadBtn = hud.querySelector('[data-scene-load]') as HTMLButtonElement;
+    const sceneSaveBtn = hud.querySelector('[data-scene-save]') as HTMLButtonElement;
+    const sceneDeleteBtn = hud.querySelector('[data-scene-delete]') as HTMLButtonElement;
+    const sceneStatus = hud.querySelector('[data-scene-status]') as HTMLDivElement;
+    const sceneObstacles = hud.querySelector('[data-scene-obstacles]') as HTMLTextAreaElement;
+    const sceneJson = hud.querySelector('[data-scene-json]') as HTMLTextAreaElement;
+    const levelObjectSelect = hud.querySelector('[data-level-object]') as HTMLSelectElement;
+    const levelAddBtn = hud.querySelector('[data-level-add]') as HTMLButtonElement;
+    const levelDuplicateBtn = hud.querySelector('[data-level-duplicate]') as HTMLButtonElement;
+    const levelDeleteBtn = hud.querySelector('[data-level-delete]') as HTMLButtonElement;
+    const levelTransformMode = hud.querySelector('[data-level-transform-mode]') as HTMLSelectElement;
+    const levelSnapInput = hud.querySelector('[data-level-snap]') as HTMLInputElement;
+    const levelFocusBtn = hud.querySelector('[data-level-focus]') as HTMLButtonElement;
+    const levelStatus = hud.querySelector('[data-level-status]') as HTMLDivElement;
+
+    // Settings tab controls
+    const consolePresetSelect = hud.querySelector('[data-console-preset]') as HTMLSelectElement;
+    const brightnessInput = hud.querySelector('[data-brightness]') as HTMLInputElement;
+    const brightnessVal = hud.querySelector('[data-brightness-val]') as HTMLElement;
+    const contrastInput = hud.querySelector('[data-contrast]') as HTMLInputElement;
+    const contrastVal = hud.querySelector('[data-contrast-val]') as HTMLElement;
+    const saturationInput = hud.querySelector('[data-saturation]') as HTMLInputElement;
+    const saturationVal = hud.querySelector('[data-saturation-val]') as HTMLElement;
+    const gammaInput = hud.querySelector('[data-gamma]') as HTMLInputElement;
+    const gammaVal = hud.querySelector('[data-gamma-val]') as HTMLElement;
+    const exposureInput = hud.querySelector('[data-exposure]') as HTMLInputElement;
+    const exposureVal = hud.querySelector('[data-exposure-val]') as HTMLElement;
+
+    const sceneState = { scenes: [] as LevelScene[] };
+    this.levelSceneStateRef = sceneState;
+    this.levelSceneListEl = sceneList;
+    this.levelSceneObstaclesEl = sceneObstacles;
+    this.levelSceneJsonEl = sceneJson;
+    this.levelObjectSelectEl = levelObjectSelect;
+    const setSceneStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
+      sceneStatus.textContent = text;
+      sceneStatus.dataset.tone = tone;
+    };
+    const syncSceneSelect = () => {
+      sceneList.innerHTML = '';
+      for (const entry of sceneState.scenes) {
+        const opt = document.createElement('option');
+        opt.value = entry.name;
+        opt.textContent = entry.name;
+        sceneList.appendChild(opt);
+      }
+    };
+    const syncSceneJson = () => {
+      sceneJson.value = JSON.stringify(sceneState, null, 2);
+    };
+    const loadSceneFromState = (name: string) => {
+      const entry = sceneState.scenes.find((s) => s.name === name);
+      if (!entry) return;
+      sceneList.value = entry.name;
+      sceneNameInput.value = entry.name;
+      sceneObstacles.value = JSON.stringify(entry.obstacles ?? [], null, 2);
+      syncSceneJson();
+      // Update level scene visualization
+      this.updateLevelVisualization(entry.obstacles ?? []);
+    };
+
+    // Method to update level scene with obstacles
+    this.updateLevelVisualization = (obstacles: LevelObstacle[]) => {
+      this.updateLevelVisualizationFromState(obstacles);
+      this.syncLevelTextEditors();
+    };
+    const loadScenes = async () => {
+      const scenesPath = this.getScenesPath();
+      if (!scenesPath) {
+        setSceneStatus('No game selected', 'warn');
+        sceneState.scenes = [];
+        syncSceneSelect();
+        return;
+      }
+      try {
+        if (!this.currentGameId) throw new Error('No game selected');
+        const data = await getGameScenes(this.currentGameId);
+        sceneState.scenes = (data.scenes ?? [{ name: 'main', obstacles: [] }]).map((scene, sceneIndex) => {
+          const rawObstacles = Array.isArray(scene.obstacles) ? scene.obstacles : [];
+          const obstacles = rawObstacles.map((item, obstacleIndex) =>
+            this.normalizeLevelObstacle((item ?? {}) as LevelObstacle, obstacleIndex),
+          );
+          const ground = this.normalizeLevelGround((scene.ground ?? undefined) as LevelGround | undefined);
+          return {
+            name: scene.name || `scene_${sceneIndex + 1}`,
+            obstacles,
+            ground: ground ?? undefined,
+            player: (scene as any).player ? { ...(scene as any).player } : undefined,
+            crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
+          };
+        });
+        syncSceneSelect();
+        loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
+        setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
+      } catch (err) {
+        sceneState.scenes = [{
+          name: 'main',
+          obstacles: [],
+        }];
+        syncSceneSelect();
+        loadSceneFromState('main');
+        setSceneStatus('Initialized default scene', 'ok');
+      }
+    };
+    const saveScenes = async () => {
+      const scenesPath = this.getScenesPath();
+      if (!scenesPath) {
+        setSceneStatus('Please select a game first', 'warn');
+        return;
+      }
+      try {
+        if (!this.currentGameId) throw new Error('No game selected');
+        await saveGameScenes(this.currentGameId, sceneState);
+        setSceneStatus(`Saved to game "${this.currentGameId}"`, 'ok');
+      } catch (err) {
+        setSceneStatus(`Save failed: ${String(err)}`, 'warn');
+      }
+    };
+
+    // Store reference for external access
+    this.refreshScenesFunction = loadScenes;
+
+    // Add custom event listener to trigger refresh from outside
+    sceneList.addEventListener('refreshScenes', () => {
+      loadScenes();
+    });
+
+    sceneLoadBtn?.addEventListener('click', () => loadSceneFromState(sceneList.value));
+    sceneList?.addEventListener('change', () => loadSceneFromState(sceneList.value));
+    sceneNewBtn?.addEventListener('click', () => {
+      const name = (sceneNameInput.value || '').trim() || `scene_${sceneState.scenes.length + 1}`;
+      if (sceneState.scenes.find((s) => s.name === name)) {
+        setSceneStatus('Scene already exists', 'warn');
+        return;
+      }
+      sceneState.scenes.push({ name, obstacles: [] });
+      syncSceneSelect();
+      sceneList.value = name;
+      loadSceneFromState(name);
+    });
+    sceneSaveBtn?.addEventListener('click', async () => {
+      const name = (sceneNameInput.value || '').trim() || sceneList.value || 'main';
+      let obstacles: LevelObstacle[] = [];
+      try {
+        obstacles = JSON.parse(sceneObstacles.value || '[]') as LevelObstacle[];
+      } catch (err) {
+        setSceneStatus(`Invalid JSON: ${String(err)}`, 'warn');
+        return;
+      }
+      const entry = sceneState.scenes.find((s) => s.name === name);
+      if (entry) {
+        entry.obstacles = obstacles;
+      } else {
+        sceneState.scenes.push({ name, obstacles });
+      }
+      syncSceneSelect();
+      sceneList.value = name;
+      syncSceneJson();
+      // Update level visualization
+      this.updateLevelVisualization(obstacles);
+      await saveScenes();
+    });
+    sceneDeleteBtn?.addEventListener('click', async () => {
+      const name = sceneList.value;
+      sceneState.scenes = sceneState.scenes.filter((s) => s.name !== name);
+      if (sceneState.scenes.length === 0) {
+        sceneState.scenes.push({ name: 'main', obstacles: [] });
+      }
+      syncSceneSelect();
+      loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
+      syncSceneJson();
+      await saveScenes();
+    });
+
+    levelObjectSelect.addEventListener('change', () => {
+      this.selectLevelObstacle(levelObjectSelect.value || null);
+      if (levelStatus) levelStatus.textContent = levelObjectSelect.value ? `Selected ${levelObjectSelect.value}` : 'No object selected';
+    });
+
+    levelTransformMode.addEventListener('change', () => {
+      if (!this.levelTransform) return;
+      const mode = levelTransformMode.value as 'translate' | 'rotate' | 'scale';
+      this.levelTransform.setMode(mode);
+      if (levelStatus) levelStatus.textContent = `Transform mode: ${mode}`;
+    });
+
+    levelSnapInput.addEventListener('change', () => {
+      if (!this.levelTransform) return;
+      const snap = Math.max(0, Number(levelSnapInput.value) || 0);
+      this.levelTransform.setTranslationSnap(snap > 0 ? snap : null);
+      this.levelTransform.setRotationSnap(snap > 0 ? THREE.MathUtils.degToRad(Math.max(1, snap * 10)) : null);
+      this.levelTransform.setScaleSnap(snap > 0 ? snap : null);
+      if (levelStatus) levelStatus.textContent = snap > 0 ? `Snap: ${snap}` : 'Snap: off';
+    });
+    levelTransformMode.value = 'translate';
+    levelSnapInput.dispatchEvent(new Event('change'));
+
+    levelAddBtn.addEventListener('click', () => {
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!scene) return;
+      const obstacles = scene.obstacles ?? [];
+      const id = `obstacle_${obstacles.length + 1}`;
+      obstacles.push({ id, x: 0, y: 0, z: 0, width: 1, height: 1, depth: 1 });
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.selectLevelObstacle(id);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Added ${id}`;
+    });
+
+    levelDuplicateBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!selectedId || !scene) return;
+      const obstacles = scene.obstacles ?? [];
+      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedId);
+      if (index < 0) return;
+      const source = this.normalizeLevelObstacle(obstacles[index] ?? {}, index);
+      const id = `obstacle_${obstacles.length + 1}`;
+      obstacles.push({ ...source, id, x: source.x + 1 });
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.selectLevelObstacle(id);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Duplicated ${selectedId} -> ${id}`;
+    });
+
+    levelDeleteBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!selectedId || !scene) return;
+      const obstacles = (scene.obstacles ?? []).filter(
+        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id !== selectedId,
+      );
+      scene.obstacles = obstacles;
+      this.updateLevelVisualization(obstacles);
+      this.syncLevelTextEditors();
+      if (levelStatus) levelStatus.textContent = `Deleted ${selectedId}`;
+    });
+
+    levelFocusBtn.addEventListener('click', () => {
+      const selectedId = this.selectedLevelObstacleId;
+      const mesh = selectedId ? this.levelObstacleMeshes.get(selectedId) : null;
+      if (!mesh || !this.controls) return;
+      this.controls.target.copy(mesh.position);
+      this.camera.position.set(mesh.position.x + 4, mesh.position.y + 4, mesh.position.z + 4);
+      this.controls.update();
+    });
+
+    void loadScenes();
+
+    // Settings tab initialization and handlers
+    if (consolePresetSelect) {
+      consolePresetSelect.value = psxSettings.config.consolePreset;
+      consolePresetSelect.addEventListener('change', () => {
+        psxSettings.applyConsolePreset(consolePresetSelect.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
+        // Update sliders and displays to reflect preset values
+        if (brightnessInput) {
+          brightnessInput.value = psxSettings.config.brightness.toString();
+          if (brightnessVal) brightnessVal.textContent = psxSettings.config.brightness.toFixed(2);
+        }
+        if (contrastInput) {
+          contrastInput.value = psxSettings.config.contrast.toString();
+          if (contrastVal) contrastVal.textContent = psxSettings.config.contrast.toFixed(2);
+        }
+        if (saturationInput) {
+          saturationInput.value = psxSettings.config.saturation.toString();
+          if (saturationVal) saturationVal.textContent = psxSettings.config.saturation.toFixed(2);
+        }
+        if (gammaInput) {
+          gammaInput.value = psxSettings.config.gamma.toString();
+          if (gammaVal) gammaVal.textContent = psxSettings.config.gamma.toFixed(2);
+        }
+        if (exposureInput) {
+          exposureInput.value = psxSettings.config.exposure.toString();
+          if (exposureVal) exposureVal.textContent = psxSettings.config.exposure.toFixed(2);
+        }
+        window.dispatchEvent(new CustomEvent('psx-settings-changed'));
+      });
+    }
+
+    if (brightnessInput) {
+      brightnessInput.value = psxSettings.config.brightness.toString();
+      if (brightnessVal) brightnessVal.textContent = psxSettings.config.brightness.toFixed(2);
+      brightnessInput.addEventListener('input', () => {
+        const value = parseFloat(brightnessInput.value);
+        if (brightnessVal) brightnessVal.textContent = value.toFixed(2);
+        psxSettings.update({ brightness: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setBrightness(value);
+      });
+    }
+
+    if (contrastInput) {
+      contrastInput.value = psxSettings.config.contrast.toString();
+      if (contrastVal) contrastVal.textContent = psxSettings.config.contrast.toFixed(2);
+      contrastInput.addEventListener('input', () => {
+        const value = parseFloat(contrastInput.value);
+        if (contrastVal) contrastVal.textContent = value.toFixed(2);
+        psxSettings.update({ contrast: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setContrast(value);
+      });
+    }
+
+    if (saturationInput) {
+      saturationInput.value = psxSettings.config.saturation.toString();
+      if (saturationVal) saturationVal.textContent = psxSettings.config.saturation.toFixed(2);
+      saturationInput.addEventListener('input', () => {
+        const value = parseFloat(saturationInput.value);
+        if (saturationVal) saturationVal.textContent = value.toFixed(2);
+        psxSettings.update({ saturation: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setSaturation(value);
+      });
+    }
+
+    if (gammaInput) {
+      gammaInput.value = psxSettings.config.gamma.toString();
+      if (gammaVal) gammaVal.textContent = psxSettings.config.gamma.toFixed(2);
+      gammaInput.addEventListener('input', () => {
+        const value = parseFloat(gammaInput.value);
+        if (gammaVal) gammaVal.textContent = value.toFixed(2);
+        psxSettings.update({ gamma: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setGamma(value);
+      });
+    }
+
+    if (exposureInput) {
+      exposureInput.value = psxSettings.config.exposure.toString();
+      if (exposureVal) exposureVal.textContent = psxSettings.config.exposure.toFixed(2);
+      exposureInput.addEventListener('input', () => {
+        const value = parseFloat(exposureInput.value);
+        if (exposureVal) exposureVal.textContent = value.toFixed(2);
+        psxSettings.update({ exposure: value });
+        if (this.psxPostProcessor) this.psxPostProcessor.setExposure(value);
+      });
+    }
+
     this.timelineHeader = timelineHeader;
     this.timelineWrap = timelineWrap;
     const viewport = hud.querySelector('[data-viewport]') as HTMLDivElement;
@@ -952,6 +2085,37 @@ export class EditorApp {
       playerJson.value = JSON.stringify(this.playerConfig, null, 2);
     };
 
+    const refreshPlayerAvatars = async () => {
+      if (!this.currentGameId) {
+        playerAvatarSelect.innerHTML = '<option value="">(No Avatar)</option>';
+        return;
+      }
+      try {
+        const data = await listGameAvatars(this.currentGameId);
+        const files = (data.files ?? []).slice().sort((a, b) => a.localeCompare(b));
+        playerAvatarSelect.innerHTML = '';
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = '(No Avatar)';
+        playerAvatarSelect.appendChild(noneOption);
+        for (const file of files) {
+          const option = document.createElement('option');
+          option.value = file;
+          option.textContent = file;
+          playerAvatarSelect.appendChild(option);
+        }
+        const currentAvatar = String(this.playerConfig.avatar ?? '');
+        if (currentAvatar && files.includes(currentAvatar)) {
+          playerAvatarSelect.value = currentAvatar;
+        } else {
+          playerAvatarSelect.value = '';
+        }
+      } catch (error) {
+        playerAvatarSelect.innerHTML = '<option value="">(No Avatar)</option>';
+        if (playerStatus) playerStatus.textContent = `Avatar list failed: ${String(error)}`;
+      }
+    };
+
     const setPlayerInputs = () => {
       if (!ikOffsetInput) return;
       moveSpeedInput.value = this.playerConfig.moveSpeed.toFixed(2);
@@ -976,6 +2140,7 @@ export class EditorApp {
       camMinPitchInput.value = this.playerConfig.cameraMinPitch.toFixed(2);
       camMaxPitchInput.value = this.playerConfig.cameraMaxPitch.toFixed(2);
       camTargetSmoothInput.value = this.playerConfig.targetSmoothSpeed.toFixed(0);
+      playerAvatarSelect.value = String(this.playerConfig.avatar ?? '');
       if (rigBoneSelect && rigBoneSelect.options.length === 0) {
         for (const def of this.ragdollDefs) {
           const opt = document.createElement('option');
@@ -1034,6 +2199,7 @@ export class EditorApp {
       this.playerConfig.cameraMinPitch = Number(camMinPitchInput.value) || 0;
       this.playerConfig.cameraMaxPitch = Number(camMaxPitchInput.value) || 0;
       this.playerConfig.targetSmoothSpeed = Number(camTargetSmoothInput.value) || 0;
+      this.playerConfig.avatar = playerAvatarSelect.value || '';
       if (rigBoneSelect) {
         const name = rigBoneSelect.value;
         if (name) {
@@ -1060,11 +2226,14 @@ export class EditorApp {
 
     playerLoadButton?.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
         setPlayerInputs();
+        await refreshPlayerAvatars();
+        this.loadVrm();
         if (playerStatus) playerStatus.textContent = 'Loaded player config.';
       } catch (error) {
         if (playerStatus) playerStatus.textContent = `Load failed: ${String(error)}`;
@@ -1074,7 +2243,8 @@ export class EditorApp {
     playerSaveButton?.addEventListener('click', async () => {
       try {
         readPlayerInputs();
-        const res = await fetch('/api/player-config', {
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.playerConfig),
@@ -1086,7 +2256,41 @@ export class EditorApp {
       }
     });
 
+    playerAvatarRefreshButton?.addEventListener('click', async () => {
+      await refreshPlayerAvatars();
+      if (playerStatus) playerStatus.textContent = 'Avatar list refreshed.';
+    });
+
+    playerAvatarLoadButton?.addEventListener('click', () => {
+      this.playerConfig.avatar = playerAvatarSelect.value || '';
+      syncPlayerJson();
+      this.loadVrm();
+      if (playerStatus) {
+        playerStatus.textContent = this.playerConfig.avatar
+          ? `Loaded avatar ${this.playerConfig.avatar}`
+          : 'Avatar cleared (no model)';
+      }
+    });
+
+    playerAvatarSaveButton?.addEventListener('click', async () => {
+      try {
+        if (!this.currentGameId) throw new Error('No game selected');
+        const file = playerAvatarFileInput.files?.[0];
+        if (!file) throw new Error('No VRM/GLB file selected');
+        await uploadGameAvatar(this.currentGameId, file.name, file);
+        this.playerConfig.avatar = file.name;
+        syncPlayerJson();
+        await refreshPlayerAvatars();
+        playerAvatarSelect.value = file.name;
+        this.loadVrm();
+        if (playerStatus) playerStatus.textContent = `Uploaded and selected ${file.name}`;
+      } catch (error) {
+        if (playerStatus) playerStatus.textContent = `Avatar upload failed: ${String(error)}`;
+      }
+    });
+
     setPlayerInputs();
+    void refreshPlayerAvatars();
     [
       moveSpeedInput,
       sprintMultInput,
@@ -1110,6 +2314,7 @@ export class EditorApp {
       camMinPitchInput,
       camMaxPitchInput,
       camTargetSmoothInput,
+      playerAvatarSelect,
     ].forEach((input) => {
       input?.addEventListener('change', readPlayerInputs);
     });
@@ -1198,9 +2403,9 @@ export class EditorApp {
     });
     rigShowInput?.addEventListener('change', () => {
       if (rigShowInput.checked && !this.ragdollVisible) {
-        void this.toggleRagdollVisual(ragdollStatus);
+        void this.toggleRagdollVisual(ragdollStatus ?? undefined);
       } else if (!rigShowInput.checked && this.ragdollVisible) {
-        void this.toggleRagdollVisual(ragdollStatus);
+        void this.toggleRagdollVisual(ragdollStatus ?? undefined);
       }
     });
     rigApplyButton?.addEventListener('click', () => {
@@ -1232,11 +2437,14 @@ export class EditorApp {
     });
     void (async () => {
       try {
-        const res = await fetch('/api/player-config', { cache: 'no-store' });
+        if (!this.currentGameId) throw new Error('No game selected');
+        const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = (await res.json()) as Partial<typeof this.playerConfig>;
         this.playerConfig = { ...this.playerConfig, ...data };
         setPlayerInputs();
+        await refreshPlayerAvatars();
+        this.loadVrm();
       } catch {
         // ignore
       }
@@ -1503,45 +2711,74 @@ export class EditorApp {
 
     const refreshEngineClips = async () => {
       try {
-        const res = await fetch('/api/animations', { cache: 'no-store' });
-        if (!res.ok) {
-          setClipStatus(`List failed (${res.status})`, 'warn');
+        const animPath = this.getAnimationsPath();
+        if (!animPath) {
+          setClipStatus('No game selected', 'warn');
+          clipSelect.innerHTML = '<option value="">-- select a game first --</option>';
           return;
         }
+        console.log('Fetching animations from', animPath, '...');
+        const res = await fetch(animPath, { cache: 'no-store' });
+        console.log('Response status:', res.status, 'Content-Type:', res.headers.get('content-type'));
+
+        if (!res.ok) {
+          console.warn('Failed to fetch animations:', res.status, res.statusText);
+          setClipStatus(`API error: ${res.status}`, 'warn');
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          return;
+        }
+
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.warn('Non-JSON response from /api/animations');
+          const text = await res.text();
+          console.log('Response preview:', text.substring(0, 200));
+          setClipStatus('API returned non-JSON', 'warn');
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          return;
+        }
+
         const data = (await res.json()) as { files?: string[] };
+        console.log('Received animation files:', data);
         const files = (data.files ?? []).filter((name) => name.toLowerCase().endsWith('.json'));
         clipSelect.innerHTML = '';
-        for (const file of files) {
-          const opt = document.createElement('option');
-          opt.value = file;
-          opt.textContent = file;
-          clipSelect.appendChild(opt);
+        if (files.length === 0) {
+          clipSelect.innerHTML = '<option value="">-- No clips --</option>';
+          setClipStatus('No clips found', 'warn');
+        } else {
+          for (const file of files) {
+            const opt = document.createElement('option');
+            opt.value = file;
+            opt.textContent = file;
+            clipSelect.appendChild(opt);
+          }
+          setClipStatus(`Files: ${files.length}`, 'ok');
         }
-        setClipStatus(`Files: ${files.length}`, 'ok');
       } catch (err) {
-        setClipStatus(`List failed: ${String(err)}`, 'warn');
+        console.error('Error loading clips:', err);
+        setClipStatus(`Error: ${String(err)}`, 'warn');
+        clipSelect.innerHTML = '<option value="">-- No clips --</option>';
       }
     };
 
+    // Store reference for external access
+    this.refreshClipsFunction = refreshEngineClips;
+
+    // Add custom event listener to trigger refresh from outside
+    clipSelect.addEventListener('refreshClips', () => {
+      refreshEngineClips();
+    });
+
     saveBtn.addEventListener('click', async () => {
       const name = clipNameInput.value.trim() || this.retargetedName || 'clip';
+      const animPath = this.getAnimationsPath();
+      if (!animPath) {
+        setClipStatus('Please select a game first', 'warn');
+        return;
+      }
       try {
-        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, clip: this.clip }),
-        });
-        if (!res.ok) {
-          let detail = '';
-          try {
-            const body = await res.json();
-            detail = body?.detail ? `: ${body.detail}` : '';
-          } catch {
-            // ignore
-          }
-          setClipStatus(`Save failed (${res.status})${detail}`, 'warn');
-          return;
-        }
+        if (!this.currentGameId) throw new Error('No game selected');
+        await saveGameAnimation(this.currentGameId, name, { name, clip: this.clip });
         setClipStatus(`Saved ${name}.json`, 'ok');
         await refreshEngineClips();
       } catch (err) {
@@ -1555,20 +2792,14 @@ export class EditorApp {
         return;
       }
       this.pushUndo();
+      const animPath = this.getAnimationsPath();
+      if (!animPath) {
+        setClipStatus('Please select a game first', 'warn');
+        return;
+      }
       try {
-        const res = await fetch(`/api/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
-        if (!res.ok) {
-          let detail = '';
-          try {
-            const body = await res.json();
-            detail = body?.detail ? `: ${body.detail}` : '';
-          } catch {
-            // ignore
-          }
-          setClipStatus(`Load failed (${res.status})${detail}`, 'warn');
-          return;
-        }
-        const payload = (await res.json()) as unknown;
+        if (!this.currentGameId) throw new Error('No game selected');
+        const payload = await getGameAnimation(this.currentGameId, name);
         const data = parseClipPayload(payload);
         if (!data) return;
         this.clip = data;
@@ -1662,28 +2893,30 @@ export class EditorApp {
       this.bakeMixamoToClip(mixamoSelect.value, jsonBox, mixamoStatus);
     });
 
-    ragdollBtn.addEventListener('click', () => {
-      this.toggleRagdoll(ragdollStatus);
+    ragdollBtn?.addEventListener('click', () => {
+      void this.toggleRagdoll(ragdollStatus ?? undefined);
     });
 
-    ragdollVisualBtn.addEventListener('click', () => {
-      this.toggleRagdollVisual(ragdollStatus);
+    ragdollVisualBtn?.addEventListener('click', () => {
+      void this.toggleRagdollVisual(ragdollStatus ?? undefined);
     });
 
-    ragdollResetBtn.addEventListener('click', () => {
+    ragdollResetBtn?.addEventListener('click', () => {
       this.resetRagdollPose();
-      ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : this.ragdollVisible ? 'Ragdoll: visual' : 'Ragdoll: off';
+      if (ragdollStatus) {
+        ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : this.ragdollVisible ? 'Ragdoll: visual' : 'Ragdoll: off';
+      }
     });
 
-    ragdollRecordBtn.addEventListener('click', () => {
+    ragdollRecordBtn?.addEventListener('click', () => {
       if (!this.ragdollEnabled) return;
       this.startRagdollRecording();
-      ragdollStatus.textContent = 'Ragdoll: recording';
+      if (ragdollStatus) ragdollStatus.textContent = 'Ragdoll: recording';
     });
 
-    ragdollStopBtn.addEventListener('click', () => {
+    ragdollStopBtn?.addEventListener('click', () => {
       this.ragdollRecording = false;
-      ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
+      if (ragdollStatus) ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
     });
 
     // --- Animation left panel: bone list, history, clipboard ---
@@ -2151,7 +3384,16 @@ export class EditorApp {
   }
 
   private loadVrm() {
-    const url = '/avatars/default.vrm';
+    if (!this.currentGameId) return;
+    const avatarName = String(this.playerConfig.avatar ?? '').trim();
+    if (!avatarName) {
+      if (this.vrm) {
+        this.characterScene.remove(this.vrm.scene);
+        this.vrm = null;
+      }
+      return;
+    }
+    const url = getGameAvatarUrl(this.currentGameId, avatarName);
     this.gltfLoader.load(
       url,
       (gltf) => {
@@ -2160,90 +3402,146 @@ export class EditorApp {
       undefined,
       (err) => console.warn('VRM load failed', err),
     );
-
-    this.createStudioSet();
-
-    // Axis widget is rendered as UI overlay instead of in-world axes.
   }
 
-  private createStudioSet() {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 0.55);
-    hemi.position.set(0, 20, 0);
-    this.scene.add(hemi);
+  private createCharacterScene() {
+    // Simple lighting - clean and functional
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    this.characterScene.add(ambient);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.0);
-    key.position.set(6, 8, 4);
-    this.scene.add(key);
+    const key = new THREE.DirectionalLight(0xffffff, 0.8);
+    key.position.set(5, 10, 5);
+    this.characterScene.add(key);
 
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
-    fill.position.set(-6, 4, -2);
-    this.scene.add(fill);
+    const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
+    fill.position.set(-5, 5, -5);
+    this.characterScene.add(fill);
 
-    const rim = new THREE.DirectionalLight(0xffffff, 0.35);
-    rim.position.set(0, 6, -8);
-    this.scene.add(rim);
-
+    // Simple floor
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 30),
+      new THREE.PlaneGeometry(50, 50),
       new THREE.MeshStandardMaterial({
-        color: 0x1a202c,
+        color: 0x2a2a2a,
         roughness: 0.9,
-        metalness: 0.05,
+        metalness: 0.0,
       }),
     );
     floor.rotation.x = -Math.PI / 2;
-    this.scene.add(floor);
+    this.characterScene.add(floor);
 
-    const floorTex = this.createStudioTexture();
-    if (floorTex) {
-      (floor.material as THREE.MeshStandardMaterial).map = floorTex;
-      (floor.material as THREE.MeshStandardMaterial).needsUpdate = true;
-    }
+    // Add subtle grid
+    const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
+    this.characterScene.add(gridHelper);
+  }
 
-    const cyclo = new THREE.Mesh(
-      new THREE.CylinderGeometry(12, 12, 8, 64, 1, true),
-      new THREE.MeshStandardMaterial({
-        color: 0x0f141d,
-        side: THREE.DoubleSide,
-        roughness: 0.95,
-      }),
-    );
-    cyclo.position.set(0, 4, 0);
-    cyclo.rotation.y = Math.PI / 4;
-    this.scene.add(cyclo);
+  private createLevelScene() {
+    // Add basic lighting for level viewing
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    this.levelScene.add(ambient);
 
-    const backWall = new THREE.Mesh(
-      new THREE.PlaneGeometry(26, 12),
-      new THREE.MeshStandardMaterial({
-        color: 0x0b0f18,
-        roughness: 0.95,
-      }),
-    );
-    backWall.position.set(0, 6, -10);
-    this.scene.add(backWall);
+    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+    directional.position.set(5, 10, 5);
+    this.levelScene.add(directional);
 
-    const softboxMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      emissive: 0xffffff,
-      emissiveIntensity: 0.35,
-      roughness: 0.3,
+    // Add a grid for reference
+    const gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x222222);
+    gridHelper.position.y = 0.01; // Slightly above ground to prevent z-fighting
+    this.levelScene.add(gridHelper);
+
+    // Add player spawn marker
+    const playerMarkerGeo = new THREE.CylinderGeometry(0.6, 0.6, 2, 16);
+    const playerMarkerMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff00,
+      emissive: 0x00ff00,
+      emissiveIntensity: 0.3,
+      transparent: true,
+      opacity: 0.7
     });
-    const softbox1 = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 0.2), softboxMat);
-    softbox1.position.set(5, 4.5, 3);
-    softbox1.rotation.y = -0.6;
-    this.scene.add(softbox1);
-    const softbox2 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 0.2), softboxMat);
-    softbox2.position.set(-5, 3.8, 2.5);
-    softbox2.rotation.y = 0.7;
-    this.scene.add(softbox2);
+    const playerMarker = new THREE.Mesh(playerMarkerGeo, playerMarkerMat);
+    playerMarker.position.set(0, 1, 0); // Player spawn at origin
+    this.levelScene.add(playerMarker);
+    this.levelObstacleGroup.name = 'level-obstacles';
+    this.levelScene.add(this.levelObstacleGroup);
 
-    const cStandMat = new THREE.MeshStandardMaterial({ color: 0x2b313c, roughness: 0.7 });
-    const stand1 = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.2, 10), cStandMat);
-    stand1.position.set(4.6, 1.6, 3.2);
-    this.scene.add(stand1);
-    const stand2 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.8, 10), cStandMat);
-    stand2.position.set(-4.6, 1.4, 2.6);
-    this.scene.add(stand2);
+    // Add label for player spawn
+    const playerLabel = document.createElement('div');
+    playerLabel.textContent = 'Player Spawn';
+    playerLabel.style.cssText = 'position: absolute; color: #00ff00; font-size: 12px; pointer-events: none;';
+    // Note: Label positioning would need to be updated in render loop for proper 3D->2D projection
+
+    // Obstacles are loaded from the selected scene in the level editor UI.
+  }
+
+  private createSettingsScene() {
+    // Minimal scene for settings preview
+    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+    this.settingsScene.add(ambient);
+
+    // Add a simple preview cube for graphics settings testing
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({ color: 0x4488ff, roughness: 0.5 });
+    const cube = new THREE.Mesh(geometry, material);
+    cube.position.set(0, 1, 0);
+    this.settingsScene.add(cube);
+
+    // Add floor
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.MeshStandardMaterial({ color: 0x333333 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    this.settingsScene.add(floor);
+  }
+
+  private async loadLevelGeometry() {
+    const scenesPath = this.getScenesPath();
+    if (!scenesPath) {
+      console.log('No game selected, skipping level geometry load');
+      return;
+    }
+    try {
+      const res = await fetch(scenesPath, { cache: 'no-store' });
+      if (!res.ok) {
+        console.log('Level geometry API not available (404 expected in dev)');
+        return;
+      }
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.log('Level geometry API returned non-JSON response');
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.scenes || !Array.isArray(data.scenes)) return;
+
+      // Load the first scene's obstacles
+      const scene = data.scenes[0];
+      if (!scene || !scene.obstacles) return;
+
+      // Create meshes for obstacles
+      for (const obstacle of scene.obstacles) {
+        const geometry = new THREE.BoxGeometry(
+          obstacle.width || 1,
+          obstacle.height || 1,
+          obstacle.depth || 1
+        );
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x666666,
+          roughness: 0.8,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+          obstacle.x || 0,
+          obstacle.y || 0,
+          obstacle.z || 0
+        );
+        this.levelScene.add(mesh);
+      }
+    } catch (err) {
+      // Silently fail - level geometry is optional during development
+      console.log('Level geometry not loaded (optional)');
+    }
   }
 
   private createStudioTexture() {
@@ -2291,27 +3589,29 @@ export class EditorApp {
     }
     const vrm = gltf.userData?.vrm as VRM | undefined;
     if (!vrm) return;
+
+    // Remove old VRM from character scene
     if (this.vrm) {
-      this.scene.remove(this.vrm.scene);
+      this.characterScene.remove(this.vrm.scene);
       this.vrm = null;
     }
     if (this.skeletonHelper) {
-      this.scene.remove(this.skeletonHelper);
+      this.characterScene.remove(this.skeletonHelper);
       this.skeletonHelper = null;
     }
     if (this.boneGizmoGroup) {
-      this.scene.remove(this.boneGizmoGroup);
+      this.characterScene.remove(this.boneGizmoGroup);
       this.boneGizmoGroup = null;
       this.boneGizmos.clear();
     }
+
     this.vrm = vrm;
     vrm.humanoid.autoUpdateHumanBones = false;
     vrm.scene.position.set(0, 0, 0);
-    this.scene.add(vrm.scene);
-    if (this.skeletonHelper) {
-      this.scene.remove(this.skeletonHelper);
-      this.skeletonHelper = null;
-    }
+
+    // Add VRM to character scene
+    this.characterScene.add(vrm.scene);
+
     requestAnimationFrame(() => {
       this.resizeRenderer();
       this.fitCameraToVrm(true);
@@ -2774,6 +4074,10 @@ export class EditorApp {
 
   private handleViewportPick = (event: PointerEvent) => {
     if (!this.viewport) return;
+    if (this.currentTab === 'level') {
+      this.pickLevelObstacle(event);
+      return;
+    }
 
     // Capture stylus/pointer state
     this.pointerPressure = event.pressure ?? 0.5;
@@ -3123,11 +4427,11 @@ export class EditorApp {
     return this.rapierReady;
   }
 
-  private async toggleRagdoll(status: HTMLElement) {
+  private async toggleRagdoll(status?: HTMLElement) {
     if (!this.vrm) return;
     if (this.ragdollEnabled) {
       this.disableRagdoll();
-      status.textContent = 'Ragdoll: off';
+      if (status) status.textContent = 'Ragdoll: off';
       this.resetPose();
       return;
     }
@@ -3138,7 +4442,7 @@ export class EditorApp {
     this.ragdollEnabled = true;
     this.ragdollVisible = true;
     this.isPlaying = false;
-    status.textContent = 'Ragdoll: on';
+    if (status) status.textContent = 'Ragdoll: on';
   }
 
   private disableRagdoll() {
@@ -3153,14 +4457,14 @@ export class EditorApp {
     this.ragdollDebugMeshes = [];
   }
 
-  private async toggleRagdollVisual(status: HTMLElement) {
+  private async toggleRagdollVisual(status?: HTMLElement) {
     if (!this.vrm) return;
     if (this.ragdollVisible) {
       this.ragdollVisible = false;
       for (const mesh of this.ragdollDebugMeshes) {
         mesh.visible = false;
       }
-      status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
+      if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
       return;
     }
     await this.ensureRapier();
@@ -3179,7 +4483,7 @@ export class EditorApp {
     for (const mesh of this.ragdollDebugMeshes) {
       mesh.visible = true;
     }
-    status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: visual';
+    if (status) status.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: visual';
   }
 
   private resetRagdollPose() {

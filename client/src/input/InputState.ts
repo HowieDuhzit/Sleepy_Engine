@@ -29,6 +29,10 @@ export class InputState {
   private padVector = { x: 0, z: 0 };
   private padLook = { x: 0, y: 0 };
   private padFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
+  private touchVector = { x: 0, z: 0 };
+  private touchLook = { x: 0, y: 0 };
+  private touchFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
+  private touchActive = false;
   private padSelectPressed = false;
   private padSelectJustPressed = false;
 
@@ -49,18 +53,20 @@ export class InputState {
     const keyZ = (this.keys.forward ? 1 : 0) - (this.keys.back ? 1 : 0);
     const padX = this.padVector.x;
     const padZ = this.padVector.z;
-    const x = Math.abs(padX) > 0.01 ? padX : keyX;
-    const z = Math.abs(padZ) > 0.01 ? padZ : keyZ;
+    const touchX = this.touchVector.x;
+    const touchZ = this.touchVector.z;
+    const x = Math.abs(touchX) > 0.01 ? touchX : Math.abs(padX) > 0.01 ? padX : keyX;
+    const z = Math.abs(touchZ) > 0.01 ? touchZ : Math.abs(padZ) > 0.01 ? padZ : keyZ;
     return { x, z: -z };
   }
 
   getFlags() {
     return {
-      sprint: this.padFlags.sprint || this.keys.sprint,
-      attack: this.padFlags.attack || this.keys.attack,
-      interact: this.padFlags.interact || this.keys.interact,
-      jump: this.padFlags.jump || this.keys.jump,
-      crouch: this.padFlags.crouch || this.keys.crouch,
+      sprint: this.touchFlags.sprint || this.padFlags.sprint || this.keys.sprint,
+      attack: this.touchFlags.attack || this.padFlags.attack || this.keys.attack,
+      interact: this.touchFlags.interact || this.padFlags.interact || this.keys.interact,
+      jump: this.touchFlags.jump || this.padFlags.jump || this.keys.jump,
+      crouch: this.touchFlags.crouch || this.padFlags.crouch || this.keys.crouch,
     };
   }
 
@@ -73,6 +79,9 @@ export class InputState {
   }
 
   getLook() {
+    if (Math.abs(this.touchLook.x) > 0.001 || Math.abs(this.touchLook.y) > 0.001) {
+      return { ...this.touchLook };
+    }
     return { ...this.padLook };
   }
 
@@ -130,6 +139,26 @@ export class InputState {
     this.padSelectPressed = selectPressed;
 
     this.lastPad = `pad: ${pad.id}`;
+  }
+
+  setTouchVector(x: number, z: number) {
+    this.touchVector = { x, z };
+    this.touchActive = Math.abs(x) > 0.01 || Math.abs(z) > 0.01;
+  }
+
+  setTouchLook(x: number, y: number) {
+    this.touchLook = { x, y };
+  }
+
+  setTouchFlags(flags: Partial<typeof this.touchFlags>) {
+    this.touchFlags = { ...this.touchFlags, ...flags };
+  }
+
+  clearTouch() {
+    this.touchVector = { x: 0, z: 0 };
+    this.touchLook = { x: 0, y: 0 };
+    this.touchFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
+    this.touchActive = false;
   }
 
   private handleKey(active: boolean) {

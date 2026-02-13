@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Create required directories
-mkdir -p /app/animations /app/config /app/data
+mkdir -p /app/projects /app/data
 mkdir -p /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/uwsgi /tmp/nginx/scgi
 
 # Start game server in background
