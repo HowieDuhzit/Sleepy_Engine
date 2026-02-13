@@ -339,6 +339,19 @@ body,
   pointer-events: auto;
 }
 
+/* Mode-specific viewport overlays */
+.editor-ui:not(.mode-animation) .overlay-bottom-left {
+  display: none !important;
+}
+
+.editor-ui:not(.mode-animation) .overlay-stack {
+  display: none !important;
+}
+
+.editor-ui:not(.mode-animation) .bone-overlay {
+  display: none !important;
+}
+
 .overlay-tabs {
   display: flex;
   gap: 6px;
@@ -1868,6 +1881,43 @@ body {
   height: 160px;
 }
 
+/* Per-editor mode sizing/profile */
+.editor-react-layout[data-tab='animation'] .editor-react-main {
+  inset: 52px 8px 174px;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.editor-react-layout[data-tab='animation'] .editor-react-bottom {
+  height: 164px;
+}
+
+.editor-react-layout[data-tab='player'] .editor-react-main {
+  inset: 52px 8px 206px;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.editor-react-layout[data-tab='player'] .editor-react-bottom {
+  height: 196px;
+}
+
+.editor-react-layout[data-tab='level'] .editor-react-main {
+  inset: 52px 8px 206px;
+  grid-template-columns: 330px minmax(0, 1fr);
+}
+
+.editor-react-layout[data-tab='level'] .editor-react-bottom {
+  height: 196px;
+}
+
+.editor-react-layout[data-tab='settings'] .editor-react-main {
+  inset: 52px 8px 8px;
+  grid-template-columns: 340px minmax(0, 1fr);
+}
+
+.editor-react-layout[data-tab='settings'] .editor-react-bottom {
+  display: none;
+}
+
 .editor-ui.external-shell {
   grid-template-rows: minmax(0, 1fr);
 }
@@ -1933,6 +1983,22 @@ body {
     bottom: 6px;
     height: 158px;
   }
+
+  .editor-react-layout[data-tab='player'] .editor-react-main,
+  .editor-react-layout[data-tab='level'] .editor-react-main {
+    inset: 86px 6px 198px;
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .editor-react-layout[data-tab='player'] .editor-react-bottom,
+  .editor-react-layout[data-tab='level'] .editor-react-bottom {
+    height: 188px;
+  }
+
+  .editor-react-layout[data-tab='settings'] .editor-react-main {
+    inset: 86px 6px 6px;
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 800px) {
@@ -1948,6 +2014,22 @@ body {
 
   .editor-react-bottom {
     height: 168px;
+  }
+
+  .editor-react-layout[data-tab='player'] .editor-react-main,
+  .editor-react-layout[data-tab='level'] .editor-react-main {
+    inset: 118px 6px 198px;
+    grid-template-rows: 188px minmax(0, 1fr);
+  }
+
+  .editor-react-layout[data-tab='player'] .editor-react-bottom,
+  .editor-react-layout[data-tab='level'] .editor-react-bottom {
+    height: 188px;
+  }
+
+  .editor-react-layout[data-tab='settings'] .editor-react-main {
+    inset: 118px 6px 6px;
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .game-react-header {

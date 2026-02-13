@@ -43,7 +43,7 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
 
   return h(
     'div',
-    { className: 'editor-react-layout' },
+    { className: 'editor-react-layout', 'data-tab': tab },
     h(
       UiCard,
       { className: 'react-mode-header editor-react-header' },
