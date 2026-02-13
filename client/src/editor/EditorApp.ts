@@ -4900,6 +4900,39 @@ export class EditorApp {
       rightLowerLeg: 0.9,
       rightFoot: 0.75,
     };
+    const COLLISION_GROUP_ENV = 0x0001;
+    const COLLISION_GROUP_TORSO = 0x0002;
+    const COLLISION_GROUP_ARM_L = 0x0004;
+    const COLLISION_GROUP_ARM_R = 0x0008;
+    const COLLISION_GROUP_LEG_L = 0x0010;
+    const COLLISION_GROUP_LEG_R = 0x0020;
+    const getBodyGroup = (name: string) => {
+      if (
+        name === 'hips' ||
+        name === 'spine' ||
+        name === 'chest' ||
+        name === 'upperChest' ||
+        name === 'neck' ||
+        name === 'head'
+      ) {
+        return COLLISION_GROUP_TORSO;
+      }
+      if (name.startsWith('leftUpperArm') || name.startsWith('leftLowerArm') || name.startsWith('leftHand')) {
+        return COLLISION_GROUP_ARM_L;
+      }
+      if (name.startsWith('rightUpperArm') || name.startsWith('rightLowerArm') || name.startsWith('rightHand')) {
+        return COLLISION_GROUP_ARM_R;
+      }
+      if (name.startsWith('leftUpperLeg') || name.startsWith('leftLowerLeg') || name.startsWith('leftFoot')) {
+        return COLLISION_GROUP_LEG_L;
+      }
+      if (name.startsWith('rightUpperLeg') || name.startsWith('rightLowerLeg') || name.startsWith('rightFoot')) {
+        return COLLISION_GROUP_LEG_R;
+      }
+      return COLLISION_GROUP_TORSO;
+    };
+    const allBodyGroups =
+      COLLISION_GROUP_TORSO | COLLISION_GROUP_ARM_L | COLLISION_GROUP_ARM_R | COLLISION_GROUP_LEG_L | COLLISION_GROUP_LEG_R;
     const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
       leftLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
       rightLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
@@ -5019,10 +5052,12 @@ export class EditorApp {
         .setAngularDamping(angularDamping)
         .setCcdEnabled(true);
       const body = world.createRigidBody(bodyDesc);
+      const membership = getBodyGroup(def.name);
+      const filter = COLLISION_GROUP_ENV | (allBodyGroups & ~membership);
       const collider = (
         halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
       )
-        .setCollisionGroups((0x0002 << 16) | 0x0001);
+        .setCollisionGroups((membership << 16) | filter);
       collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(1.6).setRestitution(0);
       if (RAPIER.CoefficientCombineRule) {
         collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
