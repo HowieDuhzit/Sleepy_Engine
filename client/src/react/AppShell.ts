@@ -1,10 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { GameApp } from '../game/GameApp';
-import { EditorApp } from '../editor/EditorApp';
-import { createSplash } from '../ui/Splash';
+import React, { useState } from 'react';
 import { MainMenu } from './MainMenu';
-
-type LegacyApp = { start: () => void; stop: () => void };
+import { SplashOverlay } from './SplashOverlay';
+import { GameView } from './GameView';
+import { EditorView } from './EditorView';
 
 type AppState =
   | { mode: 'menu' }
@@ -12,79 +10,30 @@ type AppState =
   | { mode: 'editor'; gameId?: string };
 
 export function AppShell() {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const appRef = useRef<LegacyApp | null>(null);
   const [state, setState] = useState<AppState>({ mode: 'menu' });
-
-  useEffect(() => {
-    const splash = createSplash();
-    document.body.appendChild(splash);
-
-    const dismissSplash = () => {
-      if (!document.body.contains(splash)) return;
-      splash.classList.add('splash-hide');
-      window.setTimeout(() => splash.remove(), 650);
-    };
-
-    const timer = window.setTimeout(dismissSplash, 5000);
-    return () => {
-      window.clearTimeout(timer);
-      if (document.body.contains(splash)) {
-        splash.remove();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-
-    appRef.current?.stop();
-    appRef.current = null;
-    host.innerHTML = '';
-
-    if (state.mode === 'menu') {
-      return;
-    }
-
-    if (state.mode === 'game') {
-      const app = new GameApp(host, state.scene, state.gameId, () => setState({ mode: 'menu' }));
-      appRef.current = app;
-      app.start();
-      return;
-    }
-
-    const app = new EditorApp(host, state.gameId, () => setState({ mode: 'menu' }));
-    appRef.current = app;
-    app.start();
-  }, [state]);
-
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      appRef.current?.stop();
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      appRef.current?.stop();
-      appRef.current = null;
-    };
-  }, []);
 
   return React.createElement(
     React.Fragment,
     null,
+    React.createElement(SplashOverlay),
     state.mode === 'menu'
       ? React.createElement(MainMenu, {
           onPlay: (gameId: string, scene: string) => setState({ mode: 'game', gameId, scene }),
           onEditor: (gameId: string) => setState({ mode: 'editor', gameId }),
         })
       : null,
-    React.createElement('div', {
-      ref: hostRef,
-      className: 'app-shell',
-      style: { display: state.mode === 'menu' ? 'none' : 'block' },
-    })
+    state.mode === 'game'
+      ? React.createElement(GameView, {
+          gameId: state.gameId,
+          scene: state.scene,
+          onBackToMenu: () => setState({ mode: 'menu' }),
+        })
+      : null,
+    state.mode === 'editor'
+      ? React.createElement(EditorView, {
+          gameId: state.gameId,
+          onBackToMenu: () => setState({ mode: 'menu' }),
+        })
+      : null
   );
 }
