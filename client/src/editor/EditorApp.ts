@@ -4918,12 +4918,20 @@ export class EditorApp {
     for (const def of defs) {
       if (def.parent && !childByParent.has(def.parent)) childByParent.set(def.parent, def.name);
     }
+    const terminalChildFallback: Record<string, string> = {
+      leftFoot: 'leftToes',
+      rightFoot: 'rightToes',
+    };
+    const terminalAxisHintLocal: Record<string, THREE.Vector3> = {
+      leftFoot: new THREE.Vector3(0, 0, 1),
+      rightFoot: new THREE.Vector3(0, 0, 1),
+    };
 
     for (const def of defs) {
       const bone = getBone(def.name);
       if (!bone) continue;
       bone.getWorldPosition(tmpVec); // start at this joint
-      const childName = childByParent.get(def.name);
+      const childName = childByParent.get(def.name) ?? terminalChildFallback[def.name];
       const child = childName ? getBone(childName) : null;
       const axis = new THREE.Vector3(0, 1, 0);
       const start = tmpVec.clone();
@@ -4937,7 +4945,11 @@ export class EditorApp {
       } else {
         const parentName = def.parent;
         const parent = parentName ? getBone(parentName) : null;
-        if (parent) {
+        const axisHint = terminalAxisHintLocal[def.name];
+        if (axisHint) {
+          bone.getWorldQuaternion(tmpQuat2);
+          axis.copy(axisHint).applyQuaternion(tmpQuat2).normalize();
+        } else if (parent) {
           parent.getWorldPosition(tmpVec3);
           axis.copy(start).sub(tmpVec3);
           if (axis.lengthSq() > 1e-8) {
