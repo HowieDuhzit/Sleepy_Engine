@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getGameScenes, listGames } from '../services/game-api';
-import { PSXSettingsPanel } from '../ui/PSXSettingsPanel';
+import { createRoot, type Root } from 'react-dom/client';
+import { ReactPSXSettingsPanel } from './ReactPSXSettingsPanel';
 import { UiButton, UiCard, UiField, UiSelect } from './ui-primitives';
 
 type MainMenuProps = {
@@ -18,6 +19,7 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
   const [currentStartScene, setCurrentStartScene] = useState<string>('main');
   const [showSettings, setShowSettings] = useState(false);
   const settingsHostRef = useRef<HTMLDivElement | null>(null);
+  const settingsRootRef = useRef<Root | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -76,12 +78,13 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
     const host = settingsHostRef.current;
     if (!host) return;
 
-    host.innerHTML = '';
-    const panel = new PSXSettingsPanel();
-    host.appendChild(panel.getElement());
+    const root = createRoot(host);
+    settingsRootRef.current = root;
+    root.render(h(ReactPSXSettingsPanel));
 
     return () => {
-      host.innerHTML = '';
+      settingsRootRef.current?.unmount();
+      settingsRootRef.current = null;
     };
   }, [showSettings]);
 
