@@ -5269,6 +5269,7 @@ export class EditorApp {
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
         .setLinearDamping(linearDamping)
         .setAngularDamping(angularDamping)
+        .setCanSleep(true)
         .setCcdEnabled(true);
       const body = world.createRigidBody(bodyDesc);
       const membership = getBodyGroup(def.name);
@@ -5428,6 +5429,7 @@ export class EditorApp {
       parentQuatInv.copy(parentQuat).invert();
       relQuat.copy(parentQuatInv).multiply(childQuat).normalize();
       let changed = false;
+      const limitEpsilon = 0.03;
       if (ragBone.hingeAxisLocal) {
         const min = ragBone.hingeMin ?? -Math.PI;
         const max = ragBone.hingeMax ?? Math.PI;
@@ -5439,7 +5441,7 @@ export class EditorApp {
           swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
           const signedAngle = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
           const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
-          if (Math.abs(clampedAngle - signedAngle) > 1e-4) {
+          if (Math.abs(clampedAngle - signedAngle) > limitEpsilon) {
             twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
             clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
             relQuat.copy(clampedRelQuat);
@@ -5459,7 +5461,7 @@ export class EditorApp {
           const signedTwist = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
           const clampedTwist = THREE.MathUtils.clamp(signedTwist, -twistLimit, twistLimit);
           const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swingQuat.w, -1, 1));
-          if (Math.abs(clampedTwist - signedTwist) > 1e-4 || swingAngle > swingLimit + 1e-4) {
+          if (Math.abs(clampedTwist - signedTwist) > limitEpsilon || swingAngle > swingLimit + limitEpsilon) {
             twistQuat.setFromAxisAngle(axisLocal, clampedTwist);
             if (swingAngle > 1e-5 && swingLimit < Math.PI) {
               const scale = swingLimit / swingAngle;
@@ -5514,6 +5516,14 @@ export class EditorApp {
       if (angLen > maxAngVel) {
         ang.multiplyScalar(maxAngVel / angLen);
         ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
+      }
+      const settleLin = Math.hypot(lin.x, lin.z);
+      const settleY = Math.abs(lin.y);
+      const settleAng = ang.length();
+      if (settleLin < 0.05 && settleY < 0.06 && settleAng < 0.08) {
+        ragBone.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        ragBone.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        ragBone.body.sleep();
       }
     }
     const parentWorld = new THREE.Quaternion();
