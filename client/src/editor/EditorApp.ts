@@ -471,15 +471,21 @@ export class EditorApp {
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
     { name: 'chest', parent: 'spine' },
-    { name: 'head', parent: 'chest' },
-    { name: 'leftUpperArm', parent: 'chest' },
+    { name: 'upperChest', parent: 'chest' },
+    { name: 'neck', parent: 'upperChest' },
+    { name: 'head', parent: 'neck' },
+    { name: 'leftUpperArm', parent: 'upperChest' },
     { name: 'leftLowerArm', parent: 'leftUpperArm' },
-    { name: 'rightUpperArm', parent: 'chest' },
+    { name: 'leftHand', parent: 'leftLowerArm' },
+    { name: 'rightUpperArm', parent: 'upperChest' },
     { name: 'rightLowerArm', parent: 'rightUpperArm' },
+    { name: 'rightHand', parent: 'rightLowerArm' },
     { name: 'leftUpperLeg', parent: 'hips' },
     { name: 'leftLowerLeg', parent: 'leftUpperLeg' },
+    { name: 'leftFoot', parent: 'leftLowerLeg' },
     { name: 'rightUpperLeg', parent: 'hips' },
     { name: 'rightLowerLeg', parent: 'rightUpperLeg' },
+    { name: 'rightFoot', parent: 'rightLowerLeg' },
   ];
   private playerConfig = {
     avatar: 'default.vrm',
@@ -4802,46 +4808,105 @@ export class EditorApp {
     const spineDamping = 9;
     const fallbackLengths: Record<string, number> = {
       hips: 0.28,
-      spine: 0.24,
-      chest: 0.22,
+      spine: 0.22,
+      chest: 0.2,
+      upperChest: 0.18,
+      neck: 0.12,
       head: 0.2,
-      leftUpperArm: 0.36,
-      leftLowerArm: 0.34,
-      rightUpperArm: 0.36,
-      rightLowerArm: 0.34,
-      leftUpperLeg: 0.72,
-      leftLowerLeg: 0.7,
-      rightUpperLeg: 0.72,
-      rightLowerLeg: 0.7,
+      leftUpperArm: 0.34,
+      leftLowerArm: 0.28,
+      leftHand: 0.16,
+      rightUpperArm: 0.34,
+      rightLowerArm: 0.28,
+      rightHand: 0.16,
+      leftUpperLeg: 0.46,
+      leftLowerLeg: 0.44,
+      leftFoot: 0.2,
+      rightUpperLeg: 0.46,
+      rightLowerLeg: 0.44,
+      rightFoot: 0.2,
     };
     const segmentRadii: Record<string, number> = {
       hips: 0.12,
       spine: 0.08,
-      chest: 0.095,
+      chest: 0.09,
+      upperChest: 0.085,
+      neck: 0.055,
       head: 0.095,
       leftUpperArm: 0.04,
       leftLowerArm: 0.035,
+      leftHand: 0.032,
       rightUpperArm: 0.04,
       rightLowerArm: 0.035,
+      rightHand: 0.032,
       leftUpperLeg: 0.06,
       leftLowerLeg: 0.05,
+      leftFoot: 0.045,
       rightUpperLeg: 0.06,
       rightLowerLeg: 0.05,
+      rightFoot: 0.045,
+    };
+    const segmentDensity: Record<string, number> = {
+      hips: 70,
+      spine: 65,
+      chest: 62,
+      upperChest: 58,
+      neck: 44,
+      head: 48,
+      leftUpperArm: 36,
+      leftLowerArm: 32,
+      leftHand: 26,
+      rightUpperArm: 36,
+      rightLowerArm: 32,
+      rightHand: 26,
+      leftUpperLeg: 50,
+      leftLowerLeg: 44,
+      leftFoot: 34,
+      rightUpperLeg: 50,
+      rightLowerLeg: 44,
+      rightFoot: 34,
     };
     const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
-      leftLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
-      rightLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
-      leftLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
-      rightLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
+      leftLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
+      rightLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
+      leftLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.35 },
+      rightLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.35 },
+    };
+    const jointTuning: Record<string, { stiffness: number; damping: number }> = {
+      spine: { stiffness: 105, damping: 10 },
+      chest: { stiffness: 105, damping: 10 },
+      upperChest: { stiffness: 105, damping: 10 },
+      neck: { stiffness: 80, damping: 9 },
+      head: { stiffness: 78, damping: 9 },
+      leftUpperArm: { stiffness: 68, damping: 8 },
+      rightUpperArm: { stiffness: 68, damping: 8 },
+      leftLowerArm: { stiffness: 74, damping: 8 },
+      rightLowerArm: { stiffness: 74, damping: 8 },
+      leftHand: { stiffness: 56, damping: 7 },
+      rightHand: { stiffness: 56, damping: 7 },
+      leftUpperLeg: { stiffness: 82, damping: 9 },
+      rightUpperLeg: { stiffness: 82, damping: 9 },
+      leftLowerLeg: { stiffness: 86, damping: 9 },
+      rightLowerLeg: { stiffness: 86, damping: 9 },
+      leftFoot: { stiffness: 62, damping: 8 },
+      rightFoot: { stiffness: 62, damping: 8 },
     };
     const ballJointLimits: Record<string, { swingDeg: number; twistDeg: number }> = {
+      spine: { swingDeg: 20, twistDeg: 20 },
+      chest: { swingDeg: 22, twistDeg: 22 },
+      upperChest: { swingDeg: 25, twistDeg: 28 },
+      neck: { swingDeg: 35, twistDeg: 40 },
       head: { swingDeg: 45, twistDeg: 55 },
-      leftUpperArm: { swingDeg: 105, twistDeg: 85 },
-      rightUpperArm: { swingDeg: 105, twistDeg: 85 },
-      leftUpperLeg: { swingDeg: 95, twistDeg: 55 },
-      rightUpperLeg: { swingDeg: 95, twistDeg: 55 },
+      leftUpperArm: { swingDeg: 105, twistDeg: 80 },
+      rightUpperArm: { swingDeg: 105, twistDeg: 80 },
+      leftHand: { swingDeg: 35, twistDeg: 35 },
+      rightHand: { swingDeg: 35, twistDeg: 35 },
+      leftUpperLeg: { swingDeg: 95, twistDeg: 50 },
+      rightUpperLeg: { swingDeg: 95, twistDeg: 50 },
+      leftFoot: { swingDeg: 35, twistDeg: 20 },
+      rightFoot: { swingDeg: 35, twistDeg: 20 },
     };
-    const spineJointChildren = new Set(['spine', 'chest', 'head']);
+    const spineJointChildren = new Set(['spine', 'chest', 'upperChest', 'neck', 'head']);
 
     const rootBone = getBone('hips');
     if (rootBone) {
@@ -4897,17 +4962,21 @@ export class EditorApp {
       radius = Math.min(radius, segmentLength * 0.35);
       radius = Math.max(0.02, radius);
       const halfHeight = Math.max(0, segmentLength * 0.5 - radius);
+      const limb = def.name.includes('Arm') || def.name.includes('Leg') || def.name.includes('Hand') || def.name.includes('Foot');
+      const axial = def.name === 'hips' || def.name === 'spine' || def.name === 'chest' || def.name === 'upperChest';
+      const linearDamping = axial ? 2.6 : limb ? 2.0 : 2.2;
+      const angularDamping = axial ? 3.2 : limb ? 2.6 : 2.8;
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
-        .setLinearDamping(2)
-        .setAngularDamping(2.8);
+        .setLinearDamping(linearDamping)
+        .setAngularDamping(angularDamping);
       const body = world.createRigidBody(bodyDesc);
       const collider = (
         halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
       )
         .setCollisionGroups((0x0002 << 16) | 0x0001);
-      collider.setDensity(45);
+      collider.setDensity(segmentDensity[def.name] ?? 40);
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
         color: 0x6ee7b7,
@@ -4988,8 +5057,9 @@ export class EditorApp {
       const anchor2 = new RAPIER.Vector3(anchorChild.x, anchorChild.y, anchorChild.z);
       const hinge = hingeJoints[def.name];
       const isSpineJoint = spineJointChildren.has(def.name);
-      const stiffness = isSpineJoint ? spineStiffness : jointStiffness;
-      const damping = isSpineJoint ? spineDamping : jointDamping;
+      const preset = jointTuning[def.name];
+      const stiffness = preset?.stiffness ?? (isSpineJoint ? spineStiffness : jointStiffness);
+      const damping = preset?.damping ?? (isSpineJoint ? spineDamping : jointDamping);
       let jointData: RAPIER.JointData;
       if (hinge) {
         const axis = new RAPIER.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]);
