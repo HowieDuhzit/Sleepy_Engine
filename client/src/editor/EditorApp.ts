@@ -515,9 +515,9 @@ export class EditorApp {
     targetSmoothSpeed: 15,
     ragdollMuscle: {
       enabled: true,
-      stiffness: 180,
-      damping: 22,
-      maxTorque: 220,
+      stiffness: 70,
+      damping: 16,
+      maxTorque: 70,
     },
     ragdollRig: {} as Record<
       string,
@@ -5116,9 +5116,11 @@ export class EditorApp {
         revoluteJoint.setLimits?.(hinge.min, hinge.max);
       }
       childBone.parent = parentBone;
-      const parentWorldQuat = parentBone.bone.getWorldQuaternion(new THREE.Quaternion());
-      const childWorldQuat = childBone.bone.getWorldQuaternion(new THREE.Quaternion());
-      childBone.targetLocalQuat = parentWorldQuat.invert().multiply(childWorldQuat).normalize();
+      const pRotInit = parentBody.rotation();
+      const cRotInit = childBody.rotation();
+      const parentBodyQuat = new THREE.Quaternion(pRotInit.x, pRotInit.y, pRotInit.z, pRotInit.w);
+      const childBodyQuat = new THREE.Quaternion(cRotInit.x, cRotInit.y, cRotInit.z, cRotInit.w);
+      childBone.targetLocalQuat = parentBodyQuat.invert().multiply(childBodyQuat).normalize();
     }
   }
 
@@ -5286,6 +5288,7 @@ export class EditorApp {
       axisLocal.multiplyScalar(1 / axisLen);
       let angle = 2 * Math.atan2(axisLen, errorQuat.w);
       if (angle > Math.PI) angle -= Math.PI * 2;
+      angle = THREE.MathUtils.clamp(angle, -1.1, 1.1);
       axisWorld.copy(axisLocal).applyQuaternion(parentQuat).normalize();
       const pVel = ragBone.parent.body.angvel();
       const cVel = ragBone.body.angvel();
@@ -5299,7 +5302,9 @@ export class EditorApp {
       const maxTorque = maxTorqueBase * muscleScale;
       const torqueMag = THREE.MathUtils.clamp(kp * angle - kd * axisVel, -maxTorque, maxTorque);
       if (!Number.isFinite(torqueMag) || Math.abs(torqueMag) < 1e-4) continue;
-      const impulse = axisWorld.clone().multiplyScalar(torqueMag * delta);
+      const maxImpulse = maxTorque * delta * 0.7;
+      const impulseMag = THREE.MathUtils.clamp(torqueMag * delta, -maxImpulse, maxImpulse);
+      const impulse = axisWorld.clone().multiplyScalar(impulseMag);
       ragBone.body.applyTorqueImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
       ragBone.parent.body.applyTorqueImpulse({ x: -impulse.x, y: -impulse.y, z: -impulse.z }, true);
     }
