@@ -519,6 +519,25 @@ export class EditorApp {
       damping: 16,
       maxTorque: 70,
     },
+    ragdollSim: {
+      jointStiffnessScale: 1,
+      jointDampingScale: 1,
+      bodyLinearDampingScale: 1,
+      bodyAngularDampingScale: 1,
+      groundFriction: 2.2,
+      bodyFriction: 1.6,
+      maxSubsteps: 4,
+      substepHz: 90,
+      limitBlend: 0.45,
+      linearBleed: 0.985,
+      angularBleed: 0.88,
+      groundSlideDamping: 0.92,
+      groundSlideYThreshold: 0.5,
+      groundSlideDeadzone: 0.08,
+      maxLinearVelocity: 16,
+      maxAngularVelocity: 12,
+      startImpulseY: -0.35,
+    },
     ragdollRig: {} as Record<
       string,
       { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
@@ -1270,6 +1289,30 @@ export class EditorApp {
       '<button data-rig-reset>Reset Rig</button>',
       '</div>',
       '</div>',
+      '<div class="panel">',
+      '<div class="panel-title">Ragdoll Simulation</div>',
+      '<label class="field"><span>Active Muscles</span><input data-rsim-muscle-enabled type="checkbox" /></label>',
+      '<label class="field"><span>Muscle Stiffness</span><input data-rsim-muscle-stiffness type="number" step="1" min="0" /></label>',
+      '<label class="field"><span>Muscle Damping</span><input data-rsim-muscle-damping type="number" step="1" min="0" /></label>',
+      '<label class="field"><span>Muscle Max Torque</span><input data-rsim-muscle-max-torque type="number" step="1" min="0" /></label>',
+      '<label class="field"><span>Joint Stiffness Scale</span><input data-rsim-joint-stiffness-scale type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Joint Damping Scale</span><input data-rsim-joint-damping-scale type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Body Linear Damp Scale</span><input data-rsim-body-lin-scale type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Body Angular Damp Scale</span><input data-rsim-body-ang-scale type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Ground Friction</span><input data-rsim-ground-friction type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Body Friction</span><input data-rsim-body-friction type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Max Substeps</span><input data-rsim-max-substeps type="number" step="1" min="1" max="8" /></label>',
+      '<label class="field"><span>Substep Hz</span><input data-rsim-substep-hz type="number" step="1" min="30" max="240" /></label>',
+      '<label class="field"><span>Limit Blend</span><input data-rsim-limit-blend type="number" step="0.05" min="0" max="1" /></label>',
+      '<label class="field"><span>Linear Bleed</span><input data-rsim-linear-bleed type="number" step="0.001" min="0.8" max="1" /></label>',
+      '<label class="field"><span>Angular Bleed</span><input data-rsim-angular-bleed type="number" step="0.001" min="0.5" max="1" /></label>',
+      '<label class="field"><span>Ground Slide Damping</span><input data-rsim-slide-damp type="number" step="0.01" min="0" max="1" /></label>',
+      '<label class="field"><span>Ground Y Threshold</span><input data-rsim-ground-y type="number" step="0.05" min="0" /></label>',
+      '<label class="field"><span>Ground Deadzone</span><input data-rsim-ground-deadzone type="number" step="0.01" min="0" /></label>',
+      '<label class="field"><span>Max Linear Vel</span><input data-rsim-max-lin type="number" step="0.5" min="0" /></label>',
+      '<label class="field"><span>Max Angular Vel</span><input data-rsim-max-ang type="number" step="0.5" min="0" /></label>',
+      '<label class="field"><span>Start Impulse Y</span><input data-rsim-start-impulse type="number" step="0.05" /></label>',
+      '</div>',
       '</div>',
       '<div class="editor-left" data-tab-panel="level" style="display:none;">',
       '<div class="panel">',
@@ -1758,6 +1801,27 @@ export class EditorApp {
     const rigTwist = hud.querySelector('[data-rig-twist]') as HTMLInputElement;
     const rigApplyButton = hud.querySelector('[data-rig-apply]') as HTMLButtonElement;
     const rigResetButton = hud.querySelector('[data-rig-reset]') as HTMLButtonElement;
+    const rsimMuscleEnabled = hud.querySelector('[data-rsim-muscle-enabled]') as HTMLInputElement;
+    const rsimMuscleStiffness = hud.querySelector('[data-rsim-muscle-stiffness]') as HTMLInputElement;
+    const rsimMuscleDamping = hud.querySelector('[data-rsim-muscle-damping]') as HTMLInputElement;
+    const rsimMuscleMaxTorque = hud.querySelector('[data-rsim-muscle-max-torque]') as HTMLInputElement;
+    const rsimJointStiffnessScale = hud.querySelector('[data-rsim-joint-stiffness-scale]') as HTMLInputElement;
+    const rsimJointDampingScale = hud.querySelector('[data-rsim-joint-damping-scale]') as HTMLInputElement;
+    const rsimBodyLinScale = hud.querySelector('[data-rsim-body-lin-scale]') as HTMLInputElement;
+    const rsimBodyAngScale = hud.querySelector('[data-rsim-body-ang-scale]') as HTMLInputElement;
+    const rsimGroundFriction = hud.querySelector('[data-rsim-ground-friction]') as HTMLInputElement;
+    const rsimBodyFriction = hud.querySelector('[data-rsim-body-friction]') as HTMLInputElement;
+    const rsimMaxSubsteps = hud.querySelector('[data-rsim-max-substeps]') as HTMLInputElement;
+    const rsimSubstepHz = hud.querySelector('[data-rsim-substep-hz]') as HTMLInputElement;
+    const rsimLimitBlend = hud.querySelector('[data-rsim-limit-blend]') as HTMLInputElement;
+    const rsimLinearBleed = hud.querySelector('[data-rsim-linear-bleed]') as HTMLInputElement;
+    const rsimAngularBleed = hud.querySelector('[data-rsim-angular-bleed]') as HTMLInputElement;
+    const rsimSlideDamp = hud.querySelector('[data-rsim-slide-damp]') as HTMLInputElement;
+    const rsimGroundY = hud.querySelector('[data-rsim-ground-y]') as HTMLInputElement;
+    const rsimGroundDeadzone = hud.querySelector('[data-rsim-ground-deadzone]') as HTMLInputElement;
+    const rsimMaxLin = hud.querySelector('[data-rsim-max-lin]') as HTMLInputElement;
+    const rsimMaxAng = hud.querySelector('[data-rsim-max-ang]') as HTMLInputElement;
+    const rsimStartImpulse = hud.querySelector('[data-rsim-start-impulse]') as HTMLInputElement;
     const playerLoadButton = hud.querySelector('[data-player-load]') as HTMLButtonElement;
     const playerSaveButton = hud.querySelector('[data-player-save]') as HTMLButtonElement;
     const sceneList = hud.querySelector('[data-scene-list]') as HTMLSelectElement;
@@ -2203,27 +2267,51 @@ export class EditorApp {
       if (rigShowInput) rigShowInput.checked = this.ragdollVisible || this.ragdollEnabled;
       if (rigBoneSelect) {
         const name = rigBoneSelect.value || this.ragdollDefs[0]?.name || '';
-        if (!name) return;
-        rigBoneSelect.value = name;
-        const cfg = this.playerConfig.ragdollRig[name] ?? {
-          radiusScale: 1,
-          lengthScale: 1,
-          offset: { x: 0, y: 0, z: 0 },
-          rot: { x: 0, y: 0, z: 0 },
-          swingLimit: 45,
-          twistLimit: 35,
-        };
-        rigRadiusInput.value = String(cfg.radiusScale ?? 1);
-        rigLengthInput.value = String(cfg.lengthScale ?? 1);
-        rigOffX.value = String(cfg.offset?.x ?? 0);
-        rigOffY.value = String(cfg.offset?.y ?? 0);
-        rigOffZ.value = String(cfg.offset?.z ?? 0);
-        rigRotX.value = String(cfg.rot?.x ?? 0);
-        rigRotY.value = String(cfg.rot?.y ?? 0);
-        rigRotZ.value = String(cfg.rot?.z ?? 0);
-        rigSwing.value = String(cfg.swingLimit ?? 45);
-        rigTwist.value = String(cfg.twistLimit ?? 35);
+        if (name) {
+          rigBoneSelect.value = name;
+          const cfg = this.playerConfig.ragdollRig[name] ?? {
+            radiusScale: 1,
+            lengthScale: 1,
+            offset: { x: 0, y: 0, z: 0 },
+            rot: { x: 0, y: 0, z: 0 },
+            swingLimit: 45,
+            twistLimit: 35,
+          };
+          rigRadiusInput.value = String(cfg.radiusScale ?? 1);
+          rigLengthInput.value = String(cfg.lengthScale ?? 1);
+          rigOffX.value = String(cfg.offset?.x ?? 0);
+          rigOffY.value = String(cfg.offset?.y ?? 0);
+          rigOffZ.value = String(cfg.offset?.z ?? 0);
+          rigRotX.value = String(cfg.rot?.x ?? 0);
+          rigRotY.value = String(cfg.rot?.y ?? 0);
+          rigRotZ.value = String(cfg.rot?.z ?? 0);
+          rigSwing.value = String(cfg.swingLimit ?? 45);
+          rigTwist.value = String(cfg.twistLimit ?? 35);
+        }
       }
+      const muscle = this.getRagdollMuscleConfig();
+      const sim = this.getRagdollSimConfig();
+      rsimMuscleEnabled.checked = muscle.enabled;
+      rsimMuscleStiffness.value = String(muscle.stiffness);
+      rsimMuscleDamping.value = String(muscle.damping);
+      rsimMuscleMaxTorque.value = String(muscle.maxTorque);
+      rsimJointStiffnessScale.value = String(sim.jointStiffnessScale);
+      rsimJointDampingScale.value = String(sim.jointDampingScale);
+      rsimBodyLinScale.value = String(sim.bodyLinearDampingScale);
+      rsimBodyAngScale.value = String(sim.bodyAngularDampingScale);
+      rsimGroundFriction.value = String(sim.groundFriction);
+      rsimBodyFriction.value = String(sim.bodyFriction);
+      rsimMaxSubsteps.value = String(sim.maxSubsteps);
+      rsimSubstepHz.value = String(sim.substepHz);
+      rsimLimitBlend.value = String(sim.limitBlend);
+      rsimLinearBleed.value = String(sim.linearBleed);
+      rsimAngularBleed.value = String(sim.angularBleed);
+      rsimSlideDamp.value = String(sim.groundSlideDamping);
+      rsimGroundY.value = String(sim.groundSlideYThreshold);
+      rsimGroundDeadzone.value = String(sim.groundSlideDeadzone);
+      rsimMaxLin.value = String(sim.maxLinearVelocity);
+      rsimMaxAng.value = String(sim.maxAngularVelocity);
+      rsimStartImpulse.value = String(sim.startImpulseY);
       syncPlayerJson();
     };
 
@@ -2251,6 +2339,31 @@ export class EditorApp {
       this.playerConfig.cameraMaxPitch = Number(camMaxPitchInput.value) || 0;
       this.playerConfig.targetSmoothSpeed = Number(camTargetSmoothInput.value) || 0;
       this.playerConfig.avatar = playerAvatarSelect.value || '';
+      this.playerConfig.ragdollMuscle = {
+        enabled: rsimMuscleEnabled.checked,
+        stiffness: Number(rsimMuscleStiffness.value) || 0,
+        damping: Number(rsimMuscleDamping.value) || 0,
+        maxTorque: Number(rsimMuscleMaxTorque.value) || 0,
+      };
+      this.playerConfig.ragdollSim = {
+        jointStiffnessScale: Number(rsimJointStiffnessScale.value) || 0,
+        jointDampingScale: Number(rsimJointDampingScale.value) || 0,
+        bodyLinearDampingScale: Number(rsimBodyLinScale.value) || 0,
+        bodyAngularDampingScale: Number(rsimBodyAngScale.value) || 0,
+        groundFriction: Number(rsimGroundFriction.value) || 0,
+        bodyFriction: Number(rsimBodyFriction.value) || 0,
+        maxSubsteps: Number(rsimMaxSubsteps.value) || 1,
+        substepHz: Number(rsimSubstepHz.value) || 60,
+        limitBlend: Number(rsimLimitBlend.value) || 0,
+        linearBleed: Number(rsimLinearBleed.value) || 0,
+        angularBleed: Number(rsimAngularBleed.value) || 0,
+        groundSlideDamping: Number(rsimSlideDamp.value) || 0,
+        groundSlideYThreshold: Number(rsimGroundY.value) || 0,
+        groundSlideDeadzone: Number(rsimGroundDeadzone.value) || 0,
+        maxLinearVelocity: Number(rsimMaxLin.value) || 0,
+        maxAngularVelocity: Number(rsimMaxAng.value) || 0,
+        startImpulseY: Number(rsimStartImpulse.value) || 0,
+      };
       if (rigBoneSelect) {
         const name = rigBoneSelect.value;
         if (name) {
@@ -2366,6 +2479,27 @@ export class EditorApp {
       camMaxPitchInput,
       camTargetSmoothInput,
       playerAvatarSelect,
+      rsimMuscleEnabled,
+      rsimMuscleStiffness,
+      rsimMuscleDamping,
+      rsimMuscleMaxTorque,
+      rsimJointStiffnessScale,
+      rsimJointDampingScale,
+      rsimBodyLinScale,
+      rsimBodyAngScale,
+      rsimGroundFriction,
+      rsimBodyFriction,
+      rsimMaxSubsteps,
+      rsimSubstepHz,
+      rsimLimitBlend,
+      rsimLinearBleed,
+      rsimAngularBleed,
+      rsimSlideDamp,
+      rsimGroundY,
+      rsimGroundDeadzone,
+      rsimMaxLin,
+      rsimMaxAng,
+      rsimStartImpulse,
     ].forEach((input) => {
       input?.addEventListener('change', readPlayerInputs);
     });
@@ -2400,6 +2534,33 @@ export class EditorApp {
         if (this.selectedRagdoll) this.selectRagdoll(this.selectedRagdoll);
       }
     };
+    const applyRagdollSimField = () => {
+      readPlayerInputs();
+      rebuildRagdoll();
+    };
+    [
+      rsimMuscleEnabled,
+      rsimMuscleStiffness,
+      rsimMuscleDamping,
+      rsimMuscleMaxTorque,
+      rsimJointStiffnessScale,
+      rsimJointDampingScale,
+      rsimBodyLinScale,
+      rsimBodyAngScale,
+      rsimGroundFriction,
+      rsimBodyFriction,
+      rsimMaxSubsteps,
+      rsimSubstepHz,
+      rsimLimitBlend,
+      rsimLinearBleed,
+      rsimAngularBleed,
+      rsimSlideDamp,
+      rsimGroundY,
+      rsimGroundDeadzone,
+      rsimMaxLin,
+      rsimMaxAng,
+      rsimStartImpulse,
+    ].forEach((input) => input?.addEventListener('input', applyRagdollSimField));
     rigRadiusInput?.addEventListener('input', () => {
       const name = rigBoneSelect.value;
       if (!name) return;
@@ -4697,6 +4858,39 @@ export class EditorApp {
     return buildAnimationClipFromData(`editor_${this.retargetedName}`, this.clip, { rootKey: ROOT_BONE_KEY });
   }
 
+  private getRagdollMuscleConfig() {
+    const cfg = this.playerConfig.ragdollMuscle ?? {};
+    return {
+      enabled: cfg.enabled ?? false,
+      stiffness: Number(cfg.stiffness ?? 70),
+      damping: Number(cfg.damping ?? 16),
+      maxTorque: Number(cfg.maxTorque ?? 70),
+    };
+  }
+
+  private getRagdollSimConfig() {
+    const cfg = this.playerConfig.ragdollSim ?? {};
+    return {
+      jointStiffnessScale: Number(cfg.jointStiffnessScale ?? 1),
+      jointDampingScale: Number(cfg.jointDampingScale ?? 1),
+      bodyLinearDampingScale: Number(cfg.bodyLinearDampingScale ?? 1),
+      bodyAngularDampingScale: Number(cfg.bodyAngularDampingScale ?? 1),
+      groundFriction: Number(cfg.groundFriction ?? 2.2),
+      bodyFriction: Number(cfg.bodyFriction ?? 1.6),
+      maxSubsteps: Number(cfg.maxSubsteps ?? 4),
+      substepHz: Number(cfg.substepHz ?? 90),
+      limitBlend: Number(cfg.limitBlend ?? 0.45),
+      linearBleed: Number(cfg.linearBleed ?? 0.985),
+      angularBleed: Number(cfg.angularBleed ?? 0.88),
+      groundSlideDamping: Number(cfg.groundSlideDamping ?? 0.92),
+      groundSlideYThreshold: Number(cfg.groundSlideYThreshold ?? 0.5),
+      groundSlideDeadzone: Number(cfg.groundSlideDeadzone ?? 0.08),
+      maxLinearVelocity: Number(cfg.maxLinearVelocity ?? 16),
+      maxAngularVelocity: Number(cfg.maxAngularVelocity ?? 12),
+      startImpulseY: Number(cfg.startImpulseY ?? -0.35),
+    };
+  }
+
   private async ensureRapier() {
     if (this.rapierReady) return this.rapierReady;
     this.rapierReady = import('@dimforge/rapier3d-compat')
@@ -4789,13 +4983,14 @@ export class EditorApp {
   private buildRagdoll() {
     if (!this.vrm || !this.rapier) return;
     const RAPIER = this.rapier;
+    const sim = this.getRagdollSimConfig();
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.ragdollWorld = world;
     const ground = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const groundBody = world.createRigidBody(ground);
     const groundCollider = RAPIER.ColliderDesc.cuboid(25, 0.5, 25)
       .setTranslation(0, -0.5, 0)
-      .setFriction(2.2)
+      .setFriction(Math.max(0, sim.groundFriction))
       .setRestitution(0);
     if (RAPIER.CoefficientCombineRule) {
       groundCollider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
@@ -5036,15 +5231,39 @@ export class EditorApp {
       const center = start.clone().add(end).multiplyScalar(0.5);
       tmpQuat.setFromUnitVectors(up, axis);
       const boneWorldQuat = bone.getWorldQuaternion(new THREE.Quaternion());
+      const rigCfg = (this.playerConfig.ragdollRig[def.name] ?? {}) as {
+        radiusScale?: number;
+        lengthScale?: number;
+        offset?: Vec3;
+        rot?: Vec3;
+        swingLimit?: number;
+        twistLimit?: number;
+      };
+      const offsetLocal = new THREE.Vector3(
+        Number(rigCfg.offset?.x ?? 0),
+        Number(rigCfg.offset?.y ?? 0),
+        Number(rigCfg.offset?.z ?? 0),
+      );
+      const offsetWorld = offsetLocal.applyQuaternion(boneWorldQuat);
+      center.add(offsetWorld);
+      const rotOffset = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(Number(rigCfg.rot?.x ?? 0), Number(rigCfg.rot?.y ?? 0), Number(rigCfg.rot?.z ?? 0)),
+      );
+      tmpQuat.multiply(rotOffset).normalize();
       const bodyToBone = tmpQuat.clone().invert().multiply(boneWorldQuat);
-      let radius = segmentRadii[def.name] ?? 0.05;
-      radius = Math.min(radius, segmentLength * 0.35);
+      const lengthScale = Math.max(0.3, Number(rigCfg.lengthScale ?? 1));
+      const radiusScale = Math.max(0.3, Number(rigCfg.radiusScale ?? 1));
+      const scaledLength = segmentLength * lengthScale;
+      let radius = (segmentRadii[def.name] ?? 0.05) * radiusScale;
+      radius = Math.min(radius, scaledLength * 0.35);
       radius = Math.max(0.02, radius);
-      const halfHeight = Math.max(0, segmentLength * 0.5 - radius);
+      const halfHeight = Math.max(0, scaledLength * 0.5 - radius);
       const limb = def.name.includes('Arm') || def.name.includes('Leg') || def.name.includes('Hand') || def.name.includes('Foot');
       const axial = def.name === 'hips' || def.name === 'spine' || def.name === 'chest' || def.name === 'upperChest';
-      const linearDamping = axial ? 4.2 : limb ? 3.2 : 3.6;
-      const angularDamping = axial ? 6.5 : limb ? 5.2 : 5.8;
+      const linearDampingBase = axial ? 4.2 : limb ? 3.2 : 3.6;
+      const angularDampingBase = axial ? 6.5 : limb ? 5.2 : 5.8;
+      const linearDamping = linearDampingBase * Math.max(0, sim.bodyLinearDampingScale);
+      const angularDamping = angularDampingBase * Math.max(0, sim.bodyAngularDampingScale);
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
@@ -5058,7 +5277,7 @@ export class EditorApp {
         halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
       )
         .setCollisionGroups((membership << 16) | filter);
-      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(1.6).setRestitution(0);
+      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(Math.max(0, sim.bodyFriction)).setRestitution(0);
       if (RAPIER.CoefficientCombineRule) {
         collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
       }
@@ -5088,9 +5307,12 @@ export class EditorApp {
         body,
         bodyToBone,
         muscleScale: muscleScaleByBone[def.name] ?? 1,
-        baseLength: segmentLength,
+        baseLength: scaledLength,
         radius,
         axis,
+        basePos: center.clone(),
+        baseRot: tmpQuat.clone(),
+        boneWorldQuat: boneWorldQuat.clone(),
       };
       const hinge = hingeJoints[def.name];
       if (hinge) {
@@ -5100,8 +5322,8 @@ export class EditorApp {
       }
       const ballLimit = ballJointLimits[def.name];
       if (ballLimit) {
-        ragBone.swingLimitRad = THREE.MathUtils.degToRad(ballLimit.swingDeg);
-        ragBone.twistLimitRad = THREE.MathUtils.degToRad(ballLimit.twistDeg);
+        ragBone.swingLimitRad = THREE.MathUtils.degToRad(Number(rigCfg.swingLimit ?? ballLimit.swingDeg));
+        ragBone.twistLimitRad = THREE.MathUtils.degToRad(Number(rigCfg.twistLimit ?? ballLimit.twistDeg));
         if (def.parent) {
           const parentBone = getBone(def.parent);
           if (parentBone) {
@@ -5114,7 +5336,7 @@ export class EditorApp {
     }
     const pelvis = this.ragdollBones.get('hips');
     if (pelvis) {
-      pelvis.body.applyImpulse({ x: 0, y: -0.35, z: 0 }, true);
+      pelvis.body.applyImpulse({ x: 0, y: sim.startImpulseY, z: 0 }, true);
     }
 
     for (const def of defs) {
@@ -5144,8 +5366,10 @@ export class EditorApp {
       const hinge = hingeJoints[def.name];
       const isSpineJoint = spineJointChildren.has(def.name);
       const preset = jointTuning[def.name];
-      const stiffness = preset?.stiffness ?? (isSpineJoint ? spineStiffness : jointStiffness);
-      const damping = preset?.damping ?? (isSpineJoint ? spineDamping : jointDamping);
+      const stiffnessBase = preset?.stiffness ?? (isSpineJoint ? spineStiffness : jointStiffness);
+      const dampingBase = preset?.damping ?? (isSpineJoint ? spineDamping : jointDamping);
+      const stiffness = stiffnessBase * Math.max(0, sim.jointStiffnessScale);
+      const damping = dampingBase * Math.max(0, sim.jointDampingScale);
       let jointData: RAPIER.JointData;
       if (hinge) {
         const axis = new RAPIER.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]);
@@ -5171,9 +5395,12 @@ export class EditorApp {
 
   private stepRagdoll(delta: number) {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
-    // Keep default behavior passive/stable unless muscle controller is explicitly re-enabled.
+    const sim = this.getRagdollSimConfig();
+    this.applyRagdollMuscles(delta);
     const clampedDelta = THREE.MathUtils.clamp(delta, 1 / 180, 1 / 20);
-    const substeps = Math.max(1, Math.min(4, Math.ceil(clampedDelta / (1 / 90))));
+    const maxSubsteps = Math.max(1, Math.min(8, Math.round(sim.maxSubsteps)));
+    const substepHz = THREE.MathUtils.clamp(sim.substepHz, 30, 240);
+    const substeps = Math.max(1, Math.min(maxSubsteps, Math.ceil(clampedDelta / (1 / substepHz))));
     const stepDt = clampedDelta / substeps;
     this.ragdollWorld.timestep = stepDt;
     for (let i = 0; i < substeps; i += 1) {
@@ -5247,7 +5474,7 @@ export class EditorApp {
       if (!changed) continue;
       currentWorldQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
       childQuat.copy(parentQuat).multiply(relQuat).normalize();
-      currentWorldQuat.slerp(childQuat, 0.45).normalize();
+      currentWorldQuat.slerp(childQuat, THREE.MathUtils.clamp(sim.limitBlend, 0, 1)).normalize();
       ragBone.body.setRotation(
         { x: currentWorldQuat.x, y: currentWorldQuat.y, z: currentWorldQuat.z, w: currentWorldQuat.w },
         true,
@@ -5257,22 +5484,22 @@ export class EditorApp {
       ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, true);
     }
     // Safety clamps: cap runaway velocities that cause floor tunneling and flailing spirals.
-    const maxLinVel = 16;
-    const maxAngVel = 12;
+    const maxLinVel = Math.max(0.1, sim.maxLinearVelocity);
+    const maxAngVel = Math.max(0.1, sim.maxAngularVelocity);
     const lin = new THREE.Vector3();
     const ang = new THREE.Vector3();
     for (const ragBone of this.ragdollBones.values()) {
       const lv = ragBone.body.linvel();
       lin.set(lv.x, lv.y, lv.z);
-      if (Math.abs(lin.y) < 0.5) {
-        lin.x *= 0.92;
-        lin.z *= 0.92;
+      if (Math.abs(lin.y) < Math.max(0, sim.groundSlideYThreshold)) {
+        lin.x *= THREE.MathUtils.clamp(sim.groundSlideDamping, 0, 1);
+        lin.z *= THREE.MathUtils.clamp(sim.groundSlideDamping, 0, 1);
       }
-      if (Math.hypot(lin.x, lin.z) < 0.08) {
+      if (Math.hypot(lin.x, lin.z) < Math.max(0, sim.groundSlideDeadzone)) {
         lin.x = 0;
         lin.z = 0;
       }
-      lin.multiplyScalar(0.985);
+      lin.multiplyScalar(THREE.MathUtils.clamp(sim.linearBleed, 0, 1));
       ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, true);
       const linLen = lin.length();
       if (linLen > maxLinVel) {
@@ -5281,7 +5508,7 @@ export class EditorApp {
       }
       const av = ragBone.body.angvel();
       ang.set(av.x, av.y, av.z);
-      ang.multiplyScalar(0.88);
+      ang.multiplyScalar(THREE.MathUtils.clamp(sim.angularBleed, 0, 1));
       ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, true);
       const angLen = ang.length();
       if (angLen > maxAngVel) {
@@ -5343,7 +5570,7 @@ export class EditorApp {
 
   private applyRagdollMuscles(delta: number) {
     if (!this.ragdollEnabled || delta <= 0) return;
-    const cfg = this.playerConfig.ragdollMuscle ?? { enabled: true, stiffness: 180, damping: 22, maxTorque: 220 };
+    const cfg = this.getRagdollMuscleConfig();
     if (!cfg.enabled) return;
     const kpBase = Math.max(0, Number(cfg.stiffness) || 0);
     const kdBase = Math.max(0, Number(cfg.damping) || 0);
