@@ -6,14 +6,14 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', gameId?: string
   menu.className = 'menu';
   menu.innerHTML = [
     '<div class="menu-card">',
-    '<h1>Sleepy Engine</h1>',
-    '<p>Choose a game</p>',
+    '<h1 class="menu-title">Sleepy Engine</h1>',
+    '<p class="menu-description">Choose a game</p>',
     '<label class="menu-field"><span>Game</span><select data-game-id></select></label>',
-    '<button data-play>Play</button>',
-    '<button data-editor>Editor</button>',
-    '<button data-settings>Settings</button>',
+    '<button class="ui-button ui-button-primary" data-play>Play</button>',
+    '<button class="ui-button" data-editor>Editor</button>',
+    '<button class="ui-button ui-button-ghost" data-settings>Settings</button>',
     '</div>',
-    '<div class="menu-settings" style="display: none;"></div>',
+    '<div class="menu-settings" hidden></div>',
   ].join('');
 
   const playBtn = menu.querySelector('[data-play]') as HTMLButtonElement;
@@ -86,15 +86,15 @@ export function createMenu(onSelect: (choice: 'game' | 'editor', gameId?: string
 
   settingsBtn.addEventListener('click', () => {
     menuCard.style.display = 'none';
-    settingsContainer.style.display = 'block';
+    settingsContainer.hidden = false;
   });
 
   // Add back button to settings
   const backBtn = document.createElement('button');
-  backBtn.textContent = '← Back to Menu';
-  backBtn.style.cssText = 'margin-top: 20px; padding: 10px; width: 100%;';
+  backBtn.textContent = 'Back to Menu';
+  backBtn.className = 'ui-button menu-back-button';
   backBtn.addEventListener('click', () => {
-    settingsContainer.style.display = 'none';
+    settingsContainer.hidden = true;
     menuCard.style.display = 'block';
   });
   settingsContainer.appendChild(backBtn);

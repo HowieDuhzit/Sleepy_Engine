@@ -1028,12 +1028,8 @@ export class GameApp {
 
   private createPerfHud() {
     const hud = document.createElement('div');
-    hud.className = 'hud';
+    hud.className = 'hud hud-perf';
     hud.style.display = 'none';
-    hud.style.top = '12px';
-    hud.style.right = '12px';
-    hud.style.left = 'auto';
-    hud.style.width = 'auto';
     hud.innerHTML = [
       '<strong>Performance</strong>',
       '<div data-perf-fps>fps: --</div>',
@@ -1047,27 +1043,14 @@ export class GameApp {
   private createSettingsMenu() {
     const menu = document.createElement('div');
     menu.id = 'settings-menu';
-    menu.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0, 0, 0, 0.9);
-      color: white;
-      padding: 30px;
-      border-radius: 10px;
-      display: none;
-      z-index: 1000;
-      min-width: 400px;
-      font-family: monospace;
-    `;
+    menu.className = 'settings-menu ui-card';
     menu.innerHTML = `
-      <h2 style="margin-top: 0;">Settings (ESC to close)</h2>
+      <h2 class="settings-menu-title">Settings (ESC to close)</h2>
 
-      <h3>Console Graphics</h3>
-      <label style="display: block; margin: 10px 0;">
+      <h3 class="settings-menu-subtitle">Console Graphics</h3>
+      <label class="settings-menu-field">
         Console Preset:
-        <select id="console-preset" style="width: 100%; padding: 5px;">
+        <select id="console-preset" class="ui-input">
           <option value="ps1" ${psxSettings.config.consolePreset === 'ps1' ? 'selected' : ''}>PlayStation 1 (1994)</option>
           <option value="n64" ${psxSettings.config.consolePreset === 'n64' ? 'selected' : ''}>Nintendo 64 (1996)</option>
           <option value="dreamcast" ${psxSettings.config.consolePreset === 'dreamcast' ? 'selected' : ''}>Sega Dreamcast (1998)</option>
@@ -1076,54 +1059,54 @@ export class GameApp {
         </select>
       </label>
 
-      <h3>Color & Lighting</h3>
-      <label style="display: block; margin: 10px 0;">
+      <h3 class="settings-menu-subtitle">Color & Lighting</h3>
+      <label class="settings-menu-field">
         Brightness: <span id="brightness-value">${psxSettings.config.brightness.toFixed(2)}</span>
-        <input type="range" id="brightness" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.brightness}" style="width: 100%;">
+        <input type="range" id="brightness" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.brightness}">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Contrast: <span id="contrast-value">${psxSettings.config.contrast.toFixed(2)}</span>
-        <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.contrast}" style="width: 100%;">
+        <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.contrast}">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Saturation: <span id="saturation-value">${psxSettings.config.saturation.toFixed(2)}</span>
-        <input type="range" id="saturation" min="0.0" max="2.0" step="0.05" value="${psxSettings.config.saturation}" style="width: 100%;">
+        <input type="range" id="saturation" min="0.0" max="2.0" step="0.05" value="${psxSettings.config.saturation}">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Gamma: <span id="gamma-value">${psxSettings.config.gamma.toFixed(2)}</span>
-        <input type="range" id="gamma" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.gamma}" style="width: 100%;">
+        <input type="range" id="gamma" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.gamma}">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Exposure: <span id="exposure-value">${psxSettings.config.exposure.toFixed(2)}</span>
-        <input type="range" id="exposure" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.exposure}" style="width: 100%;">
+        <input type="range" id="exposure" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.exposure}">
       </label>
 
-      <h3>Camera</h3>
-      <label style="display: block; margin: 10px 0;">
+      <h3 class="settings-menu-subtitle">Camera</h3>
+      <label class="settings-menu-field">
         Camera Distance: <span id="camera-distance-value">6.0</span>m
-        <input type="range" id="camera-distance" min="1" max="15" step="0.5" value="6" style="width: 100%;">
+        <input type="range" id="camera-distance" min="1" max="15" step="0.5" value="6">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Camera Smoothing: <span id="camera-smoothing-value">0%</span>
-        <input type="range" id="camera-smoothing" min="0" max="100" step="5" value="0" style="width: 100%;">
+        <input type="range" id="camera-smoothing" min="0" max="100" step="5" value="0">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-field">
         Camera Sensitivity: <span id="camera-sensitivity-value">1.0x</span>
-        <input type="range" id="camera-sensitivity" min="0.1" max="3" step="0.1" value="1.0" style="width: 100%;">
+        <input type="range" id="camera-sensitivity" min="0.1" max="3" step="0.1" value="1.0">
       </label>
 
-      <label style="display: block; margin: 10px 0;">
+      <label class="settings-menu-check">
         <input type="checkbox" id="first-person-toggle">
         First Person Mode (or press Select)
       </label>
 
-      <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #666;">
+      <div class="settings-menu-note">
         <small>Tips: Choose between PS1, N64, Dreamcast, Xbox, or Modern rendering styles!</small>
       </div>
     `;

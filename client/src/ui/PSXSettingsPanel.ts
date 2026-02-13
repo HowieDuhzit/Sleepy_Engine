@@ -18,30 +18,19 @@ export class PSXSettingsPanel {
   private createPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.id = 'psx-settings-panel';
-    panel.className = 'psx-settings-panel';
-    panel.style.cssText = `
-      background: rgba(10, 10, 20, 0.95);
-      color: #0ff;
-      padding: 20px;
-      border: 2px solid #0ff;
-      font-family: monospace;
-      font-size: 14px;
-      min-width: 300px;
-    `;
+    panel.className = 'psx-settings-panel ui-card';
 
     panel.innerHTML = `
-      <h3 style="margin: 0 0 15px 0; color: #0ff; text-transform: uppercase;">
-        🎮 Retro Console Graphics
-      </h3>
+      <h3 class="psx-settings-title">Retro Console Graphics</h3>
 
-      <label style="display: block; margin: 10px 0; cursor: pointer;">
+      <label class="psx-check">
         <input type="checkbox" id="psx-global-enabled" ${psxSettings.config.enabled ? 'checked' : ''}>
-        <span style="margin-left: 8px;">Enable Retro Mode</span>
+        <span>Enable Retro Mode</span>
       </label>
 
-      <div style="margin: 15px 0;">
-        <label style="display: block; margin-bottom: 5px;">Console Preset:</label>
-        <select id="psx-global-console" style="width: 100%; padding: 8px; background: #000; color: #0ff; border: 1px solid #0ff; font-family: monospace;">
+      <div class="psx-section">
+        <label class="psx-field-label">Console Preset</label>
+        <select id="psx-global-console" class="ui-input">
           <option value="ps1">PlayStation 1 (1994)</option>
           <option value="n64">Nintendo 64 (1996)</option>
           <option value="dreamcast">Sega Dreamcast (1998)</option>
@@ -50,73 +39,73 @@ export class PSXSettingsPanel {
         </select>
       </div>
 
-      <div style="margin: 15px 0;">
-        <label style="display: block; margin-bottom: 5px;">Quality Preset:</label>
-        <select id="psx-global-preset" style="width: 100%; padding: 8px; background: #000; color: #0ff; border: 1px solid #0ff; font-family: monospace;">
+      <div class="psx-section">
+        <label class="psx-field-label">Quality Preset</label>
+        <select id="psx-global-preset" class="ui-input">
           <option value="authentic">Authentic</option>
           <option value="lite">Enhanced</option>
           <option value="modern">Disabled</option>
         </select>
       </div>
 
-      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0ff;">
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
+      <div class="psx-section psx-divider">
+        <label class="psx-check">
           <input type="checkbox" id="psx-global-affine" ${psxSettings.config.affineMapping ? 'checked' : ''}>
-          <span style="margin-left: 8px;">Affine Texture Mapping</span>
+          <span>Affine Texture Mapping</span>
         </label>
 
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
+        <label class="psx-check">
           <input type="checkbox" id="psx-global-quantization" ${psxSettings.config.colorQuantization ? 'checked' : ''}>
-          <span style="margin-left: 8px;">15-bit Color (Color Banding)</span>
+          <span>15-bit Color (Color Banding)</span>
         </label>
 
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
+        <label class="psx-check">
           <input type="checkbox" id="psx-global-dither" ${psxSettings.config.dithering ? 'checked' : ''}>
-          <span style="margin-left: 8px;">Dithering</span>
+          <span>Dithering</span>
         </label>
 
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
+        <label class="psx-check">
           <input type="checkbox" id="psx-global-crt" ${psxSettings.config.crtEffects ? 'checked' : ''}>
-          <span style="margin-left: 8px;">CRT Effects</span>
+          <span>CRT Effects</span>
         </label>
 
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
+        <label class="psx-check">
           <input type="checkbox" id="psx-global-chromatic" ${psxSettings.config.chromaticAberration ? 'checked' : ''}>
-          <span style="margin-left: 8px;">Chromatic Aberration</span>
+          <span>Chromatic Aberration</span>
         </label>
       </div>
 
-      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0ff;">
-        <h4 style="margin: 0 0 10px 0; color: #0ff;">Color & Lighting</h4>
+      <div class="psx-section psx-divider">
+        <h4 class="psx-subtitle">Color & Lighting</h4>
 
-        <label style="display: block; margin: 10px 0;">
+        <label class="psx-slider">
           <span>Brightness: <span id="psx-global-brightness-value">${psxSettings.config.brightness.toFixed(1)}</span></span>
-          <input type="range" id="psx-global-brightness" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.brightness}" style="width: 100%;">
+          <input type="range" id="psx-global-brightness" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.brightness}">
         </label>
 
-        <label style="display: block; margin: 10px 0;">
+        <label class="psx-slider">
           <span>Contrast: <span id="psx-global-contrast-value">${psxSettings.config.contrast.toFixed(1)}</span></span>
-          <input type="range" id="psx-global-contrast" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.contrast}" style="width: 100%;">
+          <input type="range" id="psx-global-contrast" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.contrast}">
         </label>
 
-        <label style="display: block; margin: 10px 0;">
+        <label class="psx-slider">
           <span>Saturation: <span id="psx-global-saturation-value">${psxSettings.config.saturation.toFixed(1)}</span></span>
-          <input type="range" id="psx-global-saturation" min="0.0" max="2.0" step="0.1" value="${psxSettings.config.saturation}" style="width: 100%;">
+          <input type="range" id="psx-global-saturation" min="0.0" max="2.0" step="0.1" value="${psxSettings.config.saturation}">
         </label>
 
-        <label style="display: block; margin: 10px 0;">
+        <label class="psx-slider">
           <span>Gamma: <span id="psx-global-gamma-value">${psxSettings.config.gamma.toFixed(1)}</span></span>
-          <input type="range" id="psx-global-gamma" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.gamma}" style="width: 100%;">
+          <input type="range" id="psx-global-gamma" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.gamma}">
         </label>
 
-        <label style="display: block; margin: 10px 0;">
+        <label class="psx-slider">
           <span>Exposure: <span id="psx-global-exposure-value">${psxSettings.config.exposure.toFixed(1)}</span></span>
-          <input type="range" id="psx-global-exposure" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.exposure}" style="width: 100%;">
+          <input type="range" id="psx-global-exposure" min="0.5" max="2.0" step="0.1" value="${psxSettings.config.exposure}">
         </label>
       </div>
 
-      <div style="margin: 15px 0; padding: 15px; background: rgba(0, 255, 255, 0.1); border-left: 3px solid #0ff;">
-        <small style="display: block; line-height: 1.5;">
+      <div class="psx-note">
+        <small>
           <strong>Retro Console Mode</strong> recreates authentic classic console graphics.<br><br>
           <strong>PS1:</strong> Wobbly textures, vertex jitter, 15-bit color<br>
           <strong>N64:</strong> Blurry bilinear filtering, fog, 21-bit color<br>
@@ -302,40 +291,17 @@ export class PSXSettingsPanel {
 export function createPSXToggleButton(): HTMLElement {
   const button = document.createElement('button');
   button.id = 'psx-toggle-button';
+  button.className = 'ui-button ui-button-primary psx-toggle-button';
   button.textContent = 'PS1';
-  button.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    padding: 10px 20px;
-    background: ${psxSettings.config.enabled ? '#0ff' : 'rgba(0, 255, 255, 0.3)'};
-    color: ${psxSettings.config.enabled ? '#000' : '#0ff'};
-    border: 2px solid #0ff;
-    border-radius: 5px;
-    font-family: monospace;
-    font-weight: bold;
-    font-size: 14px;
-    cursor: pointer;
-    z-index: 9999;
-    transition: all 0.2s;
-  `;
+  button.dataset.enabled = psxSettings.config.enabled ? 'true' : 'false';
 
   button.addEventListener('click', () => {
     const newState = !psxSettings.config.enabled;
     psxSettings.update({ enabled: newState });
-    button.style.background = newState ? '#0ff' : 'rgba(0, 255, 255, 0.3)';
-    button.style.color = newState ? '#000' : '#0ff';
+    button.dataset.enabled = newState ? 'true' : 'false';
 
     // Dispatch custom event for apps to listen to
     window.dispatchEvent(new CustomEvent('psx-settings-changed'));
-  });
-
-  button.addEventListener('mouseenter', () => {
-    button.style.transform = 'scale(1.05)';
-  });
-
-  button.addEventListener('mouseleave', () => {
-    button.style.transform = 'scale(1)';
   });
 
   return button;
