@@ -1360,11 +1360,7 @@ export class EditorApp {
       '</div>',
       '</div>',
       '<div class="overlay-bottom-left">',
-      '<div class="overlay-tabs">',
-      '<button class="overlay-tab active" data-overlay-tab="mixamo">Mixamo</button>',
-      '<button class="overlay-tab" data-overlay-tab="clips">Clips</button>',
-      '</div>',
-      '<div class="overlay-panel" data-overlay-panel="mixamo">',
+      '<div class="overlay-panel">',
       '<label class="field"><span>FBX</span><input data-mixamo-file type="file" accept=".fbx" multiple /></label>',
       '<label class="field"><span>Clip</span><select data-mixamo-clip></select></label>',
       '<div class="panel-actions">',
@@ -1373,8 +1369,6 @@ export class EditorApp {
       '<button data-mixamo-stop>Stop</button>',
       '</div>',
       '<div class="clip-status" data-mixamo-status>Mixamo: none</div>',
-      '</div>',
-      '<div class="overlay-panel" data-overlay-panel="clips" style="display:none;">',
       '<div class="panel" data-clip-panel>',
       '<div class="panel-title">Clip Data</div>',
       '<label class="field"><span>Name</span><input data-clip-name type="text" placeholder="idle" /></label>',
@@ -1387,7 +1381,6 @@ export class EditorApp {
       '<div class="clip-status" data-clip-status></div>',
       '<button data-download>Download JSON</button>',
       '<textarea data-json rows="8"></textarea>',
-      '</div>',
       '</div>',
       '</div>',
       '</div>',
@@ -1646,8 +1639,6 @@ export class EditorApp {
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
-    const overlayTabs = Array.from(hud.querySelectorAll('[data-overlay-tab]')) as HTMLButtonElement[];
-    const overlayPanels = Array.from(hud.querySelectorAll('[data-overlay-panel]')) as HTMLDivElement[];
     const panels = Array.from(hud.querySelectorAll('.panel')) as HTMLDivElement[];
     for (const panel of panels) {
       const title = panel.querySelector('.panel-title') as HTMLDivElement | null;
@@ -1694,19 +1685,6 @@ export class EditorApp {
         this.resizeTimeline();
         this.drawTimeline();
         this.fitCameraToVrm();
-      });
-    });
-
-    overlayTabs.forEach((button) => {
-      button.addEventListener('click', () => {
-        const tab = button.dataset.overlayTab;
-        if (!tab) return;
-        for (const btn of overlayTabs) {
-          btn.classList.toggle('active', btn.dataset.overlayTab === tab);
-        }
-        for (const panel of overlayPanels) {
-          panel.style.display = panel.dataset.overlayPanel === tab ? '' : 'none';
-        }
       });
     });
 
