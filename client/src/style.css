@@ -36,7 +36,7 @@ body,
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-rows: 52px minmax(0, 1fr) 220px;
+  grid-template-rows: 52px minmax(0, 1fr);
   grid-template-columns: 1fr;
   color: #e6ebf2;
   font-family: 'Space Grotesk', system-ui, sans-serif;
@@ -160,10 +160,26 @@ body,
 .editor-shell {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 220px;
   gap: 12px;
   padding: 12px 16px;
   min-height: 0;
   overflow: hidden;
+}
+
+.editor-shell > .editor-left {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.editor-shell > .editor-view {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.editor-shell > .editor-bottom {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .editor-ui.mode-animation .editor-shell {
