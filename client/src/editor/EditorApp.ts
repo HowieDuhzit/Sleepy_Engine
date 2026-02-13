@@ -70,6 +70,7 @@ type RagdollBone = {
   body: RAPIER.RigidBody;
   parent?: RagdollBone;
   baseLength?: number;
+  radius?: number;
   axis?: THREE.Vector3;
   basePos?: THREE.Vector3;
   baseRot?: THREE.Quaternion;
@@ -4783,6 +4784,7 @@ export class EditorApp {
 
     const tmpVec = new THREE.Vector3();
     const tmpVec2 = new THREE.Vector3();
+    const tmpVec3 = new THREE.Vector3();
     const tmpQuat = new THREE.Quaternion();
     const tmpQuat2 = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
@@ -4790,25 +4792,25 @@ export class EditorApp {
     const jointDamping = 7;
     const spineStiffness = 95;
     const spineDamping = 9;
-    const segmentHalfHeights: Record<string, number> = {
-      hips: 0.12,
-      spine: 0.1,
-      chest: 0.1,
-      head: 0.1,
-      leftUpperArm: 0.18,
-      leftLowerArm: 0.2,
-      rightUpperArm: 0.18,
-      rightLowerArm: 0.2,
-      leftUpperLeg: 0.35,
-      leftLowerLeg: 0.35,
-      rightUpperLeg: 0.35,
-      rightLowerLeg: 0.35,
+    const fallbackLengths: Record<string, number> = {
+      hips: 0.28,
+      spine: 0.24,
+      chest: 0.22,
+      head: 0.2,
+      leftUpperArm: 0.36,
+      leftLowerArm: 0.34,
+      rightUpperArm: 0.36,
+      rightLowerArm: 0.34,
+      leftUpperLeg: 0.72,
+      leftLowerLeg: 0.7,
+      rightUpperLeg: 0.72,
+      rightLowerLeg: 0.7,
     };
     const segmentRadii: Record<string, number> = {
       hips: 0.12,
       spine: 0.08,
-      chest: 0.1,
-      head: 0.1,
+      chest: 0.095,
+      head: 0.095,
       leftUpperArm: 0.04,
       leftLowerArm: 0.035,
       rightUpperArm: 0.04,
@@ -4840,32 +4842,54 @@ export class EditorApp {
     for (const def of defs) {
       const bone = getBone(def.name);
       if (!bone) continue;
-      bone.getWorldPosition(tmpVec);
+      bone.getWorldPosition(tmpVec); // start at this joint
       const childName = childByParent.get(def.name);
       const child = childName ? getBone(childName) : null;
       const axis = new THREE.Vector3(0, 1, 0);
-      const center = tmpVec.clone();
+      const start = tmpVec.clone();
+      const end = tmpVec2.copy(start);
       if (child) {
-        child.getWorldPosition(tmpVec2);
-        const dir = tmpVec2.clone().sub(tmpVec);
+        child.getWorldPosition(end);
+        const dir = end.clone().sub(start);
         if (dir.lengthSq() > 1e-8) {
           axis.copy(dir.normalize());
-          center.copy(tmpVec).add(tmpVec2).multiplyScalar(0.5);
         }
       } else {
-        bone.getWorldQuaternion(tmpQuat2);
-        axis.copy(up).applyQuaternion(tmpQuat2).normalize();
+        const parentName = def.parent;
+        const parent = parentName ? getBone(parentName) : null;
+        if (parent) {
+          parent.getWorldPosition(tmpVec3);
+          axis.copy(start).sub(tmpVec3);
+          if (axis.lengthSq() > 1e-8) {
+            axis.normalize();
+          } else {
+            bone.getWorldQuaternion(tmpQuat2);
+            axis.copy(up).applyQuaternion(tmpQuat2).normalize();
+          }
+        } else {
+          bone.getWorldQuaternion(tmpQuat2);
+          axis.copy(up).applyQuaternion(tmpQuat2).normalize();
+        }
+        const fallbackLength = fallbackLengths[def.name] ?? 0.25;
+        end.copy(start).add(axis.clone().multiplyScalar(fallbackLength));
       }
+      const segmentLength = Math.max(0.08, start.distanceTo(end));
+      const center = start.clone().add(end).multiplyScalar(0.5);
       tmpQuat.setFromUnitVectors(up, axis);
-      const halfHeight = segmentHalfHeights[def.name] ?? 0.1;
-      const radius = segmentRadii[def.name] ?? 0.05;
+      let radius = segmentRadii[def.name] ?? 0.05;
+      radius = Math.min(radius, segmentLength * 0.35);
+      radius = Math.max(0.02, radius);
+      const halfHeight = Math.max(0, segmentLength * 0.5 - radius);
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(center.x, center.y, center.z)
         .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
         .setLinearDamping(2)
         .setAngularDamping(2.8);
       const body = world.createRigidBody(bodyDesc);
-      const collider = RAPIER.ColliderDesc.capsule(halfHeight, radius).setCollisionGroups((0x0002 << 16) | 0xfffd);
+      const collider = (
+        halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
+      )
+        .setCollisionGroups((0x0002 << 16) | 0x0001);
       collider.setDensity(45);
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
@@ -4875,7 +4899,10 @@ export class EditorApp {
         transparent: true,
         opacity: 0.9,
       });
-      const debugMesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfHeight * 2, 6, 10), debugMat);
+      const debugMesh =
+        halfHeight > 0.01
+          ? new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfHeight * 2, 6, 10), debugMat)
+          : new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 8), debugMat);
       debugMesh.renderOrder = 12;
       debugMesh.userData.ragdollName = def.name;
       debugMesh.visible = this.ragdollEnabled || this.ragdollVisible;
@@ -4885,7 +4912,8 @@ export class EditorApp {
         name: def.name,
         bone,
         body,
-        baseLength: halfHeight * 2,
+        baseLength: segmentLength,
+        radius,
         axis,
       };
       this.ragdollBones.set(def.name, ragBone);
