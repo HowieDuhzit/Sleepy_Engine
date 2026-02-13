@@ -462,21 +462,15 @@ export class EditorApp {
     { name: 'hips' },
     { name: 'spine', parent: 'hips' },
     { name: 'chest', parent: 'spine' },
-    { name: 'upperChest', parent: 'chest' },
-    { name: 'neck', parent: 'upperChest' },
-    { name: 'head', parent: 'neck' },
-    { name: 'leftUpperArm', parent: 'upperChest' },
+    { name: 'head', parent: 'chest' },
+    { name: 'leftUpperArm', parent: 'chest' },
     { name: 'leftLowerArm', parent: 'leftUpperArm' },
-    { name: 'leftHand', parent: 'leftLowerArm' },
-    { name: 'rightUpperArm', parent: 'upperChest' },
+    { name: 'rightUpperArm', parent: 'chest' },
     { name: 'rightLowerArm', parent: 'rightUpperArm' },
-    { name: 'rightHand', parent: 'rightLowerArm' },
     { name: 'leftUpperLeg', parent: 'hips' },
     { name: 'leftLowerLeg', parent: 'leftUpperLeg' },
-    { name: 'leftFoot', parent: 'leftLowerLeg' },
     { name: 'rightUpperLeg', parent: 'hips' },
     { name: 'rightLowerLeg', parent: 'rightUpperLeg' },
-    { name: 'rightFoot', parent: 'rightLowerLeg' },
   ];
   private playerConfig = {
     avatar: 'default.vrm',
@@ -4788,12 +4782,39 @@ export class EditorApp {
     const defs = this.ragdollDefs;
 
     const tmpVec = new THREE.Vector3();
-    const tmpVec2 = new THREE.Vector3();
-    const axisQuat = new THREE.Quaternion();
+    const tmpQuat = new THREE.Quaternion();
     const jointStiffness = 65;
     const jointDamping = 7;
     const spineStiffness = 95;
     const spineDamping = 9;
+    const segmentHalfHeights: Record<string, number> = {
+      hips: 0.12,
+      spine: 0.1,
+      chest: 0.1,
+      head: 0.1,
+      leftUpperArm: 0.18,
+      leftLowerArm: 0.2,
+      rightUpperArm: 0.18,
+      rightLowerArm: 0.2,
+      leftUpperLeg: 0.35,
+      leftLowerLeg: 0.35,
+      rightUpperLeg: 0.35,
+      rightLowerLeg: 0.35,
+    };
+    const segmentRadii: Record<string, number> = {
+      hips: 0.12,
+      spine: 0.08,
+      chest: 0.1,
+      head: 0.1,
+      leftUpperArm: 0.04,
+      leftLowerArm: 0.035,
+      rightUpperArm: 0.04,
+      rightLowerArm: 0.035,
+      leftUpperLeg: 0.06,
+      leftLowerLeg: 0.05,
+      rightUpperLeg: 0.06,
+      rightLowerLeg: 0.05,
+    };
     const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
       leftLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
       rightLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
@@ -4812,79 +4833,16 @@ export class EditorApp {
       const bone = getBone(def.name);
       if (!bone) continue;
       bone.getWorldPosition(tmpVec);
-      const childDef = defs.find((entry) => entry.parent === def.name);
-      const child = childDef ? getBone(childDef.name) : null;
-      let length = 0.25;
-      if (child) {
-        child.getWorldPosition(tmpVec2);
-        length = Math.max(0.15, tmpVec.distanceTo(tmpVec2));
-      }
-      const boneRadiusMap: Record<string, number> = {
-        hips: 0.12,
-        spine: 0.1,
-        chest: 0.11,
-        upperChest: 0.11,
-        neck: 0.06,
-        head: 0.13,
-        leftUpperArm: 0.06,
-        rightUpperArm: 0.06,
-        leftLowerArm: 0.055,
-        rightLowerArm: 0.055,
-        leftHand: 0.05,
-        rightHand: 0.05,
-        leftUpperLeg: 0.08,
-        rightUpperLeg: 0.08,
-        leftLowerLeg: 0.075,
-        rightLowerLeg: 0.075,
-        leftFoot: 0.06,
-        rightFoot: 0.06,
-      };
-      const defaultArmRot =
-        def.name === 'leftUpperArm' || def.name === 'leftLowerArm'
-          ? { x: 0, y: 0, z: Math.PI / 2 }
-          : def.name === 'rightUpperArm' || def.name === 'rightLowerArm'
-            ? { x: 0, y: 0, z: -Math.PI / 2 }
-            : { x: 0, y: 0, z: 0 };
-      const rig = this.playerConfig.ragdollRig[def.name] ?? {
-        radiusScale: 1,
-        lengthScale: 1,
-        offset: { x: 0, y: 0, z: 0 },
-        rot: defaultArmRot,
-        swingLimit: 45,
-        twistLimit: 35,
-      };
-      length = Math.max(0.12, length * (rig.lengthScale ?? 1));
-      let radius = Math.max(0.045, boneRadiusMap[def.name] ?? length * 0.18);
-      radius = Math.max(0.03, radius * (rig.radiusScale ?? 1));
-      const maxRadius = Math.max(0.03, length * 0.45);
-      radius = Math.min(radius, maxRadius);
-      const halfHeight = Math.max(0.05, length * 0.5 - radius);
+      bone.getWorldQuaternion(tmpQuat);
+      const halfHeight = segmentHalfHeights[def.name] ?? 0.1;
+      const radius = segmentRadii[def.name] ?? 0.05;
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(tmpVec.x, tmpVec.y, tmpVec.z)
+        .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
         .setLinearDamping(2)
         .setAngularDamping(2.8);
-      let axis = new THREE.Vector3(0, 1, 0);
-      let mid = tmpVec.clone();
-      if (child) {
-        axis = tmpVec2.clone().sub(tmpVec).normalize();
-        mid = tmpVec.clone().add(tmpVec2).multiplyScalar(0.5);
-      }
-      const boneWorldQuat = bone.getWorldQuaternion(new THREE.Quaternion());
-      const offsetLocal = new THREE.Vector3(rig.offset?.x ?? 0, rig.offset?.y ?? 0, rig.offset?.z ?? 0);
-      const offsetWorld = offsetLocal.clone().applyQuaternion(boneWorldQuat);
-      mid.add(offsetWorld);
-      bodyDesc.setTranslation(mid.x, mid.y, mid.z);
-      axisQuat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
-      const extraRot = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(rig.rot?.x ?? 0, rig.rot?.y ?? 0, rig.rot?.z ?? 0),
-      );
-      const finalRot = axisQuat.clone().multiply(extraRot);
-      bodyDesc.setRotation({ x: finalRot.x, y: finalRot.y, z: finalRot.z, w: finalRot.w });
       const body = world.createRigidBody(bodyDesc);
-      const collider =
-        halfHeight > 0.06
-          ? RAPIER.ColliderDesc.capsule(halfHeight, radius)
-          : RAPIER.ColliderDesc.ball(radius);
+      const collider = RAPIER.ColliderDesc.capsule(halfHeight, radius).setCollisionGroups((0x0002 << 16) | 0xfffd);
       collider.setDensity(45);
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
@@ -4894,10 +4852,7 @@ export class EditorApp {
         transparent: true,
         opacity: 0.9,
       });
-      const debugMesh =
-        halfHeight > 0.06
-          ? new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfHeight * 2, 6, 10), debugMat)
-          : new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), debugMat);
+      const debugMesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfHeight * 2, 6, 10), debugMat);
       debugMesh.renderOrder = 12;
       debugMesh.userData.ragdollName = def.name;
       debugMesh.visible = this.ragdollEnabled || this.ragdollVisible;
@@ -4907,13 +4862,13 @@ export class EditorApp {
         name: def.name,
         bone,
         body,
-        baseLength: length,
-        axis,
-        basePos: mid.clone(),
-        baseRot: finalRot.clone(),
-        boneWorldQuat,
+        baseLength: halfHeight * 2,
       };
       this.ragdollBones.set(def.name, ragBone);
+    }
+    const pelvis = this.ragdollBones.get('hips');
+    if (pelvis) {
+      pelvis.body.applyImpulse({ x: 0, y: -2, z: 0 }, true);
     }
 
     for (const def of defs) {
@@ -4923,15 +4878,13 @@ export class EditorApp {
       if (!childBone || !parentBone) continue;
       const parentBody = parentBone.body;
       const childBody = childBone.body;
-      const parentPos = parentBody.translation();
-      const parentRot = parentBody.rotation();
-      const parentQuat = new THREE.Quaternion(parentRot.x, parentRot.y, parentRot.z, parentRot.w);
-      const invParent = parentQuat.clone().invert();
-      const anchorWorld = tmpVec.copy(childBone.bone.getWorldPosition(new THREE.Vector3()));
-      const rel = anchorWorld.clone().sub(new THREE.Vector3(parentPos.x, parentPos.y, parentPos.z));
-      rel.applyQuaternion(invParent);
-      const anchor1 = new RAPIER.Vector3(rel.x, rel.y, rel.z);
-      const anchor2 = new RAPIER.Vector3(0, 0, 0);
+      const pos1 = parentBody.translation();
+      const pos2 = childBody.translation();
+      const midX = (pos1.x + pos2.x) * 0.5;
+      const midY = (pos1.y + pos2.y) * 0.5;
+      const midZ = (pos1.z + pos2.z) * 0.5;
+      const anchor1 = new RAPIER.Vector3(midX - pos1.x, midY - pos1.y, midZ - pos1.z);
+      const anchor2 = new RAPIER.Vector3(midX - pos2.x, midY - pos2.y, midZ - pos2.z);
       const hinge = hingeJoints[def.name];
       const isSpineJoint = spineJointChildren.has(def.name);
       const stiffness = isSpineJoint ? spineStiffness : jointStiffness;
@@ -4958,51 +4911,27 @@ export class EditorApp {
     if (!this.ragdollWorld || !this.rapier || !this.vrm) return;
     this.ragdollWorld.timestep = Math.min(1 / 30, delta);
     this.ragdollWorld.step();
-    const parentWorld = new THREE.Quaternion();
-    const invParent = new THREE.Quaternion();
+    this.vrm.scene.updateMatrixWorld(true);
     const bodyQuat = new THREE.Quaternion();
     const bodyPos = new THREE.Vector3();
+    const parentWorldQuat = new THREE.Quaternion();
+    const parentWorldInv = new THREE.Matrix4();
     for (const ragBone of this.ragdollBones.values()) {
       const { bone, body } = ragBone;
+      if (!bone.parent) continue;
+      const pos = body.translation();
       const rot = body.rotation();
+      bodyPos.set(pos.x, pos.y, pos.z);
       bodyQuat.set(rot.x, rot.y, rot.z, rot.w);
-      if (bone.parent) {
-        bone.parent.getWorldQuaternion(parentWorld);
-        invParent.copy(parentWorld).invert();
-        const rel = invParent.clone().multiply(bodyQuat);
-        const cfg = this.playerConfig.ragdollRig[ragBone.name];
-        if (cfg && (cfg.swingLimit || cfg.twistLimit)) {
-          const axis = new THREE.Vector3(0, 1, 0);
-          const twist = new THREE.Quaternion();
-          const swing = new THREE.Quaternion();
-          const r = new THREE.Vector3(rel.x, rel.y, rel.z);
-          const proj = axis.clone().multiplyScalar(r.dot(axis));
-          twist.set(proj.x, proj.y, proj.z, rel.w).normalize();
-          swing.copy(twist).invert().multiply(rel).normalize();
-          const swingLimit = THREE.MathUtils.degToRad(cfg.swingLimit ?? 180);
-          const twistLimit = THREE.MathUtils.degToRad(cfg.twistLimit ?? 180);
-          const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swing.w, -1, 1));
-          const twistAngle = 2 * Math.acos(THREE.MathUtils.clamp(twist.w, -1, 1));
-          const swingClamped = swingAngle > swingLimit && swingLimit > 0
-            ? swing.clone().slerp(new THREE.Quaternion(), 1 - swingLimit / swingAngle)
-            : swing;
-          const twistClamped = twistAngle > twistLimit && twistLimit > 0
-            ? twist.clone().slerp(new THREE.Quaternion(), 1 - twistLimit / twistAngle)
-            : twist;
-          const clampedRel = swingClamped.clone().multiply(twistClamped).normalize();
-          const clampedWorld = parentWorld.clone().multiply(clampedRel);
-          bone.quaternion.copy(invParent.multiply(clampedWorld));
-          body.setRotation(
-            { x: clampedWorld.x, y: clampedWorld.y, z: clampedWorld.z, w: clampedWorld.w },
-            true,
-          );
-        } else {
-          bone.quaternion.copy(rel);
-        }
-      } else {
-        bone.quaternion.copy(bodyQuat);
-      }
+      bone.parent.updateMatrixWorld(true);
+      parentWorldInv.copy(bone.parent.matrixWorld).invert();
+      bodyPos.applyMatrix4(parentWorldInv);
+      bone.parent.getWorldQuaternion(parentWorldQuat).invert();
+      bodyQuat.premultiply(parentWorldQuat);
+      bone.position.copy(bodyPos);
+      bone.quaternion.copy(bodyQuat);
     }
+    this.vrm.scene.updateMatrixWorld(true);
     for (const mesh of this.ragdollDebugMeshes) {
       const name = mesh.userData.ragdollName as string;
       const ragBone = this.ragdollBones.get(name);
