@@ -1359,10 +1359,16 @@ export class EditorApp {
       '<button data-add>Keyframe</button>',
       '<span class="timeline-title">Timeline</span>',
       '<button data-override>Override Off</button>',
+      '<button data-ragdoll>Ragdoll On/Off</button>',
+      '<button data-ragdoll-visual>Ragdoll Visual</button>',
+      '<button data-ragdoll-reset>Ragdoll Reset</button>',
+      '<button data-ragdoll-record>Record</button>',
+      '<button data-ragdoll-stop>Stop Rec</button>',
       '<label class="duration-field"><span>FPS</span><input data-fps type="number" min="5" max="60" step="1" value="30" /></label>',
       '<label class="duration-field"><span>Frames</span><input data-duration type="number" min="1" max="600" step="1" value="150" /></label>',
       '</div>',
       '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
+      '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
       '</div>',
       '<div class="timeline-grid timeline-midi">',
       '<div class="timeline-header" data-timeline-header></div>',
@@ -4783,8 +4789,18 @@ export class EditorApp {
 
     const tmpVec = new THREE.Vector3();
     const tmpVec2 = new THREE.Vector3();
-    const tmpQuat = new THREE.Quaternion();
     const axisQuat = new THREE.Quaternion();
+    const jointStiffness = 65;
+    const jointDamping = 7;
+    const spineStiffness = 95;
+    const spineDamping = 9;
+    const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
+      leftLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
+      rightLowerArm: { axis: [1, 0, 0], min: 0, max: 1.92 },
+      leftLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
+      rightLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.09 },
+    };
+    const spineJointChildren = new Set(['spine', 'chest', 'head']);
 
     const rootBone = getBone('hips');
     if (rootBone) {
@@ -4845,8 +4861,8 @@ export class EditorApp {
       const halfHeight = Math.max(0.05, length * 0.5 - radius);
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(tmpVec.x, tmpVec.y, tmpVec.z)
-        .setLinearDamping(1.2)
-        .setAngularDamping(1.1);
+        .setLinearDamping(2)
+        .setAngularDamping(2.8);
       let axis = new THREE.Vector3(0, 1, 0);
       let mid = tmpVec.clone();
       if (child) {
@@ -4869,6 +4885,7 @@ export class EditorApp {
         halfHeight > 0.06
           ? RAPIER.ColliderDesc.capsule(halfHeight, radius)
           : RAPIER.ColliderDesc.ball(radius);
+      collider.setDensity(45);
       world.createCollider(collider, body);
       const debugMat = new THREE.MeshBasicMaterial({
         color: 0x6ee7b7,
@@ -4913,11 +4930,26 @@ export class EditorApp {
       const anchorWorld = tmpVec.copy(childBone.bone.getWorldPosition(new THREE.Vector3()));
       const rel = anchorWorld.clone().sub(new THREE.Vector3(parentPos.x, parentPos.y, parentPos.z));
       rel.applyQuaternion(invParent);
-      const joint = RAPIER.JointData.spherical(
-        new RAPIER.Vector3(rel.x, rel.y, rel.z),
-        new RAPIER.Vector3(0, 0, 0),
-      );
-      world.createImpulseJoint(joint, parentBody, childBody, true);
+      const anchor1 = new RAPIER.Vector3(rel.x, rel.y, rel.z);
+      const anchor2 = new RAPIER.Vector3(0, 0, 0);
+      const hinge = hingeJoints[def.name];
+      const isSpineJoint = spineJointChildren.has(def.name);
+      const stiffness = isSpineJoint ? spineStiffness : jointStiffness;
+      const damping = isSpineJoint ? spineDamping : jointDamping;
+      let jointData: RAPIER.JointData;
+      if (hinge) {
+        const axis = new RAPIER.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]);
+        jointData = RAPIER.JointData.revolute(anchor1, anchor2, axis);
+      } else {
+        jointData = RAPIER.JointData.spherical(anchor1, anchor2);
+      }
+      jointData.stiffness = stiffness;
+      jointData.damping = damping;
+      const joint = world.createImpulseJoint(jointData, parentBody, childBody, true);
+      if (hinge) {
+        const revoluteJoint = joint as unknown as { setLimits?: (min: number, max: number) => void };
+        revoluteJoint.setLimits?.(hinge.min, hinge.max);
+      }
       childBone.parent = parentBone;
     }
   }
