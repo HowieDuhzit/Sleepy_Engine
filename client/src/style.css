@@ -1806,6 +1806,76 @@ body {
   grid-row: 1;
 }
 
+@media (max-width: 1280px) {
+  .react-mode-header {
+    gap: 6px;
+    padding: 5px 6px;
+  }
+
+  .editor-react-main {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+
+  .editor-react-bottom {
+    height: 154px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .editor-react-header {
+    flex-wrap: wrap;
+  }
+
+  .editor-react-tabs {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .editor-react-main {
+    inset: 86px 6px 170px;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .editor-react-bottom {
+    left: 6px;
+    right: 6px;
+    bottom: 6px;
+    height: 158px;
+  }
+}
+
+@media (max-width: 800px) {
+  .editor-react-main {
+    inset: 118px 6px 174px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 170px minmax(0, 1fr);
+  }
+
+  .editor-react-left {
+    overflow: auto;
+  }
+
+  .editor-react-bottom {
+    height: 168px;
+  }
+
+  .game-react-header {
+    max-width: none;
+    left: 6px;
+    right: 6px;
+    top: 6px;
+  }
+
+  .game-settings-panel {
+    width: calc(100vw - 14px);
+    max-height: calc(100vh - 14px);
+  }
+}
+
 .splash-screen::after {
   content: '';
   position: absolute;
