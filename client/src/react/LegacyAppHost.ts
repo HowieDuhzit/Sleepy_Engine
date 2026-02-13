@@ -13,6 +13,16 @@ const h = React.createElement;
 export function LegacyAppHost<T extends LegacyApp>({ createApp, onAppReady, onAppDispose }: LegacyAppHostProps<T>) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<T | null>(null);
+  const onAppReadyRef = useRef<typeof onAppReady>(onAppReady);
+  const onAppDisposeRef = useRef<typeof onAppDispose>(onAppDispose);
+
+  useEffect(() => {
+    onAppReadyRef.current = onAppReady;
+  }, [onAppReady]);
+
+  useEffect(() => {
+    onAppDisposeRef.current = onAppDispose;
+  }, [onAppDispose]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -22,15 +32,15 @@ export function LegacyAppHost<T extends LegacyApp>({ createApp, onAppReady, onAp
     const app = createApp(host);
     appRef.current = app;
     app.start();
-    onAppReady?.(app);
+    onAppReadyRef.current?.(app);
 
     return () => {
       appRef.current?.stop();
       appRef.current = null;
-      onAppDispose?.();
+      onAppDisposeRef.current?.();
       host.innerHTML = '';
     };
-  }, [createApp, onAppDispose, onAppReady]);
+  }, [createApp]);
 
   return h('div', { ref: hostRef, className: 'app-shell' });
 }
