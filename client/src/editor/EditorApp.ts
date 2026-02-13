@@ -760,6 +760,14 @@ export class EditorApp {
   public setExternalShellEnabled(enabled: boolean) {
     if (!this.hud) return;
     this.hud.classList.toggle('external-shell', enabled);
+    const header = this.hud.querySelector('.editor-header') as HTMLDivElement | null;
+    if (header) {
+      header.style.display = enabled ? 'none' : '';
+    }
+    const shellPanels = Array.from(this.hud.querySelectorAll('.editor-shell > .editor-left, .editor-shell > .editor-bottom')) as HTMLDivElement[];
+    for (const panel of shellPanels) {
+      panel.style.display = enabled ? 'none' : '';
+    }
     this.resizeRenderer();
     this.resizeTimeline();
   }

@@ -1888,6 +1888,11 @@ body {
   grid-row: 1;
 }
 
+.editor-ui.external-shell .editor-shell > .editor-left,
+.editor-ui.external-shell .editor-shell > .editor-bottom {
+  display: none !important;
+}
+
 @media (max-width: 1280px) {
   .react-mode-header {
     gap: 6px;
