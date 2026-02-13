@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getGameScenes, listGames } from '../services/game-api';
 import { PSXSettingsPanel } from '../ui/PSXSettingsPanel';
+import { UiButton, UiCard, UiField, UiSelect } from './ui-primitives';
 
 type MainMenuProps = {
   onPlay: (gameId: string, scene: string) => void;
@@ -89,45 +90,42 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
   const gameOptions = games.map((game) => h('option', { key: game.id, value: game.id }, game.name));
 
   const menuCard = h(
-    'div',
+    UiCard,
     { className: 'menu-card' },
     h('h1', { className: 'menu-title' }, 'Sleepy Engine'),
     h('p', { className: 'menu-description' }, 'Choose a game'),
-    h(
-      'label',
-      { className: 'menu-field' },
-      h('span', null, 'Game'),
-      h(
-        'select',
+    h(UiField, {
+      label: 'Game',
+      control: h(
+        UiSelect,
         {
           value: currentGameId,
           onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setCurrentGameId(event.target.value),
         },
         gameOptions
-      )
-    ),
+      ),
+    }),
     h(
-      'button',
+      UiButton,
       {
-        className: 'ui-button ui-button-primary',
+        variant: 'primary',
         onClick: () => currentGameId && onPlay(currentGameId, currentStartScene),
         disabled,
       },
       'Play'
     ),
     h(
-      'button',
+      UiButton,
       {
-        className: 'ui-button',
         onClick: () => currentGameId && onEditor(currentGameId, currentStartScene),
         disabled,
       },
       'Editor'
     ),
     h(
-      'button',
+      UiButton,
       {
-        className: 'ui-button ui-button-ghost',
+        variant: 'ghost',
         onClick: () => setShowSettings(true),
       },
       'Settings'
@@ -139,9 +137,9 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
     { className: 'menu-settings' },
     h('div', { ref: settingsHostRef }),
     h(
-      'button',
+      UiButton,
       {
-        className: 'ui-button menu-back-button',
+        className: 'menu-back-button',
         onClick: () => setShowSettings(false),
       },
       'Back to Menu'
