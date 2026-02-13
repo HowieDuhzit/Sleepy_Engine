@@ -10,15 +10,16 @@ Retro-console style game engine with a built-in editor. The app boots to a splas
 pnpm install
 ```
 
-2) Run the server:
+2) Run client + server together (from repo root):
+
+```bash
+pnpm dev:all
+```
+
+Optional: run them separately in two terminals:
 
 ```bash
 pnpm dev:server
-```
-
-3) Run the client:
-
-```bash
 pnpm dev
 ```
 

@@ -192,6 +192,13 @@ body,
   max-height: 100%;
 }
 
+.editor-ui.mode-player .editor-left[data-tab-panel='player'],
+.editor-ui.mode-level .editor-left[data-tab-panel='level'] {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+}
+
 .editor-view {
   position: relative;
   min-height: 0;
