@@ -783,6 +783,14 @@ export class EditorApp {
     if (!panel) return false;
     panel.style.display = '';
     host.appendChild(panel);
+    requestAnimationFrame(() => {
+      this.resizeRenderer();
+      if (tab === 'animation') {
+        this.resizeTimeline();
+        this.updateTimeline();
+        this.drawTimeline();
+      }
+    });
     return true;
   }
 
