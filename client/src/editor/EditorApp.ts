@@ -223,6 +223,10 @@ export class EditorApp {
   private currentTab: 'animation' | 'player' | 'level' | 'settings' = 'animation';
   private refreshClipsFunction: (() => Promise<void>) | null = null;
   private refreshScenesFunction: (() => Promise<void>) | null = null;
+  private loadGamesListFunction: (() => Promise<void>) | null = null;
+  private selectGameFunction: ((gameId: string) => Promise<void>) | null = null;
+  private applyTabFunction: ((tab: 'animation' | 'player' | 'level' | 'settings') => void) | null = null;
+  private externalPanelNodes = new Map<string, HTMLDivElement>();
   private onBackToMenu: (() => void) | null = null;
 
   private closestPointOnLineToRay(line: THREE.Line3, ray: THREE.Ray, target: THREE.Vector3) {
@@ -714,6 +718,64 @@ export class EditorApp {
     if (this.animationId !== null) return;
     this.clock.start();
     this.tick();
+  }
+
+  public getCurrentTab() {
+    return this.currentTab;
+  }
+
+  public setTabFromUi(tab: 'animation' | 'player' | 'level' | 'settings') {
+    this.applyTabFunction?.(tab);
+  }
+
+  public getCurrentGameId() {
+    return this.currentGameId;
+  }
+
+  public async listAvailableGamesFromUi() {
+    return await listGames();
+  }
+
+  public async selectGameFromUi(gameId: string) {
+    if (!gameId) return;
+    if (!this.selectGameFunction) return;
+    await this.selectGameFunction(gameId);
+  }
+
+  public async createGameFromUi(name: string, description = '') {
+    const data = await createGame({ name, description });
+    this.currentGameId = data.id;
+    localStorage.setItem('editorGameId', data.id);
+    if (this.loadGamesListFunction) {
+      await this.loadGamesListFunction();
+    }
+    if (this.selectGameFunction) {
+      await this.selectGameFunction(data.id);
+    } else {
+      await this.loadGameAssets();
+    }
+    return data;
+  }
+
+  public setExternalShellEnabled(enabled: boolean) {
+    if (!this.hud) return;
+    this.hud.classList.toggle('external-shell', enabled);
+    this.resizeRenderer();
+    this.resizeTimeline();
+  }
+
+  public mountExternalPanel(
+    tab: 'animation' | 'player' | 'level' | 'settings',
+    area: 'left' | 'bottom',
+    host: HTMLElement,
+  ) {
+    const key = `${area}:${tab}`;
+    const panel = this.externalPanelNodes.get(key);
+    host.innerHTML = '';
+    if (!panel) return false;
+    panel.style.display = '';
+    host.appendChild(panel);
+    return true;
   }
 
   stop() {
@@ -1594,9 +1656,7 @@ export class EditorApp {
       }
     };
 
-    // Game selection handler
-    gameSelect.addEventListener('change', async () => {
-      const gameId = gameSelect.value;
+    const selectGame = async (gameId: string) => {
       if (!gameId) {
         this.currentGameId = null;
         localStorage.removeItem('editorGameId');
@@ -1606,6 +1666,11 @@ export class EditorApp {
       localStorage.setItem('editorGameId', gameId);
       // Reload assets for this game
       await this.loadGameAssets();
+    };
+
+    // Game selection handler
+    gameSelect.addEventListener('change', async () => {
+      await selectGame(gameSelect.value);
     });
 
     // New game handler
@@ -1634,11 +1699,27 @@ export class EditorApp {
       }
     });
 
+    this.loadGamesListFunction = loadGamesList;
+    this.selectGameFunction = async (gameId: string) => {
+      gameSelect.value = gameId;
+      await selectGame(gameId);
+    };
+
     // Load games list on startup
     loadGamesList();
 
     const tabButtons = Array.from(hud.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
+    this.externalPanelNodes.clear();
+    for (const panel of tabPanels) {
+      const tab = panel.dataset.tabPanel as 'animation' | 'player' | 'level' | 'settings' | undefined;
+      if (!tab) continue;
+      if (panel.classList.contains('editor-left')) {
+        this.externalPanelNodes.set(`left:${tab}`, panel);
+      } else if (panel.classList.contains('editor-bottom')) {
+        this.externalPanelNodes.set(`bottom:${tab}`, panel);
+      }
+    }
     const panels = Array.from(hud.querySelectorAll('.panel')) as HTMLDivElement[];
     for (const panel of panels) {
       const title = panel.querySelector('.panel-title') as HTMLDivElement | null;
@@ -1666,33 +1747,34 @@ export class EditorApp {
         toggle.textContent = collapsed ? '+' : '–';
       });
     }
+    const applyTab = (tab: 'animation' | 'player' | 'level' | 'settings') => {
+      this.switchToTab(tab);
+      hud.classList.toggle('mode-animation', tab === 'animation');
+      hud.classList.toggle('mode-player', tab === 'player');
+      hud.classList.toggle('mode-level', tab === 'level');
+      hud.classList.toggle('mode-settings', tab === 'settings');
+      for (const btn of tabButtons) {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      }
+      for (const panel of tabPanels) {
+        const show = panel.dataset.tabPanel === tab;
+        panel.style.display = show ? '' : 'none';
+      }
+      this.resizeRenderer();
+      this.resizeTimeline();
+      this.drawTimeline();
+      this.fitCameraToVrm();
+    };
+    this.applyTabFunction = applyTab;
+
     tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
         const tab = button.dataset.tab as 'animation' | 'player' | 'level' | 'settings';
-        this.switchToTab(tab);
-        hud.classList.toggle('mode-animation', tab === 'animation');
-        hud.classList.toggle('mode-player', tab === 'player');
-        hud.classList.toggle('mode-level', tab === 'level');
-        hud.classList.toggle('mode-settings', tab === 'settings');
-        for (const btn of tabButtons) {
-          btn.classList.toggle('active', btn.dataset.tab === tab);
-        }
-        for (const panel of tabPanels) {
-          const show = panel.dataset.tabPanel === tab;
-          panel.style.display = show ? '' : 'none';
-        }
-        this.resizeRenderer();
-        this.resizeTimeline();
-        this.drawTimeline();
-        this.fitCameraToVrm();
+        applyTab(tab);
       });
     });
 
-    hud.classList.add('mode-animation');
-    // Show animation tab panels on startup
-    for (const panel of tabPanels) {
-      panel.style.display = panel.dataset.tabPanel === 'animation' ? '' : 'none';
-    }
+    applyTab('animation');
 
     const timeInput = hud.querySelector('[data-time]') as HTMLInputElement;
     const durationInput = hud.querySelector('[data-duration]') as HTMLInputElement;

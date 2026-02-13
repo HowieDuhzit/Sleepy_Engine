@@ -249,8 +249,9 @@ export class GameApp {
     crowd: 'crowd: none',
   };
   private inputDebugTimer = 0;
-  private settingsMenu: HTMLDivElement | null = null;
-  private backButton: HTMLButtonElement | null = null;
+  private cameraSettingsListeners = new Set<
+    (settings: { orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }) => void
+  >();
   private onBackToMenu: (() => void) | null = null;
   private handleContainerClick = () => {
     this.container.focus();
@@ -270,17 +271,9 @@ export class GameApp {
     }
     if (event.code === 'KeyV') {
       this.firstPersonMode = !this.firstPersonMode;
-      const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement | null;
-      if (toggle) toggle.checked = this.firstPersonMode;
+      this.emitCameraSettingsChange();
     }
   };
-  private handleEscapeMenuKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape' || !this.settingsMenu) return;
-    const isVisible = this.settingsMenu.style.display !== 'none';
-    this.settingsMenu.style.display = isVisible ? 'none' : 'block';
-    this.container.style.pointerEvents = isVisible ? 'auto' : 'none';
-  };
-
   private parseSceneGround(input: unknown) {
     if (!input || typeof input !== 'object') return null;
     const ground = input as {
@@ -376,7 +369,6 @@ export class GameApp {
     this.clock = new THREE.Clock();
     this.hud = this.createHud();
     this.perfHud = this.createPerfHud();
-    this.createSettingsMenu();
     void this.loadSceneConfig();
     this.crowd = this.createCrowd();
     this.input = new InputState();
@@ -424,17 +416,6 @@ export class GameApp {
     this.localPlayer = this.createPlayer();
 
     this.container.appendChild(this.renderer.domElement);
-    this.backButton = document.createElement('button');
-    this.backButton.textContent = 'Back to Menu';
-    this.backButton.className = 'mode-back-button';
-    this.backButton.style.position = 'absolute';
-    this.backButton.style.top = '14px';
-    this.backButton.style.right = '14px';
-    this.backButton.style.zIndex = '20';
-    this.backButton.addEventListener('click', () => {
-      this.onBackToMenu?.();
-    });
-    this.container.appendChild(this.backButton);
     this.container.appendChild(this.hud);
     this.container.appendChild(this.perfHud);
     this.hud.style.display = this.hudVisible ? 'block' : 'none';
@@ -497,7 +478,6 @@ export class GameApp {
     }
     this.container.removeEventListener('click', this.handleContainerClick);
     window.removeEventListener('keydown', this.handleDebugKeyDown);
-    window.removeEventListener('keydown', this.handleEscapeMenuKeyDown);
     this.renderer.domElement.removeEventListener('mousedown', this.handleMouseDown);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
@@ -512,10 +492,50 @@ export class GameApp {
     }
     this.input.dispose();
     void this.roomClient.disconnect();
-    this.settingsMenu?.remove();
-    this.settingsMenu = null;
-    this.backButton?.remove();
-    this.backButton = null;
+  }
+
+  private emitCameraSettingsChange() {
+    const settings = this.getUiCameraSettings();
+    for (const listener of this.cameraSettingsListeners) {
+      listener(settings);
+    }
+  }
+
+  public getUiCameraSettings() {
+    return {
+      orbitRadius: this.orbitRadius,
+      cameraSmoothing: this.cameraSmoothing,
+      cameraSensitivity: this.cameraSensitivity,
+      firstPersonMode: this.firstPersonMode,
+    };
+  }
+
+  public setUiCameraSettings(
+    patch: Partial<{ orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }>
+  ) {
+    if (typeof patch.orbitRadius === 'number') {
+      this.orbitRadius = Math.min(40, Math.max(1, patch.orbitRadius));
+    }
+    if (typeof patch.cameraSmoothing === 'number') {
+      this.cameraSmoothing = Math.min(1, Math.max(0, patch.cameraSmoothing));
+    }
+    if (typeof patch.cameraSensitivity === 'number') {
+      this.cameraSensitivity = Math.min(3, Math.max(0.1, patch.cameraSensitivity));
+    }
+    if (typeof patch.firstPersonMode === 'boolean') {
+      this.firstPersonMode = patch.firstPersonMode;
+    }
+    this.emitCameraSettingsChange();
+  }
+
+  public onUiCameraSettingsChange(
+    listener: (settings: { orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }) => void
+  ) {
+    this.cameraSettingsListeners.add(listener);
+    listener(this.getUiCameraSettings());
+    return () => {
+      this.cameraSettingsListeners.delete(listener);
+    };
   }
 
   private tick = () => {
@@ -529,8 +549,7 @@ export class GameApp {
     // Check for Select button press to toggle first person mode
     if (this.input.wasSelectJustPressed()) {
       this.firstPersonMode = !this.firstPersonMode;
-      const toggle = document.querySelector('#first-person-toggle') as HTMLInputElement;
-      if (toggle) toggle.checked = this.firstPersonMode;
+      this.emitCameraSettingsChange();
     }
 
     this.animateLocalPlayer(delta);
@@ -1040,177 +1059,6 @@ export class GameApp {
     return hud;
   }
 
-  private createSettingsMenu() {
-    const menu = document.createElement('div');
-    menu.id = 'settings-menu';
-    menu.className = 'settings-menu ui-card';
-    menu.innerHTML = `
-      <h2 class="settings-menu-title">Settings (ESC to close)</h2>
-
-      <h3 class="settings-menu-subtitle">Console Graphics</h3>
-      <label class="settings-menu-field">
-        Console Preset:
-        <select id="console-preset" class="ui-input">
-          <option value="ps1" ${psxSettings.config.consolePreset === 'ps1' ? 'selected' : ''}>PlayStation 1 (1994)</option>
-          <option value="n64" ${psxSettings.config.consolePreset === 'n64' ? 'selected' : ''}>Nintendo 64 (1996)</option>
-          <option value="dreamcast" ${psxSettings.config.consolePreset === 'dreamcast' ? 'selected' : ''}>Sega Dreamcast (1998)</option>
-          <option value="xbox" ${psxSettings.config.consolePreset === 'xbox' ? 'selected' : ''}>Xbox (2001)</option>
-          <option value="modern" ${psxSettings.config.consolePreset === 'modern' ? 'selected' : ''}>Modern (No Effects)</option>
-        </select>
-      </label>
-
-      <h3 class="settings-menu-subtitle">Color & Lighting</h3>
-      <label class="settings-menu-field">
-        Brightness: <span id="brightness-value">${psxSettings.config.brightness.toFixed(2)}</span>
-        <input type="range" id="brightness" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.brightness}">
-      </label>
-
-      <label class="settings-menu-field">
-        Contrast: <span id="contrast-value">${psxSettings.config.contrast.toFixed(2)}</span>
-        <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.contrast}">
-      </label>
-
-      <label class="settings-menu-field">
-        Saturation: <span id="saturation-value">${psxSettings.config.saturation.toFixed(2)}</span>
-        <input type="range" id="saturation" min="0.0" max="2.0" step="0.05" value="${psxSettings.config.saturation}">
-      </label>
-
-      <label class="settings-menu-field">
-        Gamma: <span id="gamma-value">${psxSettings.config.gamma.toFixed(2)}</span>
-        <input type="range" id="gamma" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.gamma}">
-      </label>
-
-      <label class="settings-menu-field">
-        Exposure: <span id="exposure-value">${psxSettings.config.exposure.toFixed(2)}</span>
-        <input type="range" id="exposure" min="0.5" max="2.0" step="0.05" value="${psxSettings.config.exposure}">
-      </label>
-
-      <h3 class="settings-menu-subtitle">Camera</h3>
-      <label class="settings-menu-field">
-        Camera Distance: <span id="camera-distance-value">6.0</span>m
-        <input type="range" id="camera-distance" min="1" max="15" step="0.5" value="6">
-      </label>
-
-      <label class="settings-menu-field">
-        Camera Smoothing: <span id="camera-smoothing-value">0%</span>
-        <input type="range" id="camera-smoothing" min="0" max="100" step="5" value="0">
-      </label>
-
-      <label class="settings-menu-field">
-        Camera Sensitivity: <span id="camera-sensitivity-value">1.0x</span>
-        <input type="range" id="camera-sensitivity" min="0.1" max="3" step="0.1" value="1.0">
-      </label>
-
-      <label class="settings-menu-check">
-        <input type="checkbox" id="first-person-toggle">
-        First Person Mode (or press Select)
-      </label>
-
-      <div class="settings-menu-note">
-        <small>Tips: Choose between PS1, N64, Dreamcast, Xbox, or Modern rendering styles!</small>
-      </div>
-    `;
-
-    document.body.appendChild(menu);
-    this.settingsMenu = menu;
-
-    // Wire up settings
-    const distanceSlider = menu.querySelector('#camera-distance') as HTMLInputElement;
-    const distanceValue = menu.querySelector('#camera-distance-value') as HTMLElement;
-    const smoothingSlider = menu.querySelector('#camera-smoothing') as HTMLInputElement;
-    const smoothingValue = menu.querySelector('#camera-smoothing-value') as HTMLElement;
-    const sensitivitySlider = menu.querySelector('#camera-sensitivity') as HTMLInputElement;
-    const sensitivityValue = menu.querySelector('#camera-sensitivity-value') as HTMLElement;
-    const firstPersonToggle = menu.querySelector('#first-person-toggle') as HTMLInputElement;
-
-    distanceSlider.addEventListener('input', () => {
-      this.orbitRadius = parseFloat(distanceSlider.value);
-      distanceValue.textContent = distanceSlider.value;
-    });
-
-    smoothingSlider.addEventListener('input', () => {
-      this.cameraSmoothing = parseFloat(smoothingSlider.value) / 100;
-      smoothingValue.textContent = smoothingSlider.value + '%';
-    });
-
-    sensitivitySlider.addEventListener('input', () => {
-      this.cameraSensitivity = parseFloat(sensitivitySlider.value);
-      sensitivityValue.textContent = sensitivitySlider.value + 'x';
-    });
-
-    firstPersonToggle.addEventListener('change', () => {
-      this.firstPersonMode = firstPersonToggle.checked;
-    });
-
-    // Console Preset Settings
-    const consolePreset = menu.querySelector('#console-preset') as HTMLSelectElement;
-    const brightnessSlider = menu.querySelector('#brightness') as HTMLInputElement;
-    const brightnessValue = menu.querySelector('#brightness-value') as HTMLElement;
-    const contrastSlider = menu.querySelector('#contrast') as HTMLInputElement;
-    const contrastValue = menu.querySelector('#contrast-value') as HTMLElement;
-    const saturationSlider = menu.querySelector('#saturation') as HTMLInputElement;
-    const saturationValue = menu.querySelector('#saturation-value') as HTMLElement;
-    const gammaSlider = menu.querySelector('#gamma') as HTMLInputElement;
-    const gammaValue = menu.querySelector('#gamma-value') as HTMLElement;
-    const exposureSlider = menu.querySelector('#exposure') as HTMLInputElement;
-    const exposureValue = menu.querySelector('#exposure-value') as HTMLElement;
-
-    consolePreset.addEventListener('change', () => {
-      psxSettings.applyConsolePreset(consolePreset.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
-      // Update UI to reflect preset values
-      brightnessSlider.value = psxSettings.config.brightness.toString();
-      brightnessValue.textContent = psxSettings.config.brightness.toFixed(2);
-      contrastSlider.value = psxSettings.config.contrast.toString();
-      contrastValue.textContent = psxSettings.config.contrast.toFixed(2);
-      saturationSlider.value = psxSettings.config.saturation.toString();
-      saturationValue.textContent = psxSettings.config.saturation.toFixed(2);
-      gammaSlider.value = psxSettings.config.gamma.toString();
-      gammaValue.textContent = psxSettings.config.gamma.toFixed(2);
-      exposureSlider.value = psxSettings.config.exposure.toString();
-      exposureValue.textContent = psxSettings.config.exposure.toFixed(2);
-      // Trigger update via event
-      window.dispatchEvent(new CustomEvent('psx-settings-changed'));
-    });
-
-    brightnessSlider.addEventListener('input', () => {
-      const value = parseFloat(brightnessSlider.value);
-      brightnessValue.textContent = value.toFixed(2);
-      psxSettings.update({ brightness: value });
-      if (this.psxPostProcessor) this.psxPostProcessor.setBrightness(value);
-    });
-
-    contrastSlider.addEventListener('input', () => {
-      const value = parseFloat(contrastSlider.value);
-      contrastValue.textContent = value.toFixed(2);
-      psxSettings.update({ contrast: value });
-      if (this.psxPostProcessor) this.psxPostProcessor.setContrast(value);
-    });
-
-    saturationSlider.addEventListener('input', () => {
-      const value = parseFloat(saturationSlider.value);
-      saturationValue.textContent = value.toFixed(2);
-      psxSettings.update({ saturation: value });
-      if (this.psxPostProcessor) this.psxPostProcessor.setSaturation(value);
-    });
-
-    gammaSlider.addEventListener('input', () => {
-      const value = parseFloat(gammaSlider.value);
-      gammaValue.textContent = value.toFixed(2);
-      psxSettings.update({ gamma: value });
-      if (this.psxPostProcessor) this.psxPostProcessor.setGamma(value);
-    });
-
-    exposureSlider.addEventListener('input', () => {
-      const value = parseFloat(exposureSlider.value);
-      exposureValue.textContent = value.toFixed(2);
-      psxSettings.update({ exposure: value });
-      if (this.psxPostProcessor) this.psxPostProcessor.setExposure(value);
-    });
-
-    // ESC to toggle menu
-    window.addEventListener('keydown', this.handleEscapeMenuKeyDown);
-  }
-
   private async connect() {
     try {
       await this.roomClient.connect({ gameId: this.gameId, sceneName: this.sceneName });
@@ -1630,6 +1478,7 @@ export class GameApp {
   private handleWheel = (event: WheelEvent) => {
     const zoomSpeed = 0.01;
     this.orbitRadius = Math.min(40, Math.max(6, this.orbitRadius + event.deltaY * zoomSpeed));
+    this.emitCameraSettingsChange();
   };
 
   private requestPointerLock = () => {
