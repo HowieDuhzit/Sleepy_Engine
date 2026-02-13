@@ -163,6 +163,7 @@ body,
   grid-template-rows: minmax(0, 1fr) 220px;
   gap: 12px;
   padding: 12px 16px;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -562,6 +563,11 @@ body,
   gap: 8px;
   min-height: 0;
   overflow: hidden;
+}
+
+.editor-bottom[data-tab-panel='animation'] {
+  min-height: 220px;
+  max-height: 220px;
 }
 
 .player-bottom {
