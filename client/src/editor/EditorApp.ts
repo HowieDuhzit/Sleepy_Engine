@@ -5000,6 +5000,18 @@ export class EditorApp {
   private normalizePlayerConfig(payload: Partial<PlayerConfig> | null | undefined): PlayerConfig {
     const defaults = createDefaultPlayerConfig();
     const data = (payload ?? {}) as Partial<PlayerConfig>;
+    const profileTags = Array.isArray(data.profile?.tags)
+      ? data.profile.tags.map((tag) => String(tag))
+      : [...defaults.profile.tags];
+    const machineStates = Array.isArray(data.stateMachine?.states)
+      ? data.stateMachine.states
+      : null;
+    const machineTransitions = Array.isArray(data.stateMachine?.transitions)
+      ? data.stateMachine.transitions
+      : null;
+    const npcGoals = Array.isArray(data.npc?.goals)
+      ? data.npc.goals.map((goal) => String(goal))
+      : [...defaults.npc.goals];
     return {
       ...defaults,
       ...data,
@@ -5010,16 +5022,14 @@ export class EditorApp {
       profile: {
         ...defaults.profile,
         ...(data.profile ?? {}),
-        tags: Array.isArray(data.profile?.tags)
-          ? data.profile!.tags.map((tag) => String(tag))
-          : [...defaults.profile.tags],
+        tags: profileTags,
       },
       capsule: { ...defaults.capsule, ...(data.capsule ?? {}) },
       stateMachine: {
         initial: String(data.stateMachine?.initial ?? defaults.stateMachine.initial),
-        states: Array.isArray(data.stateMachine?.states)
-          ? data
-              .stateMachine!.states.map((state) => ({
+        states: machineStates
+          ? machineStates
+              .map((state) => ({
                 ...parseStateMachineState(state),
               }))
               .filter((state) => state.id.length > 0)
@@ -5027,9 +5037,9 @@ export class EditorApp {
               ...state,
               tags: [...(state.tags ?? [])],
             })),
-        transitions: Array.isArray(data.stateMachine?.transitions)
-          ? data
-              .stateMachine!.transitions.map((transition) => ({
+        transitions: machineTransitions
+          ? machineTransitions
+              .map((transition) => ({
                 ...parseStateMachineTransition(transition),
               }))
               .filter((transition) => transition.to.length > 0)
@@ -5038,9 +5048,7 @@ export class EditorApp {
       npc: {
         ...defaults.npc,
         ...(data.npc ?? {}),
-        goals: Array.isArray(data.npc?.goals)
-          ? data.npc!.goals.map((goal) => String(goal))
-          : [...defaults.npc.goals],
+        goals: npcGoals,
       },
     };
   }
