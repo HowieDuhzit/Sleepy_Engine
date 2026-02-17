@@ -8,6 +8,14 @@ type HumanoidInternals = {
   _parentWorldRotations?: Record<string, QuaternionLike>;
 };
 
+const getNormalizedHumanoidInternals = (value: unknown): HumanoidInternals | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  if (!('_normalizedHumanBones' in value)) return undefined;
+  const normalized = value._normalizedHumanBones;
+  if (!normalized || typeof normalized !== 'object') return undefined;
+  return normalized as HumanoidInternals;
+};
+
 export function retargetMixamoClip(
   entry: { clip: THREE.AnimationClip; rig: THREE.Object3D },
   vrm: VRM,
@@ -96,8 +104,7 @@ export function retargetMixamoClip(
   const hipsPositionScale =
     mixamoHips && vrmHips ? vrmHips.getWorldPosition(v).y / mixamoHips.getWorldPosition(v).y : 1;
 
-  const normalizedHumanoid = (humanoid as unknown as { _normalizedHumanBones?: HumanoidInternals })
-    ._normalizedHumanBones;
+  const normalizedHumanoid = getNormalizedHumanoidInternals(humanoid);
   const boneRotations = normalizedHumanoid?._boneRotations ?? {};
   const parentWorldRotations = normalizedHumanoid?._parentWorldRotations ?? {};
   const resolveQuat = (value: QuaternionLike) => {

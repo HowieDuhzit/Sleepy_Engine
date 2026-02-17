@@ -112,6 +112,7 @@ type TransformControlsInternal = TransformControls & {
   axis?: string | null;
   object?: THREE.Object3D | null;
 };
+type TransformControlsObject3D = TransformControls & THREE.Object3D;
 type RevoluteJointLike = { setLimits?: (min: number, max: number) => void };
 type SleepingBodyLike = { isSleeping?: () => boolean };
 
@@ -146,7 +147,7 @@ const transformControlsInternal = (control: TransformControls): TransformControl
 
 const setTransformControlsVisible = (control: TransformControls | null, visible: boolean) => {
   if (!control) return;
-  (control as unknown as THREE.Object3D).visible = visible;
+  (control as TransformControlsObject3D).visible = visible;
 };
 
 type PlayerCapsuleConfig = {
