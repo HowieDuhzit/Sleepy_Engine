@@ -107,6 +107,13 @@ type StateMachineTransitionDef = {
 };
 
 type HumanBoneName = Parameters<VRM['humanoid']['getRawBoneNode']>[0];
+type TransformControlsInternal = TransformControls & {
+  _root?: THREE.Object3D;
+  axis?: string | null;
+  object?: THREE.Object3D | null;
+};
+type RevoluteJointLike = { setLimits?: (min: number, max: number) => void };
+type SleepingBodyLike = { isSleeping?: () => boolean };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object';
@@ -132,6 +139,14 @@ const parseStateMachineTransition = (value: unknown): StateMachineTransitionDef 
     priority: Math.max(0, Number(transition.priority ?? 1) || 1),
     interruptible: Boolean(transition.interruptible ?? true),
   };
+};
+
+const transformControlsInternal = (control: TransformControls): TransformControlsInternal =>
+  control as TransformControlsInternal;
+
+const setTransformControlsVisible = (control: TransformControls | null, visible: boolean) => {
+  if (!control) return;
+  (control as unknown as THREE.Object3D).visible = visible;
 };
 
 type PlayerCapsuleConfig = {
@@ -683,8 +698,11 @@ export class EditorApp {
       // Calculate initial gesture state for pinch and rotation
       const pointers = Array.from(this.activePointers.values());
       if (pointers.length >= 2) {
-        const dx = pointers[1]!.x - pointers[0]!.x;
-        const dy = pointers[1]!.y - pointers[0]!.y;
+        const first = pointers[0];
+        const second = pointers[1];
+        if (!first || !second) return;
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
         this.gestureStartDistance = Math.sqrt(dx * dx + dy * dy);
         this.gestureStartRotation = Math.atan2(dy, dx);
 
@@ -725,8 +743,11 @@ export class EditorApp {
 
     // Two-finger gestures
     if (pointers.length === 2 && this.controls) {
-      const dx = pointers[1]!.x - pointers[0]!.x;
-      const dy = pointers[1]!.y - pointers[0]!.y;
+      const first = pointers[0];
+      const second = pointers[1];
+      if (!first || !second) return;
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
       const currentDistance = Math.sqrt(dx * dx + dy * dy);
       const currentRotation = Math.atan2(dy, dx);
 
@@ -812,8 +833,11 @@ export class EditorApp {
     // Update gesture state if still 2+ fingers
     if (this.activePointers.size >= 2) {
       const pointers = Array.from(this.activePointers.values());
-      const dx = pointers[1]!.x - pointers[0]!.x;
-      const dy = pointers[1]!.y - pointers[0]!.y;
+      const first = pointers[0];
+      const second = pointers[1];
+      if (!first || !second) return;
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
       this.gestureStartDistance = Math.sqrt(dx * dx + dy * dy);
       this.gestureStartRotation = Math.atan2(dy, dx);
 
@@ -924,29 +948,26 @@ export class EditorApp {
     this.controls.maxDistance = 20;
 
     this.ragdollTransform = new TransformControls(this.camera, this.renderer.domElement);
-    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+    setTransformControlsVisible(this.ragdollTransform, false);
     this.ragdollTransform.setMode('translate');
     this.ragdollTransform.addEventListener('dragging-changed', (event) => {
       if (this.controls) this.controls.enabled = !event.value;
     });
-    // Add TransformControls internal root to scene
-    // @ts-expect-error - TransformControls has internal _root property
-    if (this.ragdollTransform._root) {
-      // @ts-expect-error
-      this.characterScene.add(this.ragdollTransform._root);
+    const ragdollRoot = transformControlsInternal(this.ragdollTransform)._root;
+    if (ragdollRoot) {
+      this.characterScene.add(ragdollRoot);
     }
 
     this.levelTransform = new TransformControls(this.camera, this.renderer.domElement);
-    (this.levelTransform as unknown as THREE.Object3D).visible = false;
+    setTransformControlsVisible(this.levelTransform, false);
     this.levelTransform.setMode('translate');
     this.levelTransform.addEventListener('dragging-changed', (event) => {
       if (this.controls) this.controls.enabled = !event.value;
     });
     this.levelTransform.addEventListener('objectChange', this.handleLevelTransformObjectChange);
-    // @ts-expect-error
-    if (this.levelTransform._root) {
-      // @ts-expect-error
-      this.levelScene.add(this.levelTransform._root);
+    const levelRoot = transformControlsInternal(this.levelTransform)._root;
+    if (levelRoot) {
+      this.levelScene.add(levelRoot);
     }
 
     this.hud = this.createHud();
@@ -1303,7 +1324,7 @@ export class EditorApp {
     }
     if (tab !== 'level' && this.levelTransform) {
       this.levelTransform.detach();
-      (this.levelTransform as unknown as THREE.Object3D).visible = false;
+      setTransformControlsVisible(this.levelTransform, false);
     }
     if (
       (tab !== 'animation' && tab !== 'player') ||
@@ -1413,8 +1434,11 @@ export class EditorApp {
     if (this.selectedLevelObjectId && this.levelSceneObjects.has(this.selectedLevelObjectId)) {
       this.levelObjectSelectEl.value = this.selectedLevelObjectId;
     } else if (entries.length > 0) {
-      this.levelObjectSelectEl.value = entries[0]!.id;
-      this.selectLevelObject(entries[0]!.id);
+      const firstEntry = entries[0];
+      if (firstEntry) {
+        this.levelObjectSelectEl.value = firstEntry.id;
+        this.selectLevelObject(firstEntry.id);
+      }
     } else {
       this.selectLevelObject(null);
     }
@@ -1648,10 +1672,10 @@ export class EditorApp {
     const entry = objectId ? (this.levelSceneObjects.get(objectId) ?? null) : null;
     if (entry?.object && entry.object.parent) {
       this.levelTransform.attach(entry.object);
-      (this.levelTransform as unknown as THREE.Object3D).visible = true;
+      setTransformControlsVisible(this.levelTransform, true);
     } else {
       this.levelTransform.detach();
-      (this.levelTransform as unknown as THREE.Object3D).visible = false;
+      setTransformControlsVisible(this.levelTransform, false);
     }
   }
 
@@ -1734,8 +1758,8 @@ export class EditorApp {
 
   private isTransformGizmoActive(control: TransformControls | null) {
     if (!control) return false;
-    const axis = (control as unknown as { axis?: string | null }).axis ?? null;
-    return axis != null && axis !== '';
+    const axis = transformControlsInternal(control).axis ?? null;
+    return axis != null;
   }
 
   // Get API path for animations (game-scoped only)
@@ -4578,7 +4602,8 @@ export class EditorApp {
     menu.appendChild(cancel);
 
     // Position near the timeline scrub point
-    const rect = this.timeline!.getBoundingClientRect();
+    if (!this.timeline) return;
+    const rect = this.timeline.getBoundingClientRect();
     const totalFrames = this.getTotalFrames();
     const cellWidth = rect.width / totalFrames;
     const px = rect.left + (frameIndex + 0.5) * cellWidth;
@@ -4832,11 +4857,12 @@ export class EditorApp {
     if (!prev && !next) return;
     if (!next) next = prev;
     if (!prev) prev = next;
-    const qa = prev!.bones[key];
-    const qb = next!.bones[key];
+    if (!prev || !next) return;
+    const qa = prev.bones[key];
+    const qb = next.bones[key];
     if (!qa || !qb) return;
-    const span = Math.max(0.0001, next!.time - prev!.time);
-    const t = THREE.MathUtils.clamp((time - prev!.time) / span, 0, 1);
+    const span = Math.max(0.0001, next.time - prev.time);
+    const t = THREE.MathUtils.clamp((time - prev.time) / span, 0, 1);
     const base = new THREE.Quaternion(qa.x, qa.y, qa.z, qa.w).slerp(
       new THREE.Quaternion(qb.x, qb.y, qb.z, qb.w),
       t,
@@ -5893,10 +5919,10 @@ export class EditorApp {
     if (this.ragdollTransform) {
       if (mesh && mesh.parent) {
         this.ragdollTransform.attach(mesh);
-        (this.ragdollTransform as unknown as THREE.Object3D).visible = true;
+        setTransformControlsVisible(this.ragdollTransform, true);
       } else {
         this.ragdollTransform.detach();
-        (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+        setTransformControlsVisible(this.ragdollTransform, false);
       }
     }
     if (mesh && mesh.parent) {
@@ -6005,17 +6031,17 @@ export class EditorApp {
   private detachRagdollTransform() {
     if (!this.ragdollTransform) return;
     this.ragdollTransform.detach();
-    (this.ragdollTransform as unknown as THREE.Object3D).visible = false;
+    setTransformControlsVisible(this.ragdollTransform, false);
     this.selectedRagdoll = null;
   }
 
   private sanitizeTransformControls() {
     const sanitize = (control: TransformControls | null) => {
       if (!control) return;
-      const target = (control as unknown as { object?: THREE.Object3D | null }).object;
+      const target = transformControlsInternal(control).object;
       if (!target || !target.parent) {
         control.detach();
-        (control as unknown as THREE.Object3D).visible = false;
+        setTransformControlsVisible(control, false);
       }
     };
     sanitize(this.ragdollTransform);
@@ -6768,10 +6794,7 @@ export class EditorApp {
       jointData.damping = damping;
       const joint = world.createImpulseJoint(jointData, parentBody, childBody, true);
       if (hinge) {
-        const revoluteJoint = joint as unknown as {
-          setLimits?: (min: number, max: number) => void;
-        };
-        revoluteJoint.setLimits?.(hinge.min, hinge.max);
+        (joint as RevoluteJointLike).setLimits?.(hinge.min, hinge.max);
       }
       childBone.parent = parentBone;
       const pRotInit = parentBody.rotation();
@@ -6810,8 +6833,7 @@ export class EditorApp {
     // Hard-clamp anatomical joints so they cannot exceed human ranges.
     for (const ragBone of this.ragdollBones.values()) {
       if (!ragBone.parent) continue;
-      const isSleeping =
-        (ragBone.body as unknown as { isSleeping?: () => boolean }).isSleeping?.() ?? false;
+      const isSleeping = (ragBone.body as SleepingBodyLike).isSleeping?.() ?? false;
       if (isSleeping) continue;
       const pRot = ragBone.parent.body.rotation();
       const cRot = ragBone.body.rotation();
