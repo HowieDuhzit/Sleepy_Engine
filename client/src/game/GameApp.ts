@@ -301,7 +301,7 @@ export class GameApp {
       textureRepeat?: number;
     };
     return {
-      type: ground.type === 'concrete' ? 'concrete' : 'concrete',
+      type: 'concrete',
       width: Math.max(1, Number(ground.width ?? 120)),
       depth: Math.max(1, Number(ground.depth ?? 120)),
       y: Number(ground.y ?? 0),
@@ -903,19 +903,22 @@ export class GameApp {
           string,
           { node?: THREE.Object3D }
         >;
-        const normalizedMap = Object.entries(normalized)
-          .filter(([, bone]) => bone?.node)
-          .map(([key, bone]) => ({ key, name: bone!.node!.name }));
+        const normalizedMap = Object.entries(normalized).flatMap(([key, bone]) =>
+          bone?.node ? [{ key, name: bone.node.name }] : [],
+        );
         const rawKeys = Object.keys(normalized);
-        const rawMap = rawKeys
-          .map((key) => ({
-            key,
-            node: vrm.humanoid.getRawBoneNode(
-              key as Parameters<VRM['humanoid']['getRawBoneNode']>[0],
-            ),
-          }))
-          .filter((entry) => entry.node)
-          .map((entry) => ({ key: entry.key, name: entry.node!.name }));
+        const rawMap = rawKeys.flatMap((key) => {
+          const node = vrm.humanoid.getRawBoneNode(
+            key as Parameters<VRM['humanoid']['getRawBoneNode']>[0],
+          );
+          if (!node) return [];
+          return [
+            {
+              key,
+              name: node.name,
+            },
+          ];
+        });
         const normalizedRootName = vrm.humanoid.normalizedHumanBonesRoot?.name ?? null;
         const idleClip = this.jsonClips.idle
           ? buildAnimationClipFromData('idle', this.jsonClips.idle, {
@@ -1060,10 +1063,11 @@ export class GameApp {
   private animateCrowd(time: number, delta: number) {
     if (!this.crowdEnabled) return;
     if (this.crowdAvatars.length === 0) return;
-    if (this.crowdAvatars[0]?.debug) {
-      const dbg = this.crowdAvatars[0].debug!;
-      const idleW = this.crowdAvatars[0].actions.idle?.weight ?? 0;
-      const walkW = this.crowdAvatars[0].actions.walk?.weight ?? 0;
+    const firstAvatar = this.crowdAvatars[0];
+    if (firstAvatar?.debug) {
+      const dbg = firstAvatar.debug;
+      const idleW = firstAvatar.actions.idle?.weight ?? 0;
+      const walkW = firstAvatar.actions.walk?.weight ?? 0;
       this.statusLines.crowd = `crowd: idleTracks ${dbg.idleTracks}, walkTracks ${dbg.walkTracks}, idleW ${idleW.toFixed(2)}, walkW ${walkW.toFixed(2)}`;
       const node = this.hud.querySelector('[data-hud-crowd]');
       if (node) node.textContent = this.statusLines.crowd;
@@ -1072,8 +1076,9 @@ export class GameApp {
       const agents = Array.from(this.crowdAgents.values()).map((entry) => entry.agent);
       const count = Math.min(this.crowdAvatars.length, agents.length);
       for (let i = 0; i < count; i += 1) {
-        const agent = agents[i]!;
-        const avatar = this.crowdAvatars[i]!;
+        const agent = agents[i];
+        const avatar = this.crowdAvatars[i];
+        if (!agent || !avatar || !this.crowdTemplate) continue;
         avatar.root.position.set(agent.position.x, avatar.baseY, agent.position.z);
         if (Math.hypot(agent.velocity.x, agent.velocity.z) > 0.05) {
           avatar.root.rotation.y = Math.atan2(agent.velocity.x, agent.velocity.z) + Math.PI;
@@ -1088,7 +1093,7 @@ export class GameApp {
           this.remoteLatestAnim.delete(crowdId);
         }
         const crowdActor = {
-          vrm: this.crowdTemplate!,
+          vrm: this.crowdTemplate,
           mixer: avatar.mixer,
           actions: avatar.actions,
           base: 'idle' as const,
@@ -1100,7 +1105,8 @@ export class GameApp {
       return;
     }
     for (let i = 0; i < this.crowdAvatars.length; i += 1) {
-      const avatar = this.crowdAvatars[i]!;
+      const avatar = this.crowdAvatars[i];
+      if (!avatar) continue;
       avatar.root.position.x += Math.sin(time * 0.6 + i) * 0.002;
       avatar.root.position.z += Math.cos(time * 0.6 + i) * 0.002;
       if (avatar.actions.idle) {
@@ -1624,8 +1630,12 @@ export class GameApp {
       if (this.lastSnapshotTimes.length >= 3) {
         const intervals: number[] = [];
         for (let i = 1; i < this.lastSnapshotTimes.length; i++) {
-          intervals.push(this.lastSnapshotTimes[i]! - this.lastSnapshotTimes[i - 1]!);
+          const current = this.lastSnapshotTimes[i];
+          const previous = this.lastSnapshotTimes[i - 1];
+          if (typeof current !== 'number' || typeof previous !== 'number') continue;
+          intervals.push(current - previous);
         }
+        if (intervals.length === 0) return;
         const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
         const variance =
           intervals.reduce((sum, interval) => sum + Math.pow(interval - avgInterval, 2), 0) /
@@ -1735,7 +1745,8 @@ export class GameApp {
       const { mesh, snapshots } = entry;
       if (snapshots.length === 0) continue;
       if (snapshots.length === 1) {
-        const snap = snapshots[0]!;
+        const snap = snapshots[0];
+        if (!snap) continue;
         mesh.position.set(snap.position.x, snap.position.y, snap.position.z);
         if (Number.isFinite(snap.yaw)) {
           mesh.rotation.y = snap.yaw;
@@ -1749,10 +1760,14 @@ export class GameApp {
         continue;
       }
 
-      let older = snapshots[0]!;
-      let newer = snapshots[snapshots.length - 1]!;
+      const firstSnapshot = snapshots[0];
+      const lastSnapshot = snapshots[snapshots.length - 1];
+      if (!firstSnapshot || !lastSnapshot) continue;
+      let older = firstSnapshot;
+      let newer = lastSnapshot;
       for (let i = snapshots.length - 1; i >= 0; i -= 1) {
-        const current = snapshots[i]!;
+        const current = snapshots[i];
+        if (!current) continue;
         if (current.t <= renderTime) {
           older = current;
           newer = snapshots[i + 1] ?? current;
@@ -1794,7 +1809,8 @@ export class GameApp {
         mesh.rotation.y = older.yaw + dy * alpha;
       }
       // Use latest snapshot velocity for responsive animations (don't interpolate velocity)
-      const latest = snapshots[snapshots.length - 1]!;
+      const latest = snapshots[snapshots.length - 1];
+      if (!latest) continue;
       this.remoteLatestVel.set(id, {
         x: latest.velocity.x,
         y: latest.velocity.y,
@@ -2248,10 +2264,9 @@ export class GameApp {
       state.timer = (pick === 'climb_up' ? climbUp : hangWall)?.getClip().duration ?? 0.35;
     }
 
-    const forcedRemote = !local && this.remoteLatestAnim.get(actorId);
+    const forcedRemote = !local ? this.remoteLatestAnim.get(actorId) : undefined;
     if (forcedRemote) {
-      const remote = this.remoteLatestAnim.get(actorId)!;
-      state.mode = remote.state;
+      state.mode = forcedRemote.state;
       state.timer = 0;
     } else if (!grounded) {
       state.mode =
@@ -2401,9 +2416,8 @@ export class GameApp {
       action.paused = false;
       if (!action.isRunning()) action.play();
       if (forcedRemote && name && name === state.mode) {
-        const remote = this.remoteLatestAnim.get(actorId)!;
         const duration = action.getClip().duration || 1;
-        const time = ((remote.time % duration) + duration) % duration;
+        const time = ((forcedRemote.time % duration) + duration) % duration;
         action.time = time;
       }
       const target = weight;
@@ -2450,12 +2464,13 @@ export class GameApp {
     if (!actorId.startsWith('crowd_')) {
       const neck = actor.vrm.humanoid.getRawBoneNode('neck');
       const head = actor.vrm.humanoid.getRawBoneNode('head');
+      const remoteLook = this.remoteLatestLook.get(actorId);
       const targetLook = local
         ? { yaw: -this.localLookYaw, pitch: -this.localLookPitch }
-        : this.remoteLatestLook.get(actorId)
+        : remoteLook
           ? {
-              yaw: -this.remoteLatestLook.get(actorId)!.yaw,
-              pitch: -this.remoteLatestLook.get(actorId)!.pitch,
+              yaw: -remoteLook.yaw,
+              pitch: -remoteLook.pitch,
             }
           : { yaw: 0, pitch: 0 };
       const smooth = 1 - Math.exp(-delta * 8);

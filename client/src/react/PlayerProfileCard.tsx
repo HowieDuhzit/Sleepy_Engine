@@ -5,7 +5,7 @@ import { Connection, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { NameRegistryState } from '@bonfida/spl-name-service';
 import { uploadGameAvatar } from '../services/game-api';
 
-const nameRegistry = NameRegistryState as unknown as {
+type NameRegistryClient = {
   retrieve: (
     connection: Connection,
     owner: PublicKey,
@@ -13,9 +13,19 @@ const nameRegistry = NameRegistryState as unknown as {
   ) => Promise<{ registryData?: { name?: string } } | null>;
 };
 
+const getNameRegistryClient = (): NameRegistryClient | null => {
+  const candidate: unknown = NameRegistryState;
+  if (!candidate || typeof candidate !== 'object' || !('retrieve' in candidate)) return null;
+  const retrieve = candidate.retrieve;
+  if (typeof retrieve !== 'function') return null;
+  return { retrieve: retrieve as NameRegistryClient['retrieve'] };
+};
+
 async function resolveSnsName(connection: Connection, owner: PublicKey): Promise<string | null> {
   try {
-    const registry = await nameRegistry.retrieve(connection, owner, undefined);
+    const client = getNameRegistryClient();
+    if (!client) return null;
+    const registry = await client.retrieve(connection, owner, undefined);
     return registry?.registryData?.name ?? null;
   } catch (err) {
     console.warn('SNS lookup failed', err);
