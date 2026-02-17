@@ -15,9 +15,7 @@ import { RedisDriver } from '@colyseus/redis-driver';
 const port = Number(process.env.GAME_PORT ?? process.env.COLYSEUS_PORT ?? process.env.PORT ?? 2567);
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const gamesDir =
-  process.env.GAMES_DIR ??
-  process.env.PROJECTS_DIR ??
-  path.join(serverDir, 'projects');
+  process.env.GAMES_DIR ?? process.env.PROJECTS_DIR ?? path.join(serverDir, 'projects');
 const redisUrl = process.env.REDIS_URL;
 const { Server } = colyseusPkg as typeof import('colyseus');
 const gameServer = redisUrl
@@ -236,10 +234,7 @@ app.post('/api/games', requireAdmin, async (req: Request, res: Response) => {
       updatedAt: new Date().toISOString(),
     };
 
-    await fs.writeFile(
-      path.join(gamePath, 'game.json'),
-      JSON.stringify(meta, null, 2)
-    );
+    await fs.writeFile(path.join(gamePath, 'game.json'), JSON.stringify(meta, null, 2));
 
     res.json({ ok: true, id: gameId, ...meta });
   } catch (err) {
@@ -504,34 +499,38 @@ app.post('/api/player-config', requireAdmin, async (req: Request, res: Response)
 });
 
 // Save game animation
-app.post('/api/games/:gameId/animations/:name', requireAdmin, async (req: Request, res: Response) => {
-  try {
-    const gameId = safeGameId(req.params.gameId ?? '');
-    const rawName = req.params.name ?? '';
-    if (!gameId || !rawName) {
-      res.status(400).json({ error: 'missing_params' });
-      return;
+app.post(
+  '/api/games/:gameId/animations/:name',
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      const gameId = safeGameId(req.params.gameId ?? '');
+      const rawName = req.params.name ?? '';
+      if (!gameId || !rawName) {
+        res.status(400).json({ error: 'missing_params' });
+        return;
+      }
+
+      const parsed = animationPayloadSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+        return;
+      }
+
+      await ensureGameDir(gameId);
+      const filename = safeName(rawName);
+      const filePath = path.join(gamesDir, gameId, 'animations', filename);
+      const payload = JSON.stringify(parsed.data, null, 2);
+      await fs.writeFile(filePath, payload);
+      await cacheSet(cacheKey('game', gameId, 'animations', filename), payload);
+      await cacheDel(cacheKey('game', gameId, 'animations', 'list'));
+
+      res.json({ ok: true, file: filename });
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_save', detail: String(err) });
     }
-
-    const parsed = animationPayloadSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
-      return;
-    }
-
-    await ensureGameDir(gameId);
-    const filename = safeName(rawName);
-    const filePath = path.join(gamesDir, gameId, 'animations', filename);
-    const payload = JSON.stringify(parsed.data, null, 2);
-    await fs.writeFile(filePath, payload);
-    await cacheSet(cacheKey('game', gameId, 'animations', filename), payload);
-    await cacheDel(cacheKey('game', gameId, 'animations', 'list'));
-
-    res.json({ ok: true, file: filename });
-  } catch (err) {
-    res.status(500).json({ error: 'failed_to_save', detail: String(err) });
-  }
-});
+  },
+);
 
 // Get game scenes
 app.get('/api/games/:gameId/scenes', async (req: Request, res: Response) => {

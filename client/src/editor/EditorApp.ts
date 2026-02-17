@@ -22,7 +22,12 @@ import {
   saveGameScenes,
 } from '../services/game-api';
 import type * as RAPIER from '@dimforge/rapier3d-compat';
-import { buildAnimationClipFromData, parseClipPayload, type BoneFrame, type ClipData } from '../game/clip';
+import {
+  buildAnimationClipFromData,
+  parseClipPayload,
+  type BoneFrame,
+  type ClipData,
+} from '../game/clip';
 
 const MAX_DURATION = 10;
 const SAMPLE_RATE = 30;
@@ -62,7 +67,14 @@ type LevelScene = {
   obstacles?: LevelObstacle[];
   ground?: LevelGround;
   player?: { avatar?: string; x?: number; y?: number; z?: number; yaw?: number };
-  crowd?: { enabled?: boolean; avatar?: string; x?: number; y?: number; z?: number; radius?: number };
+  crowd?: {
+    enabled?: boolean;
+    avatar?: string;
+    x?: number;
+    y?: number;
+    z?: number;
+    radius?: number;
+  };
 };
 
 type LevelObjectKind = 'ground' | 'player' | 'crowd' | 'obstacle';
@@ -178,7 +190,14 @@ type PlayerConfig = {
   };
   ragdollRig: Record<
     string,
-    { radiusScale: number; lengthScale: number; offset?: Vec3; rot?: Vec3; swingLimit?: number; twistLimit?: number }
+    {
+      radiusScale: number;
+      lengthScale: number;
+      offset?: Vec3;
+      rot?: Vec3;
+      swingLimit?: number;
+      twistLimit?: number;
+    }
   >;
   profile: CharacterProfile;
   capsule: PlayerCapsuleConfig;
@@ -198,11 +217,46 @@ const DEFAULT_STATE_MACHINE_STATES: StateMachineStateDef[] = [
 ];
 
 const DEFAULT_STATE_MACHINE_TRANSITIONS: StateMachineTransitionDef[] = [
-  { from: 'idle', to: 'walk', condition: 'speed > 0.15', blendMs: 120, priority: 1, interruptible: true },
-  { from: 'walk', to: 'run', condition: 'speed > 3.9', blendMs: 90, priority: 1, interruptible: true },
-  { from: 'run', to: 'walk', condition: 'speed <= 3.9', blendMs: 100, priority: 1, interruptible: true },
-  { from: 'walk', to: 'idle', condition: 'speed <= 0.15', blendMs: 140, priority: 1, interruptible: true },
-  { from: 'any', to: 'jump', condition: 'jumpPressed && grounded', blendMs: 70, priority: 5, interruptible: true },
+  {
+    from: 'idle',
+    to: 'walk',
+    condition: 'speed > 0.15',
+    blendMs: 120,
+    priority: 1,
+    interruptible: true,
+  },
+  {
+    from: 'walk',
+    to: 'run',
+    condition: 'speed > 3.9',
+    blendMs: 90,
+    priority: 1,
+    interruptible: true,
+  },
+  {
+    from: 'run',
+    to: 'walk',
+    condition: 'speed <= 3.9',
+    blendMs: 100,
+    priority: 1,
+    interruptible: true,
+  },
+  {
+    from: 'walk',
+    to: 'idle',
+    condition: 'speed <= 0.15',
+    blendMs: 140,
+    priority: 1,
+    interruptible: true,
+  },
+  {
+    from: 'any',
+    to: 'jump',
+    condition: 'jumpPressed && grounded',
+    blendMs: 70,
+    priority: 5,
+    interruptible: true,
+  },
 ];
 
 function createDefaultPlayerConfig(): PlayerConfig {
@@ -276,7 +330,10 @@ function createDefaultPlayerConfig(): PlayerConfig {
     },
     stateMachine: {
       initial: 'idle',
-      states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+      states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({
+        ...state,
+        tags: [...(state.tags ?? [])],
+      })),
       transitions: DEFAULT_STATE_MACHINE_TRANSITIONS.map((transition) => ({ ...transition })),
     },
     npc: {
@@ -351,7 +408,10 @@ export class EditorApp {
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
   // Clipboard for copy/paste keyframe
-  private keyframeClipboard: { bones: Record<string, { x: number; y: number; z: number; w: number }>; rootPos?: { x: number; y: number; z: number } } | null = null;
+  private keyframeClipboard: {
+    bones: Record<string, { x: number; y: number; z: number; w: number }>;
+    rootPos?: { x: number; y: number; z: number };
+  } | null = null;
   // Callbacks wired by createHud
   private updateUndoInfo: (() => void) | null = null;
   private updateBoneList: (() => void) | null = null;
@@ -443,8 +503,10 @@ export class EditorApp {
   private dragActive = false;
   private boneOverlay: HTMLDivElement | null = null;
   private boneGizmoGroup: THREE.Group | null = null;
-  private boneGizmos: Map<string, { joint: THREE.Mesh; stick: THREE.Mesh; parent?: THREE.Object3D }> =
-    new Map();
+  private boneGizmos: Map<
+    string,
+    { joint: THREE.Mesh; stick: THREE.Mesh; parent?: THREE.Object3D }
+  > = new Map();
   private ragdollTransform: TransformControls | null = null;
   private selectedRagdoll: string | null = null;
   private ragdollHandles: THREE.Group | null = null;
@@ -494,7 +556,8 @@ export class EditorApp {
   private refreshPlayerAvatarsFunction: (() => Promise<void>) | null = null;
   private loadGamesListFunction: (() => Promise<void>) | null = null;
   private selectGameFunction: ((gameId: string) => Promise<void>) | null = null;
-  private applyTabFunction: ((tab: 'animation' | 'player' | 'level' | 'settings') => void) | null = null;
+  private applyTabFunction: ((tab: 'animation' | 'player' | 'level' | 'settings') => void) | null =
+    null;
   private externalPanelNodes = new Map<string, HTMLDivElement>();
   private onBackToMenu: (() => void) | null = null;
 
@@ -529,7 +592,7 @@ export class EditorApp {
       return 1.0;
     }
     // Map pressure (0-1) to multiplier (0.3-1.0)
-    return 0.3 + (this.pointerPressure * 0.7);
+    return 0.3 + this.pointerPressure * 0.7;
   }
 
   /**
@@ -544,10 +607,7 @@ export class EditorApp {
     // Convert to normalized direction vector
     const tiltRadX = (this.pointerTiltX * Math.PI) / 180;
     const tiltRadY = (this.pointerTiltY * Math.PI) / 180;
-    return new THREE.Vector2(
-      Math.sin(tiltRadX),
-      Math.sin(tiltRadY)
-    ).normalize();
+    return new THREE.Vector2(Math.sin(tiltRadX), Math.sin(tiltRadY)).normalize();
   }
 
   /**
@@ -560,7 +620,7 @@ export class EditorApp {
     const duration = {
       light: 10,
       medium: 20,
-      heavy: 40
+      heavy: 40,
     }[intensity];
 
     try {
@@ -580,7 +640,7 @@ export class EditorApp {
     this.activePointers.set(event.pointerId, {
       x: event.clientX,
       y: event.clientY,
-      type: event.pointerType
+      type: event.pointerType,
     });
 
     // Detect gesture start (2+ fingers)
@@ -627,7 +687,7 @@ export class EditorApp {
       this.activePointers.set(event.pointerId, {
         x: event.clientX,
         y: event.clientY,
-        type: event.pointerType
+        type: event.pointerType,
       });
     }
 
@@ -650,7 +710,7 @@ export class EditorApp {
         // Clamp to OrbitControls limits
         const clampedDistance = Math.max(
           this.controls.minDistance,
-          Math.min(this.controls.maxDistance, newDistance)
+          Math.min(this.controls.maxDistance, newDistance),
         );
 
         // Apply to camera
@@ -672,7 +732,7 @@ export class EditorApp {
         const offset = new THREE.Vector3(
           radius * Math.sin(phi) * Math.sin(newYaw),
           radius * Math.cos(phi),
-          radius * Math.sin(phi) * Math.cos(newYaw)
+          radius * Math.sin(phi) * Math.cos(newYaw),
         );
         this.camera.position.copy(this.controls.target).add(offset);
         this.camera.lookAt(this.controls.target);
@@ -806,31 +866,26 @@ export class EditorApp {
       pixelated: psxSettings.config.pixelated,
     });
 
-    this.psxPostProcessor = new PSXPostProcessor(
-      this.renderer,
-      this.scene,
-      this.camera,
-      {
-        enabled: psxSettings.config.enabled,
-        blur: psxSettings.config.blur,
-        blurStrength: psxSettings.config.blurStrength,
-        colorQuantization: psxSettings.config.colorQuantization,
-        colorBits: psxSettings.config.colorBits,
-        dithering: psxSettings.config.dithering,
-        ditherStrength: psxSettings.config.ditherStrength,
-        crtEffects: psxSettings.config.crtEffects,
-        scanlineIntensity: psxSettings.config.scanlineIntensity,
-        curvature: psxSettings.config.curvature,
-        vignette: psxSettings.config.vignette,
-        brightness: psxSettings.config.brightness,
-        chromaticAberration: psxSettings.config.chromaticAberration,
-        chromaticOffset: psxSettings.config.chromaticOffset,
-        contrast: psxSettings.config.contrast,
-        saturation: psxSettings.config.saturation,
-        gamma: psxSettings.config.gamma,
-        exposure: psxSettings.config.exposure,
-      }
-    );
+    this.psxPostProcessor = new PSXPostProcessor(this.renderer, this.scene, this.camera, {
+      enabled: psxSettings.config.enabled,
+      blur: psxSettings.config.blur,
+      blurStrength: psxSettings.config.blurStrength,
+      colorQuantization: psxSettings.config.colorQuantization,
+      colorBits: psxSettings.config.colorBits,
+      dithering: psxSettings.config.dithering,
+      ditherStrength: psxSettings.config.ditherStrength,
+      crtEffects: psxSettings.config.crtEffects,
+      scanlineIntensity: psxSettings.config.scanlineIntensity,
+      curvature: psxSettings.config.curvature,
+      vignette: psxSettings.config.vignette,
+      brightness: psxSettings.config.brightness,
+      chromaticAberration: psxSettings.config.chromaticAberration,
+      chromaticOffset: psxSettings.config.chromaticOffset,
+      contrast: psxSettings.config.contrast,
+      saturation: psxSettings.config.saturation,
+      gamma: psxSettings.config.gamma,
+      exposure: psxSettings.config.exposure,
+    });
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -919,10 +974,19 @@ export class EditorApp {
     if (this.psxPostProcessor) {
       this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
       this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
-      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
-      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setColorQuantization(
+        psxSettings.config.colorQuantization,
+        psxSettings.config.colorBits,
+      );
+      this.psxPostProcessor.setDithering(
+        psxSettings.config.dithering,
+        psxSettings.config.ditherStrength,
+      );
       this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
-      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setChromaticAberration(
+        psxSettings.config.chromaticAberration,
+        psxSettings.config.chromaticOffset,
+      );
       this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
       this.psxPostProcessor.setContrast(psxSettings.config.contrast);
       this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
@@ -1009,11 +1073,13 @@ export class EditorApp {
     host: HTMLElement,
   ) {
     const key = `${area}:${tab}`;
-    const selector = area === 'left'
-      ? `.editor-left[data-tab-panel="${tab}"]`
-      : `.editor-bottom[data-tab-panel="${tab}"]`;
-    const panel = this.externalPanelNodes.get(key)
-      ?? (this.hud.querySelector(selector) as HTMLDivElement | null);
+    const selector =
+      area === 'left'
+        ? `.editor-left[data-tab-panel="${tab}"]`
+        : `.editor-bottom[data-tab-panel="${tab}"]`;
+    const panel =
+      this.externalPanelNodes.get(key) ??
+      (this.hud.querySelector(selector) as HTMLDivElement | null);
     if (!panel) return false;
     host.innerHTML = '';
     panel.style.display = area === 'left' ? 'flex' : '';
@@ -1119,11 +1185,22 @@ export class EditorApp {
 
   private handleKeyboard = (e: KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); }
-    else if (mod && e.key === 'z' && e.shiftKey) { e.preventDefault(); this.redo(); }
-    else if (mod && e.key === 'y') { e.preventDefault(); this.redo(); }
-    else if (mod && e.key === 'c') { e.preventDefault(); this.copyKeyframeAtTime(this.time); }
-    else if (mod && e.key === 'v') { e.preventDefault(); this.pasteKeyframeAtTime(this.time); }
+    if (mod && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      this.undo();
+    } else if (mod && e.key === 'z' && e.shiftKey) {
+      e.preventDefault();
+      this.redo();
+    } else if (mod && e.key === 'y') {
+      e.preventDefault();
+      this.redo();
+    } else if (mod && e.key === 'c') {
+      e.preventDefault();
+      this.copyKeyframeAtTime(this.time);
+    } else if (mod && e.key === 'v') {
+      e.preventDefault();
+      this.pasteKeyframeAtTime(this.time);
+    }
   };
 
   private getActiveScene(): THREE.Scene {
@@ -1173,7 +1250,7 @@ export class EditorApp {
           saturation: psxSettings.config.saturation,
           gamma: psxSettings.config.gamma,
           exposure: psxSettings.config.exposure,
-        }
+        },
       );
     }
 
@@ -1200,7 +1277,10 @@ export class EditorApp {
       this.levelTransform.detach();
       (this.levelTransform as unknown as THREE.Object3D).visible = false;
     }
-    if ((tab !== 'animation' && tab !== 'player') || (!this.ragdollVisible && !this.ragdollEnabled)) {
+    if (
+      (tab !== 'animation' && tab !== 'player') ||
+      (!this.ragdollVisible && !this.ragdollEnabled)
+    ) {
       this.detachRagdollTransform();
       if (this.ragdollHandles) this.ragdollHandles.visible = false;
     }
@@ -1284,7 +1364,8 @@ export class EditorApp {
 
   private syncLevelTextEditors() {
     const scene = this.getCurrentLevelSceneEntry();
-    if (!scene || !this.levelSceneObstaclesEl || !this.levelSceneJsonEl || !this.levelSceneStateRef) return;
+    if (!scene || !this.levelSceneObstaclesEl || !this.levelSceneJsonEl || !this.levelSceneStateRef)
+      return;
     this.levelSceneObstaclesEl.value = JSON.stringify(scene.obstacles ?? [], null, 2);
     this.levelSceneJsonEl.value = JSON.stringify(this.levelSceneStateRef, null, 2);
   }
@@ -1292,7 +1373,9 @@ export class EditorApp {
   private refreshLevelObjectSelect() {
     if (!this.levelObjectSelectEl) return;
     this.levelObjectSelectEl.innerHTML = '';
-    const entries = Array.from(this.levelSceneObjects.values()).sort((a, b) => a.label.localeCompare(b.label));
+    const entries = Array.from(this.levelSceneObjects.values()).sort((a, b) =>
+      a.label.localeCompare(b.label),
+    );
     for (const item of entries) {
       const option = document.createElement('option');
       option.value = item.id;
@@ -1368,7 +1451,8 @@ export class EditorApp {
     if (this.levelGroundMesh) {
       this.levelScene.remove(this.levelGroundMesh);
       this.levelGroundMesh.geometry.dispose();
-      if (this.levelGroundMesh.material instanceof THREE.Material) this.levelGroundMesh.material.dispose();
+      if (this.levelGroundMesh.material instanceof THREE.Material)
+        this.levelGroundMesh.material.dispose();
       this.levelGroundMesh = null;
     }
     if (ground) {
@@ -1399,19 +1483,31 @@ export class EditorApp {
     playerMarker.userData.levelObjectId = 'player';
     const playerBody = new THREE.Mesh(
       new THREE.CylinderGeometry(0.45, 0.45, 1.8, 16),
-      new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x0b2a5f, emissiveIntensity: 0.3 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x3b82f6,
+        emissive: 0x0b2a5f,
+        emissiveIntensity: 0.3,
+      }),
     );
     playerBody.position.y = 0.9;
     playerBody.userData.levelObjectId = 'player';
     const playerArrow = new THREE.Mesh(
       new THREE.ConeGeometry(0.35, 0.55, 12),
-      new THREE.MeshStandardMaterial({ color: 0x60a5fa, emissive: 0x1d4ed8, emissiveIntensity: 0.25 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x60a5fa,
+        emissive: 0x1d4ed8,
+        emissiveIntensity: 0.25,
+      }),
     );
     playerArrow.position.set(0, 1.7, 0.85);
     playerArrow.rotation.x = Math.PI / 2;
     playerArrow.userData.levelObjectId = 'player';
     playerMarker.add(playerBody, playerArrow);
-    playerMarker.position.set(Number(player.x ?? 0), Number(player.y ?? (ground?.y ?? 0)), Number(player.z ?? 0));
+    playerMarker.position.set(
+      Number(player.x ?? 0),
+      Number(player.y ?? ground?.y ?? 0),
+      Number(player.z ?? 0),
+    );
     playerMarker.rotation.y = Number(player.yaw ?? 0);
     this.levelPlayerMarker = playerMarker;
     this.levelScene.add(playerMarker);
@@ -1425,21 +1521,33 @@ export class EditorApp {
       const marker = new THREE.Group();
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(12, 0.12, 8, 48),
-        new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0x4a2a08, emissiveIntensity: 0.5 }),
+        new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          emissive: 0x4a2a08,
+          emissiveIntensity: 0.5,
+        }),
       );
       ring.rotation.x = Math.PI / 2;
       ring.position.y = 0.05;
       ring.userData.levelObjectId = 'crowd';
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.25, 0.25, 2.5, 12),
-        new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x4a2a08, emissiveIntensity: 0.35 }),
+        new THREE.MeshStandardMaterial({
+          color: 0xfbbf24,
+          emissive: 0x4a2a08,
+          emissiveIntensity: 0.35,
+        }),
       );
       pillar.position.set(0, 1.25, 0);
       pillar.userData.levelObjectId = 'crowd';
       marker.add(ring, pillar);
       marker.userData.levelObjectId = 'crowd';
       const crowd = scene?.crowd ?? {};
-      marker.position.set(Number(crowd.x ?? 0), Number(crowd.y ?? (ground?.y ?? 0)), Number(crowd.z ?? 0));
+      marker.position.set(
+        Number(crowd.x ?? 0),
+        Number(crowd.y ?? ground?.y ?? 0),
+        Number(crowd.z ?? 0),
+      );
       const crowdRadius = Math.max(1, Number(crowd.radius ?? 12));
       marker.scale.set(crowdRadius / 12, 1, crowdRadius / 12);
       this.levelCrowdMarker = marker;
@@ -1503,11 +1611,13 @@ export class EditorApp {
     }
     if (this.levelHierarchyEl) {
       const items = this.levelHierarchyEl.querySelectorAll<HTMLButtonElement>('.bone-list-item');
-      items.forEach((item) => item.classList.toggle('active', item.dataset.levelObjectId === objectId));
+      items.forEach((item) =>
+        item.classList.toggle('active', item.dataset.levelObjectId === objectId),
+      );
     }
 
     if (!this.levelTransform) return;
-    const entry = objectId ? this.levelSceneObjects.get(objectId) ?? null : null;
+    const entry = objectId ? (this.levelSceneObjects.get(objectId) ?? null) : null;
     if (entry?.object && entry.object.parent) {
       this.levelTransform.attach(entry.object);
       (this.levelTransform as unknown as THREE.Object3D).visible = true;
@@ -1526,7 +1636,9 @@ export class EditorApp {
     if (entry.kind === 'obstacle' && entry.obstacleId) {
       const mesh = entry.object as THREE.Mesh;
       const obstacles = scene.obstacles ?? [];
-      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === entry.obstacleId);
+      const index = obstacles.findIndex(
+        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === entry.obstacleId,
+      );
       if (index >= 0) {
         obstacles[index] = {
           id: entry.obstacleId,
@@ -1540,7 +1652,13 @@ export class EditorApp {
       }
       scene.obstacles = obstacles;
     } else if (entry.kind === 'ground') {
-      const ground = this.normalizeLevelGround(scene.ground ?? undefined) ?? { type: 'concrete', width: 120, depth: 120, y: 0, textureRepeat: 12 };
+      const ground = this.normalizeLevelGround(scene.ground ?? undefined) ?? {
+        type: 'concrete',
+        width: 120,
+        depth: 120,
+        y: 0,
+        textureRepeat: 12,
+      };
       ground.width = Math.max(1, entry.object.scale.x);
       ground.depth = Math.max(1, Math.max(entry.object.scale.y, entry.object.scale.z));
       ground.y = entry.object.position.y;
@@ -1716,8 +1834,7 @@ export class EditorApp {
     if (this.currentTab === 'player') {
       this.syncPlayerCapsulePreview();
     }
-    const shouldUpdateBoneVisuals =
-      !this.isPlaying || now - this.lastBoneVisualUpdateMs >= 66;
+    const shouldUpdateBoneVisuals = !this.isPlaying || now - this.lastBoneVisualUpdateMs >= 66;
     if (shouldUpdateBoneVisuals) {
       if (isAnimationTab && this.boneVisualsVisible) {
         this.updateBoneMarkers();
@@ -2114,9 +2231,7 @@ export class EditorApp {
       const selectedId = this.currentGameId;
       deleteGameBtn.disabled = !selectedId || selectedId === 'prototype';
       deleteGameBtn.title =
-        selectedId === 'prototype'
-          ? 'Prototype is protected and cannot be deleted'
-          : '';
+        selectedId === 'prototype' ? 'Prototype is protected and cannot be deleted' : '';
     };
 
     // Fetch and populate games list
@@ -2134,7 +2249,8 @@ export class EditorApp {
         // Load saved game from localStorage, or default to prototype
         const savedGameId = localStorage.getItem('editorGameId');
         const prototypeGame = games.find((p) => p.id === 'prototype');
-        const initialGameExists = this.initialGameId && games.find((p) => p.id === this.initialGameId);
+        const initialGameExists =
+          this.initialGameId && games.find((p) => p.id === this.initialGameId);
 
         if (initialGameExists && this.initialGameId) {
           // Main menu launch selection takes precedence
@@ -2258,8 +2374,7 @@ export class EditorApp {
         alert('Prototype is protected and cannot be deleted.');
         return;
       }
-      const label =
-        gameSelect.options[gameSelect.selectedIndex]?.textContent?.trim() || gameId;
+      const label = gameSelect.options[gameSelect.selectedIndex]?.textContent?.trim() || gameId;
       const confirmed = confirm(
         `Delete game "${label}" (${gameId})?\n\nThis removes all scenes, animations, avatars, assets, and logic for this game.`,
       );
@@ -2272,7 +2387,9 @@ export class EditorApp {
         }
         this.currentGameId = null;
         gameSelect.value = '';
-        const optionToRemove = Array.from(gameSelect.options).find((option) => option.value === gameId);
+        const optionToRemove = Array.from(gameSelect.options).find(
+          (option) => option.value === gameId,
+        );
         optionToRemove?.remove();
         updateDeleteGameButtonState();
         await loadGamesList(true);
@@ -2296,7 +2413,12 @@ export class EditorApp {
     const tabPanels = Array.from(hud.querySelectorAll('[data-tab-panel]')) as HTMLDivElement[];
     this.externalPanelNodes.clear();
     for (const panel of tabPanels) {
-      const tab = panel.dataset.tabPanel as 'animation' | 'player' | 'level' | 'settings' | undefined;
+      const tab = panel.dataset.tabPanel as
+        | 'animation'
+        | 'player'
+        | 'level'
+        | 'settings'
+        | undefined;
       if (!tab) continue;
       if (panel.classList.contains('editor-left')) {
         this.externalPanelNodes.set(`left:${tab}`, panel);
@@ -2411,10 +2533,18 @@ export class EditorApp {
     const playerStatus = hud.querySelector('[data-player-status]') as HTMLDivElement;
     const playerJson = hud.querySelector('[data-player-json]') as HTMLTextAreaElement;
     const playerAvatarSelect = hud.querySelector('[data-player-avatar]') as HTMLSelectElement;
-    const playerAvatarFileInput = hud.querySelector('[data-player-avatar-file]') as HTMLInputElement;
-    const playerAvatarRefreshButton = hud.querySelector('[data-player-avatar-refresh]') as HTMLButtonElement;
-    const playerAvatarLoadButton = hud.querySelector('[data-player-avatar-load]') as HTMLButtonElement;
-    const playerAvatarSaveButton = hud.querySelector('[data-player-avatar-save]') as HTMLButtonElement;
+    const playerAvatarFileInput = hud.querySelector(
+      '[data-player-avatar-file]',
+    ) as HTMLInputElement;
+    const playerAvatarRefreshButton = hud.querySelector(
+      '[data-player-avatar-refresh]',
+    ) as HTMLButtonElement;
+    const playerAvatarLoadButton = hud.querySelector(
+      '[data-player-avatar-load]',
+    ) as HTMLButtonElement;
+    const playerAvatarSaveButton = hud.querySelector(
+      '[data-player-avatar-save]',
+    ) as HTMLButtonElement;
     const moveSpeedInput = hud.querySelector('[data-move-speed]') as HTMLInputElement;
     const sprintMultInput = hud.querySelector('[data-sprint-mult]') as HTMLInputElement;
     const crouchMultInput = hud.querySelector('[data-crouch-mult]') as HTMLInputElement;
@@ -2439,12 +2569,16 @@ export class EditorApp {
     const camTargetSmoothInput = hud.querySelector('[data-cam-target-smooth]') as HTMLInputElement;
     const profileNameInput = hud.querySelector('[data-profile-name]') as HTMLInputElement;
     const profileRoleInput = hud.querySelector('[data-profile-role]') as HTMLSelectElement;
-    const profileControllerInput = hud.querySelector('[data-profile-controller]') as HTMLSelectElement;
+    const profileControllerInput = hud.querySelector(
+      '[data-profile-controller]',
+    ) as HTMLSelectElement;
     const profileFactionInput = hud.querySelector('[data-profile-faction]') as HTMLInputElement;
     const profileHealthInput = hud.querySelector('[data-profile-health]') as HTMLInputElement;
     const profileStaminaInput = hud.querySelector('[data-profile-stamina]') as HTMLInputElement;
     const profileTagsInput = hud.querySelector('[data-profile-tags]') as HTMLInputElement;
-    const profileDescriptionInput = hud.querySelector('[data-profile-description]') as HTMLInputElement;
+    const profileDescriptionInput = hud.querySelector(
+      '[data-profile-description]',
+    ) as HTMLInputElement;
     const rigShowInput = hud.querySelector('[data-rig-show]') as HTMLInputElement;
     const rigBoneSelect = hud.querySelector('[data-rig-bone]') as HTMLSelectElement;
     const rigModeSelect = hud.querySelector('[data-rig-mode]') as HTMLSelectElement;
@@ -2461,11 +2595,19 @@ export class EditorApp {
     const rigApplyButton = hud.querySelector('[data-rig-apply]') as HTMLButtonElement;
     const rigResetButton = hud.querySelector('[data-rig-reset]') as HTMLButtonElement;
     const rsimMuscleEnabled = hud.querySelector('[data-rsim-muscle-enabled]') as HTMLInputElement;
-    const rsimMuscleStiffness = hud.querySelector('[data-rsim-muscle-stiffness]') as HTMLInputElement;
+    const rsimMuscleStiffness = hud.querySelector(
+      '[data-rsim-muscle-stiffness]',
+    ) as HTMLInputElement;
     const rsimMuscleDamping = hud.querySelector('[data-rsim-muscle-damping]') as HTMLInputElement;
-    const rsimMuscleMaxTorque = hud.querySelector('[data-rsim-muscle-max-torque]') as HTMLInputElement;
-    const rsimJointStiffnessScale = hud.querySelector('[data-rsim-joint-stiffness-scale]') as HTMLInputElement;
-    const rsimJointDampingScale = hud.querySelector('[data-rsim-joint-damping-scale]') as HTMLInputElement;
+    const rsimMuscleMaxTorque = hud.querySelector(
+      '[data-rsim-muscle-max-torque]',
+    ) as HTMLInputElement;
+    const rsimJointStiffnessScale = hud.querySelector(
+      '[data-rsim-joint-stiffness-scale]',
+    ) as HTMLInputElement;
+    const rsimJointDampingScale = hud.querySelector(
+      '[data-rsim-joint-damping-scale]',
+    ) as HTMLInputElement;
     const rsimBodyLinScale = hud.querySelector('[data-rsim-body-lin-scale]') as HTMLInputElement;
     const rsimBodyAngScale = hud.querySelector('[data-rsim-body-ang-scale]') as HTMLInputElement;
     const rsimGroundFriction = hud.querySelector('[data-rsim-ground-friction]') as HTMLInputElement;
@@ -2482,14 +2624,24 @@ export class EditorApp {
     const rsimMaxAng = hud.querySelector('[data-rsim-max-ang]') as HTMLInputElement;
     const rsimStartImpulse = hud.querySelector('[data-rsim-start-impulse]') as HTMLInputElement;
     const capsulePreviewInput = hud.querySelector('[data-capsule-preview]') as HTMLInputElement;
-    const capsuleBaseRadiusInput = hud.querySelector('[data-capsule-base-radius]') as HTMLInputElement;
-    const capsuleBaseHeightInput = hud.querySelector('[data-capsule-base-height]') as HTMLInputElement;
-    const capsuleSkinWidthInput = hud.querySelector('[data-capsule-skin-width]') as HTMLInputElement;
-    const capsuleStepHeightInput = hud.querySelector('[data-capsule-step-height]') as HTMLInputElement;
+    const capsuleBaseRadiusInput = hud.querySelector(
+      '[data-capsule-base-radius]',
+    ) as HTMLInputElement;
+    const capsuleBaseHeightInput = hud.querySelector(
+      '[data-capsule-base-height]',
+    ) as HTMLInputElement;
+    const capsuleSkinWidthInput = hud.querySelector(
+      '[data-capsule-skin-width]',
+    ) as HTMLInputElement;
+    const capsuleStepHeightInput = hud.querySelector(
+      '[data-capsule-step-height]',
+    ) as HTMLInputElement;
     const capsuleSlopeInput = hud.querySelector('[data-capsule-slope]') as HTMLInputElement;
     const stateMachineInitialInput = hud.querySelector('[data-sm-initial]') as HTMLInputElement;
     const stateMachineStatesInput = hud.querySelector('[data-sm-states]') as HTMLTextAreaElement;
-    const stateMachineTransitionsInput = hud.querySelector('[data-sm-transitions]') as HTMLTextAreaElement;
+    const stateMachineTransitionsInput = hud.querySelector(
+      '[data-sm-transitions]',
+    ) as HTMLTextAreaElement;
     const stateMachineResetButton = hud.querySelector('[data-sm-reset]') as HTMLButtonElement;
     const stateMachineValidateButton = hud.querySelector('[data-sm-validate]') as HTMLButtonElement;
     const stateMachineStatus = hud.querySelector('[data-sm-status]') as HTMLDivElement;
@@ -2519,7 +2671,9 @@ export class EditorApp {
     const levelAddBtn = hud.querySelector('[data-level-add]') as HTMLButtonElement;
     const levelDuplicateBtn = hud.querySelector('[data-level-duplicate]') as HTMLButtonElement;
     const levelDeleteBtn = hud.querySelector('[data-level-delete]') as HTMLButtonElement;
-    const levelTransformMode = hud.querySelector('[data-level-transform-mode]') as HTMLSelectElement;
+    const levelTransformMode = hud.querySelector(
+      '[data-level-transform-mode]',
+    ) as HTMLSelectElement;
     const levelSnapInput = hud.querySelector('[data-level-snap]') as HTMLInputElement;
     const levelFocusBtn = hud.querySelector('[data-level-focus]') as HTMLButtonElement;
     const levelStatus = hud.querySelector('[data-level-status]') as HTMLDivElement;
@@ -2587,28 +2741,34 @@ export class EditorApp {
       try {
         if (!this.currentGameId) throw new Error('No game selected');
         const data = await getGameScenes(this.currentGameId);
-        sceneState.scenes = (data.scenes ?? [{ name: 'main', obstacles: [] }]).map((scene, sceneIndex) => {
-          const rawObstacles = Array.isArray(scene.obstacles) ? scene.obstacles : [];
-          const obstacles = rawObstacles.map((item, obstacleIndex) =>
-            this.normalizeLevelObstacle((item ?? {}) as LevelObstacle, obstacleIndex),
-          );
-          const ground = this.normalizeLevelGround((scene.ground ?? undefined) as LevelGround | undefined);
-          return {
-            name: scene.name || `scene_${sceneIndex + 1}`,
-            obstacles,
-            ground: ground ?? undefined,
-            player: (scene as any).player ? { ...(scene as any).player } : undefined,
-            crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
-          };
-        });
+        sceneState.scenes = (data.scenes ?? [{ name: 'main', obstacles: [] }]).map(
+          (scene, sceneIndex) => {
+            const rawObstacles = Array.isArray(scene.obstacles) ? scene.obstacles : [];
+            const obstacles = rawObstacles.map((item, obstacleIndex) =>
+              this.normalizeLevelObstacle((item ?? {}) as LevelObstacle, obstacleIndex),
+            );
+            const ground = this.normalizeLevelGround(
+              (scene.ground ?? undefined) as LevelGround | undefined,
+            );
+            return {
+              name: scene.name || `scene_${sceneIndex + 1}`,
+              obstacles,
+              ground: ground ?? undefined,
+              player: (scene as any).player ? { ...(scene as any).player } : undefined,
+              crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
+            };
+          },
+        );
         syncSceneSelect();
         loadSceneFromState(sceneState.scenes[0]?.name ?? 'main');
         setSceneStatus(`Scenes: ${sceneState.scenes.length}`, 'ok');
       } catch (err) {
-        sceneState.scenes = [{
-          name: 'main',
-          obstacles: [],
-        }];
+        sceneState.scenes = [
+          {
+            name: 'main',
+            obstacles: [],
+          },
+        ];
         syncSceneSelect();
         loadSceneFromState('main');
         setSceneStatus('Initialized default scene', 'ok');
@@ -2686,7 +2846,10 @@ export class EditorApp {
 
     levelObjectSelect.addEventListener('change', () => {
       this.selectLevelObject(levelObjectSelect.value || null);
-      if (levelStatus) levelStatus.textContent = levelObjectSelect.value ? `Selected ${levelObjectSelect.value}` : 'No object selected';
+      if (levelStatus)
+        levelStatus.textContent = levelObjectSelect.value
+          ? `Selected ${levelObjectSelect.value}`
+          : 'No object selected';
     });
 
     levelTransformMode.addEventListener('change', () => {
@@ -2700,7 +2863,9 @@ export class EditorApp {
       if (!this.levelTransform) return;
       const snap = Math.max(0, Number(levelSnapInput.value) || 0);
       this.levelTransform.setTranslationSnap(snap > 0 ? snap : null);
-      this.levelTransform.setRotationSnap(snap > 0 ? THREE.MathUtils.degToRad(Math.max(1, snap * 10)) : null);
+      this.levelTransform.setRotationSnap(
+        snap > 0 ? THREE.MathUtils.degToRad(Math.max(1, snap * 10)) : null,
+      );
       this.levelTransform.setScaleSnap(snap > 0 ? snap : null);
       if (levelStatus) levelStatus.textContent = snap > 0 ? `Snap: ${snap}` : 'Snap: off';
     });
@@ -2726,7 +2891,9 @@ export class EditorApp {
       if (!selectedId || !scene || !selectedId.startsWith('obstacle:')) return;
       const selectedObstacleId = selectedId.replace('obstacle:', '');
       const obstacles = scene.obstacles ?? [];
-      const index = obstacles.findIndex((item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedObstacleId);
+      const index = obstacles.findIndex(
+        (item, idx) => this.normalizeLevelObstacle(item ?? {}, idx).id === selectedObstacleId,
+      );
       if (index < 0) return;
       const source = this.normalizeLevelObstacle(obstacles[index] ?? {}, index);
       const id = `obstacle_${obstacles.length + 1}`;
@@ -2757,7 +2924,11 @@ export class EditorApp {
       const entry = selectedId ? this.levelSceneObjects.get(selectedId) : null;
       if (!entry || !this.controls) return;
       this.controls.target.copy(entry.object.position);
-      this.camera.position.set(entry.object.position.x + 4, entry.object.position.y + 4, entry.object.position.z + 4);
+      this.camera.position.set(
+        entry.object.position.x + 4,
+        entry.object.position.y + 4,
+        entry.object.position.z + 4,
+      );
       this.controls.update();
     });
 
@@ -2767,7 +2938,9 @@ export class EditorApp {
     if (consolePresetSelect) {
       consolePresetSelect.value = psxSettings.config.consolePreset;
       consolePresetSelect.addEventListener('change', () => {
-        psxSettings.applyConsolePreset(consolePresetSelect.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern');
+        psxSettings.applyConsolePreset(
+          consolePresetSelect.value as 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern',
+        );
         // Update sliders and displays to reflect preset values
         if (brightnessInput) {
           brightnessInput.value = psxSettings.config.brightness.toString();
@@ -2943,7 +3116,9 @@ export class EditorApp {
       camTargetSmoothInput.value = this.playerConfig.targetSmoothSpeed.toFixed(0);
       profileNameInput.value = String(this.playerConfig.profile?.name ?? '');
       profileRoleInput.value = String(this.playerConfig.profile?.role ?? 'player');
-      profileControllerInput.value = String(this.playerConfig.profile?.controller ?? 'third_person');
+      profileControllerInput.value = String(
+        this.playerConfig.profile?.controller ?? 'third_person',
+      );
       profileFactionInput.value = String(this.playerConfig.profile?.faction ?? '');
       profileHealthInput.value = String(this.playerConfig.profile?.health ?? 100);
       profileStaminaInput.value = String(this.playerConfig.profile?.stamina ?? 100);
@@ -2957,8 +3132,16 @@ export class EditorApp {
       capsuleStepHeightInput.value = String(this.playerConfig.capsule?.stepHeight ?? 0.35);
       capsuleSlopeInput.value = String(this.playerConfig.capsule?.slopeLimitDeg ?? 50);
       stateMachineInitialInput.value = String(this.playerConfig.stateMachine?.initial ?? 'idle');
-      stateMachineStatesInput.value = JSON.stringify(this.playerConfig.stateMachine?.states ?? [], null, 2);
-      stateMachineTransitionsInput.value = JSON.stringify(this.playerConfig.stateMachine?.transitions ?? [], null, 2);
+      stateMachineStatesInput.value = JSON.stringify(
+        this.playerConfig.stateMachine?.states ?? [],
+        null,
+        2,
+      );
+      stateMachineTransitionsInput.value = JSON.stringify(
+        this.playerConfig.stateMachine?.transitions ?? [],
+        null,
+        2,
+      );
       npcEnabledInput.checked = Boolean(this.playerConfig.npc?.enabled);
       npcArchetypeInput.value = String(this.playerConfig.npc?.archetype ?? 'grunt');
       npcAggressionInput.value = String(this.playerConfig.npc?.aggression ?? 0.5);
@@ -3081,15 +3264,17 @@ export class EditorApp {
       try {
         const statesRaw = JSON.parse(stateMachineStatesInput.value || '[]');
         parsedStates = Array.isArray(statesRaw)
-          ? statesRaw.map((state) => ({
-            id: String((state as any).id ?? '').trim(),
-            clip: String((state as any).clip ?? '').trim(),
-            speed: Number((state as any).speed ?? 1) || 1,
-            loop: Boolean((state as any).loop ?? true),
-            tags: Array.isArray((state as any).tags)
-              ? (state as any).tags.map((tag: unknown) => String(tag))
-              : [],
-          })).filter((state) => state.id.length > 0)
+          ? statesRaw
+              .map((state) => ({
+                id: String((state as any).id ?? '').trim(),
+                clip: String((state as any).clip ?? '').trim(),
+                speed: Number((state as any).speed ?? 1) || 1,
+                loop: Boolean((state as any).loop ?? true),
+                tags: Array.isArray((state as any).tags)
+                  ? (state as any).tags.map((tag: unknown) => String(tag))
+                  : [],
+              }))
+              .filter((state) => state.id.length > 0)
           : parsedStates;
       } catch {
         if (stateMachineStatus) stateMachineStatus.textContent = 'States JSON parse error.';
@@ -3097,14 +3282,16 @@ export class EditorApp {
       try {
         const transitionsRaw = JSON.parse(stateMachineTransitionsInput.value || '[]');
         parsedTransitions = Array.isArray(transitionsRaw)
-          ? transitionsRaw.map((transition) => ({
-            from: String((transition as any).from ?? 'any'),
-            to: String((transition as any).to ?? '').trim(),
-            condition: String((transition as any).condition ?? '').trim(),
-            blendMs: Math.max(0, Number((transition as any).blendMs ?? 120) || 120),
-            priority: Math.max(0, Number((transition as any).priority ?? 1) || 1),
-            interruptible: Boolean((transition as any).interruptible ?? true),
-          })).filter((transition) => transition.to.length > 0)
+          ? transitionsRaw
+              .map((transition) => ({
+                from: String((transition as any).from ?? 'any'),
+                to: String((transition as any).to ?? '').trim(),
+                condition: String((transition as any).condition ?? '').trim(),
+                blendMs: Math.max(0, Number((transition as any).blendMs ?? 120) || 120),
+                priority: Math.max(0, Number((transition as any).priority ?? 1) || 1),
+                interruptible: Boolean((transition as any).interruptible ?? true),
+              }))
+              .filter((transition) => transition.to.length > 0)
           : parsedTransitions;
       } catch {
         if (stateMachineStatus) stateMachineStatus.textContent = 'Transitions JSON parse error.';
@@ -3186,7 +3373,10 @@ export class EditorApp {
     stateMachineResetButton?.addEventListener('click', () => {
       this.playerConfig.stateMachine = {
         initial: 'idle',
-        states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+        states: DEFAULT_STATE_MACHINE_STATES.map((state) => ({
+          ...state,
+          tags: [...(state.tags ?? [])],
+        })),
         transitions: DEFAULT_STATE_MACHINE_TRANSITIONS.map((transition) => ({ ...transition })),
       };
       setPlayerInputs();
@@ -3198,7 +3388,8 @@ export class EditorApp {
       const errors: string[] = [];
       const sm = this.playerConfig.stateMachine;
       const stateNames = new Set(sm.states.map((state) => state.id));
-      if (!stateNames.has(sm.initial)) errors.push(`Initial "${sm.initial}" is missing from states.`);
+      if (!stateNames.has(sm.initial))
+        errors.push(`Initial "${sm.initial}" is missing from states.`);
       for (const transition of sm.transitions) {
         if (transition.from !== 'any' && !stateNames.has(transition.from)) {
           errors.push(`Transition from "${transition.from}" is invalid.`);
@@ -3208,7 +3399,8 @@ export class EditorApp {
         }
       }
       if (stateMachineStatus) {
-        stateMachineStatus.textContent = errors.length > 0 ? `Invalid: ${errors[0]}` : 'State machine valid.';
+        stateMachineStatus.textContent =
+          errors.length > 0 ? `Invalid: ${errors[0]}` : 'State machine valid.';
       }
     });
 
@@ -3418,8 +3610,16 @@ export class EditorApp {
       this.playerConfig.ragdollRig[name] = {
         radiusScale: Number(rigRadiusInput.value) || 1,
         lengthScale: Number(rigLengthInput.value) || 1,
-        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
-        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        offset: {
+          x: Number(rigOffX.value) || 0,
+          y: Number(rigOffY.value) || 0,
+          z: Number(rigOffZ.value) || 0,
+        },
+        rot: {
+          x: Number(rigRotX.value) || 0,
+          y: Number(rigRotY.value) || 0,
+          z: Number(rigRotZ.value) || 0,
+        },
         swingLimit: Number(rigSwing.value) || 0,
         twistLimit: Number(rigTwist.value) || 0,
       };
@@ -3431,8 +3631,16 @@ export class EditorApp {
       this.playerConfig.ragdollRig[name] = {
         radiusScale: Number(rigRadiusInput.value) || 1,
         lengthScale: Number(rigLengthInput.value) || 1,
-        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
-        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        offset: {
+          x: Number(rigOffX.value) || 0,
+          y: Number(rigOffY.value) || 0,
+          z: Number(rigOffZ.value) || 0,
+        },
+        rot: {
+          x: Number(rigRotX.value) || 0,
+          y: Number(rigRotY.value) || 0,
+          z: Number(rigRotZ.value) || 0,
+        },
         swingLimit: Number(rigSwing.value) || 0,
         twistLimit: Number(rigTwist.value) || 0,
       };
@@ -3444,8 +3652,16 @@ export class EditorApp {
       this.playerConfig.ragdollRig[name] = {
         radiusScale: Number(rigRadiusInput.value) || 1,
         lengthScale: Number(rigLengthInput.value) || 1,
-        offset: { x: Number(rigOffX.value) || 0, y: Number(rigOffY.value) || 0, z: Number(rigOffZ.value) || 0 },
-        rot: { x: Number(rigRotX.value) || 0, y: Number(rigRotY.value) || 0, z: Number(rigRotZ.value) || 0 },
+        offset: {
+          x: Number(rigOffX.value) || 0,
+          y: Number(rigOffY.value) || 0,
+          z: Number(rigOffZ.value) || 0,
+        },
+        rot: {
+          x: Number(rigRotX.value) || 0,
+          y: Number(rigRotY.value) || 0,
+          z: Number(rigRotZ.value) || 0,
+        },
         swingLimit: Number(rigSwing.value) || 0,
         twistLimit: Number(rigTwist.value) || 0,
       };
@@ -3492,7 +3708,10 @@ export class EditorApp {
       const offsetLocal = offsetWorld.applyQuaternion(invBone);
       const rotOffset = rag.baseRot.clone().invert().multiply(mesh.quaternion);
       const euler = new THREE.Euler().setFromQuaternion(rotOffset, 'XYZ');
-      const cfg = this.playerConfig.ragdollRig[this.selectedRagdoll] ?? { radiusScale: 1, lengthScale: 1 };
+      const cfg = this.playerConfig.ragdollRig[this.selectedRagdoll] ?? {
+        radiusScale: 1,
+        lengthScale: 1,
+      };
       cfg.offset = { x: offsetLocal.x, y: offsetLocal.y, z: offsetLocal.z };
       cfg.rot = { x: euler.x, y: euler.y, z: euler.z };
       this.playerConfig.ragdollRig[this.selectedRagdoll] = cfg;
@@ -3555,7 +3774,9 @@ export class EditorApp {
       this.timelineDownFrame = frameIndex;
       this.timelinePaintMode = this.overrideMode
         ? null
-        : (this.hasFrameAtIndex(frameIndex) ? 'disable' : 'enable');
+        : this.hasFrameAtIndex(frameIndex)
+          ? 'disable'
+          : 'enable';
       this.timelinePaintChanged = false;
 
       // Set time and scrub to frame
@@ -3563,10 +3784,9 @@ export class EditorApp {
       this.applyClipAtTime(this.time);
       if (this.timelinePaintMode) {
         this.pushUndo();
-        this.timelinePaintChanged = this.setFrameEnabled(
-          frameIndex,
-          this.timelinePaintMode === 'enable',
-        ) || this.timelinePaintChanged;
+        this.timelinePaintChanged =
+          this.setFrameEnabled(frameIndex, this.timelinePaintMode === 'enable') ||
+          this.timelinePaintChanged;
         this.rebuildClipKeyMap();
         this.drawTimeline();
       }
@@ -3609,7 +3829,7 @@ export class EditorApp {
       let actualFrameIndex = frameIndex;
       if (this.pointerType === 'pen' && this.pointerPressure > 0) {
         // Light pressure = slower scrubbing (finer control)
-        const pressureFactor = 0.3 + (this.pointerPressure * 0.7);
+        const pressureFactor = 0.3 + this.pointerPressure * 0.7;
         const frameDelta = frameIndex - this.timelineLastFrame;
         actualFrameIndex = Math.floor(this.timelineLastFrame + frameDelta * pressureFactor);
         actualFrameIndex = Math.max(0, Math.min(totalFrames - 1, actualFrameIndex));
@@ -3625,10 +3845,9 @@ export class EditorApp {
           const start = Math.min(previousFrame, actualFrameIndex);
           const end = Math.max(previousFrame, actualFrameIndex);
           for (let i = start; i <= end; i += 1) {
-            this.timelinePaintChanged = this.setFrameEnabled(
-              i,
-              this.timelinePaintMode === 'enable',
-            ) || this.timelinePaintChanged;
+            this.timelinePaintChanged =
+              this.setFrameEnabled(i, this.timelinePaintMode === 'enable') ||
+              this.timelinePaintChanged;
           }
           this.rebuildClipKeyMap();
           this.applyClipAtTime(this.time);
@@ -3787,21 +4006,35 @@ export class EditorApp {
     overrideBtn.addEventListener('click', () => {
       this.overrideMode = !this.overrideMode;
       overrideBtn.textContent = this.overrideMode ? 'Override On' : 'Override Off';
-      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+      this.syncOverrideRangeUi(
+        overrideRangeWrap,
+        overrideStartHandle,
+        overrideEndHandle,
+        this.overrideMode,
+      );
     });
 
     const updateOverrideFrameFromClientX = (clientX: number, edge: 'start' | 'end') => {
       if (!timelineWrap) return;
       const rect = timelineWrap.getBoundingClientRect();
       const totalFrames = this.getTotalFrames();
-      const ratio = THREE.MathUtils.clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 0.999999);
+      const ratio = THREE.MathUtils.clamp(
+        (clientX - rect.left) / Math.max(1, rect.width),
+        0,
+        0.999999,
+      );
       const frame = THREE.MathUtils.clamp(Math.floor(ratio * totalFrames), 0, totalFrames - 1);
       if (edge === 'start') {
         this.overrideRangeStartFrame = Math.min(frame, this.overrideRangeEndFrame);
       } else {
         this.overrideRangeEndFrame = Math.max(frame, this.overrideRangeStartFrame);
       }
-      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+      this.syncOverrideRangeUi(
+        overrideRangeWrap,
+        overrideStartHandle,
+        overrideEndHandle,
+        this.overrideMode,
+      );
     };
 
     const bindOverrideHandleDrag = (handle: HTMLDivElement | null, edge: 'start' | 'end') => {
@@ -3838,7 +4071,12 @@ export class EditorApp {
       durationInput.value = String(this.getTotalFrames());
       this.overrideRangeStartFrame = 0;
       this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
-      this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+      this.syncOverrideRangeUi(
+        overrideRangeWrap,
+        overrideStartHandle,
+        overrideEndHandle,
+        this.overrideMode,
+      );
       this.rebuildClipKeyMap();
       this.refreshJson(jsonBox);
       this.drawTimeline();
@@ -3859,7 +4097,12 @@ export class EditorApp {
         }
         console.log('Fetching animations from', animPath, '...');
         const res = await fetch(animPath, { cache: 'no-store' });
-        console.log('Response status:', res.status, 'Content-Type:', res.headers.get('content-type'));
+        console.log(
+          'Response status:',
+          res.status,
+          'Content-Type:',
+          res.headers.get('content-type'),
+        );
 
         if (!res.ok) {
           console.warn('Failed to fetch animations:', res.status, res.statusText);
@@ -3951,7 +4194,12 @@ export class EditorApp {
         durationInput.value = String(this.getTotalFrames());
         this.overrideRangeStartFrame = 0;
         this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
-        this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+        this.syncOverrideRangeUi(
+          overrideRangeWrap,
+          overrideStartHandle,
+          overrideEndHandle,
+          this.overrideMode,
+        );
         timeInput.value = '0.0000';
         this.applyClipAtTime(0);
         this.refreshJson(jsonBox);
@@ -4049,7 +4297,11 @@ export class EditorApp {
     ragdollResetBtn?.addEventListener('click', () => {
       this.resetRagdollPose();
       if (ragdollStatus) {
-        ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : this.ragdollVisible ? 'Ragdoll: visual' : 'Ragdoll: off';
+        ragdollStatus.textContent = this.ragdollEnabled
+          ? 'Ragdoll: on'
+          : this.ragdollVisible
+            ? 'Ragdoll: visual'
+            : 'Ragdoll: off';
       }
     });
 
@@ -4061,7 +4313,8 @@ export class EditorApp {
 
     ragdollStopBtn?.addEventListener('click', () => {
       this.ragdollRecording = false;
-      if (ragdollStatus) ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
+      if (ragdollStatus)
+        ragdollStatus.textContent = this.ragdollEnabled ? 'Ragdoll: on' : 'Ragdoll: off';
     });
 
     // --- Animation left panel: bone list, history, clipboard ---
@@ -4089,7 +4342,8 @@ export class EditorApp {
     });
 
     this.updateUndoInfo = () => {
-      if (undoInfo) undoInfo.textContent = `Undo: ${this.undoStack.length} \u00b7 Redo: ${this.redoStack.length}`;
+      if (undoInfo)
+        undoInfo.textContent = `Undo: ${this.undoStack.length} \u00b7 Redo: ${this.redoStack.length}`;
     };
     this.updateBoneList = () => {
       if (!boneListEl) return;
@@ -4164,7 +4418,10 @@ export class EditorApp {
     const t = this.getFrameTime(frameIndex);
     const existing = this.findFrameByIndex(frameIndex);
     const pasted = {
-      bones: JSON.parse(JSON.stringify(this.keyframeClipboard.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+      bones: JSON.parse(JSON.stringify(this.keyframeClipboard.bones)) as Record<
+        string,
+        { x: number; y: number; z: number; w: number }
+      >,
       rootPos: this.keyframeClipboard.rootPos ? { ...this.keyframeClipboard.rootPos } : undefined,
     };
     if (existing) {
@@ -4188,7 +4445,11 @@ export class EditorApp {
 
   private updateTimeline(force = true) {
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
-    const frameIndex = THREE.MathUtils.clamp(Math.round(this.time * this.fps), 0, this.getTotalFrames() - 1);
+    const frameIndex = THREE.MathUtils.clamp(
+      Math.round(this.time * this.fps),
+      0,
+      this.getTotalFrames() - 1,
+    );
     const now = performance.now();
     if (timeInput && (force || now - this.timelineLastUiUpdateMs >= 66)) {
       timeInput.value = this.time.toFixed(4);
@@ -4249,18 +4510,47 @@ export class EditorApp {
     const items: Action[] = [];
 
     if (hasKeyframe) {
-      items.push({ label: 'Delete Keyframe', action: () => { this.toggleKeyframe(bone, t); this.updateTimeline(); this.triggerHapticFeedback('medium'); } });
-      items.push({ label: 'Copy Keyframe', action: () => { this.copyKeyframeAtTime(t); } });
+      items.push({
+        label: 'Delete Keyframe',
+        action: () => {
+          this.toggleKeyframe(bone, t);
+          this.updateTimeline();
+          this.triggerHapticFeedback('medium');
+        },
+      });
+      items.push({
+        label: 'Copy Keyframe',
+        action: () => {
+          this.copyKeyframeAtTime(t);
+        },
+      });
     } else {
-      items.push({ label: 'Insert Keyframe', action: () => { this.toggleKeyframe(bone, t); this.updateTimeline(); this.triggerHapticFeedback('medium'); } });
-      items.push({ label: 'Paste Keyframe', disabled: !this.keyframeClipboard, action: () => { this.pasteKeyframeAtTime(t); this.triggerHapticFeedback('medium'); } });
+      items.push({
+        label: 'Insert Keyframe',
+        action: () => {
+          this.toggleKeyframe(bone, t);
+          this.updateTimeline();
+          this.triggerHapticFeedback('medium');
+        },
+      });
+      items.push({
+        label: 'Paste Keyframe',
+        disabled: !this.keyframeClipboard,
+        action: () => {
+          this.pasteKeyframeAtTime(t);
+          this.triggerHapticFeedback('medium');
+        },
+      });
     }
 
     for (const item of items) {
       const btn = document.createElement('button');
       btn.className = 'context-menu-item' + (item.disabled ? ' disabled' : '');
       btn.textContent = item.label;
-      btn.addEventListener('click', () => { this.dismissContextMenu(); item.action(); });
+      btn.addEventListener('click', () => {
+        this.dismissContextMenu();
+        item.action();
+      });
       menu.appendChild(btn);
     }
 
@@ -4378,7 +4668,12 @@ export class EditorApp {
     }
   }
 
-  private computeTimelineLaneMetrics(totalFrames: number, width: number, height: number, scale = 1) {
+  private computeTimelineLaneMetrics(
+    totalFrames: number,
+    width: number,
+    height: number,
+    scale = 1,
+  ) {
     const lanePadX = Math.max(6, Math.floor(8 * scale));
     const lanePadY = Math.max(2, Math.floor(4 * scale));
     const usableWidth = Math.max(1, width - lanePadX * 2);
@@ -4396,7 +4691,10 @@ export class EditorApp {
       const idx = THREE.MathUtils.clamp(Math.round(frame.time * this.fps), 0, totalFrames - 1);
       dedup.set(idx, {
         time: this.getFrameTime(idx),
-        bones: JSON.parse(JSON.stringify(frame.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+        bones: JSON.parse(JSON.stringify(frame.bones)) as Record<
+          string,
+          { x: number; y: number; z: number; w: number }
+        >,
         rootPos: frame.rootPos ? { ...frame.rootPos } : undefined,
       });
     }
@@ -4427,7 +4725,10 @@ export class EditorApp {
       const rect = wrap.getBoundingClientRect();
       const metrics = this.computeTimelineLaneMetrics(totalFrames, rect.width, rect.height, 1);
       const frameLeft = metrics.lanePadX + start * metrics.stepPitch + metrics.gap * 0.5;
-      const frameWidth = Math.max(metrics.stepPitch - metrics.gap, (end - start + 1) * metrics.stepPitch - metrics.gap);
+      const frameWidth = Math.max(
+        metrics.stepPitch - metrics.gap,
+        (end - start + 1) * metrics.stepPitch - metrics.gap,
+      );
       frameEl.style.left = `${frameLeft}px`;
       frameEl.style.width = `${frameWidth}px`;
       frameEl.style.top = `${metrics.laneY}px`;
@@ -4456,7 +4757,10 @@ export class EditorApp {
   private cloneFrame(frame: BoneFrame, frameTime: number): BoneFrame {
     return {
       time: frameTime,
-      bones: JSON.parse(JSON.stringify(frame.bones)) as Record<string, { x: number; y: number; z: number; w: number }>,
+      bones: JSON.parse(JSON.stringify(frame.bones)) as Record<
+        string,
+        { x: number; y: number; z: number; w: number }
+      >,
       rootPos: frame.rootPos ? { ...frame.rootPos } : undefined,
     };
   }
@@ -4688,41 +4992,53 @@ export class EditorApp {
       ...data,
       ragdollMuscle: { ...defaults.ragdollMuscle, ...(data.ragdollMuscle ?? {}) },
       ragdollSim: { ...defaults.ragdollSim, ...(data.ragdollSim ?? {}) },
-      ragdollRig: typeof data.ragdollRig === 'object' && data.ragdollRig ? { ...data.ragdollRig } : {},
+      ragdollRig:
+        typeof data.ragdollRig === 'object' && data.ragdollRig ? { ...data.ragdollRig } : {},
       profile: {
         ...defaults.profile,
         ...(data.profile ?? {}),
-        tags: Array.isArray(data.profile?.tags) ? data.profile!.tags.map((tag) => String(tag)) : [...defaults.profile.tags],
+        tags: Array.isArray(data.profile?.tags)
+          ? data.profile!.tags.map((tag) => String(tag))
+          : [...defaults.profile.tags],
       },
       capsule: { ...defaults.capsule, ...(data.capsule ?? {}) },
       stateMachine: {
         initial: String(data.stateMachine?.initial ?? defaults.stateMachine.initial),
         states: Array.isArray(data.stateMachine?.states)
-          ? data.stateMachine!.states.map((state) => ({
-            id: String((state as any).id ?? ''),
-            clip: String((state as any).clip ?? ''),
-            speed: Number((state as any).speed ?? 1) || 1,
-            loop: Boolean((state as any).loop ?? true),
-            tags: Array.isArray((state as any).tags)
-              ? (state as any).tags.map((tag: unknown) => String(tag))
-              : [],
-          })).filter((state) => state.id.length > 0)
-          : defaults.stateMachine.states.map((state) => ({ ...state, tags: [...(state.tags ?? [])] })),
+          ? data
+              .stateMachine!.states.map((state) => ({
+                id: String((state as any).id ?? ''),
+                clip: String((state as any).clip ?? ''),
+                speed: Number((state as any).speed ?? 1) || 1,
+                loop: Boolean((state as any).loop ?? true),
+                tags: Array.isArray((state as any).tags)
+                  ? (state as any).tags.map((tag: unknown) => String(tag))
+                  : [],
+              }))
+              .filter((state) => state.id.length > 0)
+          : defaults.stateMachine.states.map((state) => ({
+              ...state,
+              tags: [...(state.tags ?? [])],
+            })),
         transitions: Array.isArray(data.stateMachine?.transitions)
-          ? data.stateMachine!.transitions.map((transition) => ({
-            from: String((transition as any).from ?? 'any'),
-            to: String((transition as any).to ?? ''),
-            condition: String((transition as any).condition ?? ''),
-            blendMs: Number((transition as any).blendMs ?? 120) || 120,
-            priority: Number((transition as any).priority ?? 1) || 1,
-            interruptible: Boolean((transition as any).interruptible ?? true),
-          })).filter((transition) => transition.to.length > 0)
+          ? data
+              .stateMachine!.transitions.map((transition) => ({
+                from: String((transition as any).from ?? 'any'),
+                to: String((transition as any).to ?? ''),
+                condition: String((transition as any).condition ?? ''),
+                blendMs: Number((transition as any).blendMs ?? 120) || 120,
+                priority: Number((transition as any).priority ?? 1) || 1,
+                interruptible: Boolean((transition as any).interruptible ?? true),
+              }))
+              .filter((transition) => transition.to.length > 0)
           : defaults.stateMachine.transitions.map((transition) => ({ ...transition })),
       },
       npc: {
         ...defaults.npc,
         ...(data.npc ?? {}),
-        goals: Array.isArray(data.npc?.goals) ? data.npc!.goals.map((goal) => String(goal)) : [...defaults.npc.goals],
+        goals: Array.isArray(data.npc?.goals)
+          ? data.npc!.goals.map((goal) => String(goal))
+          : [...defaults.npc.goals],
       },
     };
   }
@@ -4735,7 +5051,10 @@ export class EditorApp {
     }
     const capsule = this.playerConfig.capsule ?? createDefaultPlayerConfig().capsule;
     const radius = Math.max(0.08, capsule.baseRadius * (this.playerConfig.capsuleRadiusScale || 1));
-    const height = Math.max(radius * 2.2, capsule.baseHeight * (this.playerConfig.capsuleHeightScale || 1));
+    const height = Math.max(
+      radius * 2.2,
+      capsule.baseHeight * (this.playerConfig.capsuleHeightScale || 1),
+    );
     const cylinderLength = Math.max(0.05, height - radius * 2);
     if (!this.playerCapsulePreview) {
       const solid = new THREE.Mesh(
@@ -4873,7 +5192,7 @@ export class EditorApp {
     // Add floor
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(10, 10),
-      new THREE.MeshStandardMaterial({ color: 0x333333 })
+      new THREE.MeshStandardMaterial({ color: 0x333333 }),
     );
     floor.rotation.x = -Math.PI / 2;
     this.settingsScene.add(floor);
@@ -4910,18 +5229,14 @@ export class EditorApp {
         const geometry = new THREE.BoxGeometry(
           obstacle.width || 1,
           obstacle.height || 1,
-          obstacle.depth || 1
+          obstacle.depth || 1,
         );
         const material = new THREE.MeshStandardMaterial({
           color: 0x666666,
           roughness: 0.8,
         });
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(
-          obstacle.x || 0,
-          obstacle.y || 0,
-          obstacle.z || 0
-        );
+        mesh.position.set(obstacle.x || 0, obstacle.y || 0, obstacle.z || 0);
         this.levelScene.add(mesh);
       }
     } catch (err) {
@@ -5403,9 +5718,10 @@ export class EditorApp {
     const stickQuat = new THREE.Quaternion();
 
     // Calculate pressure-based scale multiplier for gizmos
-    const pressureScale = this.pointerType === 'pen' && this.pointerPressure > 0
-      ? 1.0 + (this.pointerPressure * 0.5) // Scale up to 1.5x with heavy pressure
-      : 1.0;
+    const pressureScale =
+      this.pointerType === 'pen' && this.pointerPressure > 0
+        ? 1.0 + this.pointerPressure * 0.5 // Scale up to 1.5x with heavy pressure
+        : 1.0;
 
     for (const bone of this.bones) {
       const gizmo = this.boneGizmos.get(bone.name);
@@ -5420,7 +5736,7 @@ export class EditorApp {
       if (isSelected) {
         // Selected bone: orange/amber with pressure-based intensity
         if (this.pointerType === 'pen' && this.pointerPressure > 0) {
-          const intensity = 0.6 + (this.pointerPressure * 0.4);
+          const intensity = 0.6 + this.pointerPressure * 0.4;
           jointMat.color.setRGB(0.96 * intensity, 0.62 * intensity, 0.04 * intensity);
         } else {
           jointMat.color.set(0xf59e0b);
@@ -5514,7 +5830,8 @@ export class EditorApp {
       // Check if any bone is within snap distance (in screen space)
       for (const hit of expandedHits) {
         const boneName = hit.object.userData.boneName as string | undefined;
-        if (boneName && hit.distance < 100) { // 100 units in world space
+        if (boneName && hit.distance < 100) {
+          // 100 units in world space
           const bone = this.boneByName.get(boneName);
           if (bone) {
             // Visual feedback for snap
@@ -5655,7 +5972,7 @@ export class EditorApp {
     if (this.pointerType === 'pen' && this.pointerPressure > 0) {
       // Map pressure (0-1) to multiplier (0.3-1.0)
       // Light pressure gives fine control, heavy pressure gives coarse control
-      pressureMultiplier = 0.3 + (this.pointerPressure * 0.7);
+      pressureMultiplier = 0.3 + this.pointerPressure * 0.7;
     }
 
     const rawLengthScale = (half * 2) / rag.baseLength;
@@ -5755,9 +6072,14 @@ export class EditorApp {
     this.disableRagdoll();
     if (!this.mixer) this.mixer = new THREE.AnimationMixer(this.vrm.scene);
     this.stopMixamoPreview();
-    const retargeted = retargetMixamoClip({ clip: entry.clip, rig: entry.rig }, this.vrm, 'editor', {
-      includePosition: false,
-    });
+    const retargeted = retargetMixamoClip(
+      { clip: entry.clip, rig: entry.rig },
+      this.vrm,
+      'editor',
+      {
+        includePosition: false,
+      },
+    );
     this.retargetedClip = retargeted;
     this.retargetedName = retargeted.name;
     this.currentMixamo = this.mixer.clipAction(retargeted);
@@ -5781,9 +6103,14 @@ export class EditorApp {
     if (!this.mixer) this.mixer = new THREE.AnimationMixer(this.vrm.scene);
     this.stopMixamoPreview();
     this.disableRagdoll();
-    const retargeted = retargetMixamoClip({ clip: entry.clip, rig: entry.rig }, this.vrm, 'editor', {
-      includePosition: false,
-    });
+    const retargeted = retargetMixamoClip(
+      { clip: entry.clip, rig: entry.rig },
+      this.vrm,
+      'editor',
+      {
+        includePosition: false,
+      },
+    );
     this.retargetedClip = retargeted;
     this.retargetedName = retargeted.name;
     const action = this.mixer.clipAction(retargeted);
@@ -5821,19 +6148,30 @@ export class EditorApp {
     const durationInput = this.hud.querySelector('[data-duration]') as HTMLInputElement;
     const timeInput = this.hud.querySelector('[data-time]') as HTMLInputElement;
     const overrideRangeWrap = this.hud.querySelector('[data-override-range]') as HTMLDivElement;
-    const overrideStartHandle = this.hud.querySelector('[data-override-start-handle]') as HTMLDivElement;
-    const overrideEndHandle = this.hud.querySelector('[data-override-end-handle]') as HTMLDivElement;
+    const overrideStartHandle = this.hud.querySelector(
+      '[data-override-start-handle]',
+    ) as HTMLDivElement;
+    const overrideEndHandle = this.hud.querySelector(
+      '[data-override-end-handle]',
+    ) as HTMLDivElement;
     if (durationInput) durationInput.value = String(this.getTotalFrames());
     if (timeInput) {
       timeInput.max = duration.toFixed(4);
       timeInput.step = (1 / this.fps).toFixed(4);
     }
-    this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+    this.syncOverrideRangeUi(
+      overrideRangeWrap,
+      overrideStartHandle,
+      overrideEndHandle,
+      this.overrideMode,
+    );
     status.textContent = `Mixamo: baked ${entry.name}`;
   }
 
   private buildAnimationClip() {
-    return buildAnimationClipFromData(`editor_${this.retargetedName}`, this.clip, { rootKey: ROOT_BONE_KEY });
+    return buildAnimationClipFromData(`editor_${this.retargetedName}`, this.clip, {
+      rootKey: ROOT_BONE_KEY,
+    });
   }
 
   private getRagdollMuscleConfig() {
@@ -5959,7 +6297,10 @@ export class EditorApp {
     }
     if (this.vrm) {
       const hips = this.vrm.humanoid.getRawBoneNode('hips');
-      if (hips) this.hipsOffset.copy(hips.getWorldPosition(new THREE.Vector3())).sub(this.vrm.scene.position);
+      if (hips)
+        this.hipsOffset
+          .copy(hips.getWorldPosition(new THREE.Vector3()))
+          .sub(this.vrm.scene.position);
     }
   }
 
@@ -6096,23 +6437,46 @@ export class EditorApp {
       ) {
         return COLLISION_GROUP_TORSO;
       }
-      if (name.startsWith('leftUpperArm') || name.startsWith('leftLowerArm') || name.startsWith('leftHand')) {
+      if (
+        name.startsWith('leftUpperArm') ||
+        name.startsWith('leftLowerArm') ||
+        name.startsWith('leftHand')
+      ) {
         return COLLISION_GROUP_ARM_L;
       }
-      if (name.startsWith('rightUpperArm') || name.startsWith('rightLowerArm') || name.startsWith('rightHand')) {
+      if (
+        name.startsWith('rightUpperArm') ||
+        name.startsWith('rightLowerArm') ||
+        name.startsWith('rightHand')
+      ) {
         return COLLISION_GROUP_ARM_R;
       }
-      if (name.startsWith('leftUpperLeg') || name.startsWith('leftLowerLeg') || name.startsWith('leftFoot')) {
+      if (
+        name.startsWith('leftUpperLeg') ||
+        name.startsWith('leftLowerLeg') ||
+        name.startsWith('leftFoot')
+      ) {
         return COLLISION_GROUP_LEG_L;
       }
-      if (name.startsWith('rightUpperLeg') || name.startsWith('rightLowerLeg') || name.startsWith('rightFoot')) {
+      if (
+        name.startsWith('rightUpperLeg') ||
+        name.startsWith('rightLowerLeg') ||
+        name.startsWith('rightFoot')
+      ) {
         return COLLISION_GROUP_LEG_R;
       }
       return COLLISION_GROUP_TORSO;
     };
     const allBodyGroups =
-      COLLISION_GROUP_TORSO | COLLISION_GROUP_ARM_L | COLLISION_GROUP_ARM_R | COLLISION_GROUP_LEG_L | COLLISION_GROUP_LEG_R;
-    const hingeJoints: Record<string, { axis: [number, number, number]; min: number; max: number }> = {
+      COLLISION_GROUP_TORSO |
+      COLLISION_GROUP_ARM_L |
+      COLLISION_GROUP_ARM_R |
+      COLLISION_GROUP_LEG_L |
+      COLLISION_GROUP_LEG_R;
+    const hingeJoints: Record<
+      string,
+      { axis: [number, number, number]; min: number; max: number }
+    > = {
       leftLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
       rightLowerArm: { axis: [1, 0, 0], min: 0, max: 2.1 },
       leftLowerLeg: { axis: [1, 0, 0], min: 0, max: 2.35 },
@@ -6231,7 +6595,11 @@ export class EditorApp {
       const offsetWorld = offsetLocal.applyQuaternion(boneWorldQuat);
       center.add(offsetWorld);
       const rotOffset = new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(Number(rigCfg.rot?.x ?? 0), Number(rigCfg.rot?.y ?? 0), Number(rigCfg.rot?.z ?? 0)),
+        new THREE.Euler(
+          Number(rigCfg.rot?.x ?? 0),
+          Number(rigCfg.rot?.y ?? 0),
+          Number(rigCfg.rot?.z ?? 0),
+        ),
       );
       tmpQuat.multiply(rotOffset).normalize();
       const bodyToBone = tmpQuat.clone().invert().multiply(boneWorldQuat);
@@ -6242,8 +6610,16 @@ export class EditorApp {
       radius = Math.min(radius, scaledLength * 0.35);
       radius = Math.max(0.02, radius);
       const halfHeight = Math.max(0, scaledLength * 0.5 - radius);
-      const limb = def.name.includes('Arm') || def.name.includes('Leg') || def.name.includes('Hand') || def.name.includes('Foot');
-      const axial = def.name === 'hips' || def.name === 'spine' || def.name === 'chest' || def.name === 'upperChest';
+      const limb =
+        def.name.includes('Arm') ||
+        def.name.includes('Leg') ||
+        def.name.includes('Hand') ||
+        def.name.includes('Foot');
+      const axial =
+        def.name === 'hips' ||
+        def.name === 'spine' ||
+        def.name === 'chest' ||
+        def.name === 'upperChest';
       const linearDampingBase = axial ? 4.2 : limb ? 3.2 : 3.6;
       const angularDampingBase = axial ? 6.5 : limb ? 5.2 : 5.8;
       const linearDamping = linearDampingBase * Math.max(0, sim.bodyLinearDampingScale);
@@ -6259,10 +6635,14 @@ export class EditorApp {
       const membership = getBodyGroup(def.name);
       const filter = COLLISION_GROUP_ENV | (allBodyGroups & ~membership);
       const collider = (
-        halfHeight > 0.01 ? RAPIER.ColliderDesc.capsule(halfHeight, radius) : RAPIER.ColliderDesc.ball(radius)
-      )
-        .setCollisionGroups((membership << 16) | filter);
-      collider.setDensity(segmentDensity[def.name] ?? 40).setFriction(Math.max(0, sim.bodyFriction)).setRestitution(0);
+        halfHeight > 0.01
+          ? RAPIER.ColliderDesc.capsule(halfHeight, radius)
+          : RAPIER.ColliderDesc.ball(radius)
+      ).setCollisionGroups((membership << 16) | filter);
+      collider
+        .setDensity(segmentDensity[def.name] ?? 40)
+        .setFriction(Math.max(0, sim.bodyFriction))
+        .setRestitution(0);
       if (RAPIER.CoefficientCombineRule) {
         collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Max);
       }
@@ -6302,19 +6682,30 @@ export class EditorApp {
       };
       const hinge = hingeJoints[def.name];
       if (hinge) {
-        ragBone.hingeAxisLocal = new THREE.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]).normalize();
+        ragBone.hingeAxisLocal = new THREE.Vector3(
+          hinge.axis[0],
+          hinge.axis[1],
+          hinge.axis[2],
+        ).normalize();
         ragBone.hingeMin = hinge.min;
         ragBone.hingeMax = hinge.max;
       }
       const ballLimit = ballJointLimits[def.name];
       if (ballLimit) {
-        ragBone.swingLimitRad = THREE.MathUtils.degToRad(Number(rigCfg.swingLimit ?? ballLimit.swingDeg));
-        ragBone.twistLimitRad = THREE.MathUtils.degToRad(Number(rigCfg.twistLimit ?? ballLimit.twistDeg));
+        ragBone.swingLimitRad = THREE.MathUtils.degToRad(
+          Number(rigCfg.swingLimit ?? ballLimit.swingDeg),
+        );
+        ragBone.twistLimitRad = THREE.MathUtils.degToRad(
+          Number(rigCfg.twistLimit ?? ballLimit.twistDeg),
+        );
         if (def.parent) {
           const parentBone = getBone(def.parent);
           if (parentBone) {
             const parentWorldQuat = parentBone.getWorldQuaternion(new THREE.Quaternion());
-            ragBone.twistAxisLocal = axis.clone().applyQuaternion(parentWorldQuat.invert()).normalize();
+            ragBone.twistAxisLocal = axis
+              .clone()
+              .applyQuaternion(parentWorldQuat.invert())
+              .normalize();
           }
         }
       }
@@ -6367,7 +6758,9 @@ export class EditorApp {
       jointData.damping = damping;
       const joint = world.createImpulseJoint(jointData, parentBody, childBody, true);
       if (hinge) {
-        const revoluteJoint = joint as unknown as { setLimits?: (min: number, max: number) => void };
+        const revoluteJoint = joint as unknown as {
+          setLimits?: (min: number, max: number) => void;
+        };
         revoluteJoint.setLimits?.(hinge.min, hinge.max);
       }
       childBone.parent = parentBone;
@@ -6407,7 +6800,8 @@ export class EditorApp {
     // Hard-clamp anatomical joints so they cannot exceed human ranges.
     for (const ragBone of this.ragdollBones.values()) {
       if (!ragBone.parent) continue;
-      const isSleeping = (ragBone.body as unknown as { isSleeping?: () => boolean }).isSleeping?.() ?? false;
+      const isSleeping =
+        (ragBone.body as unknown as { isSleeping?: () => boolean }).isSleeping?.() ?? false;
       if (isSleeping) continue;
       const pRot = ragBone.parent.body.rotation();
       const cRot = ragBone.body.rotation();
@@ -6426,7 +6820,12 @@ export class EditorApp {
         twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
         if (twistQuat.lengthSq() >= 1e-10) {
           swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
-          const signedAngle = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
+          const signedAngle =
+            2 *
+            Math.atan2(
+              axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
+              twistQuat.w,
+            );
           const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
           if (Math.abs(clampedAngle - signedAngle) > limitEpsilon) {
             twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
@@ -6445,10 +6844,18 @@ export class EditorApp {
         twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
         if (twistQuat.lengthSq() >= 1e-10) {
           swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
-          const signedTwist = 2 * Math.atan2(axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)), twistQuat.w);
+          const signedTwist =
+            2 *
+            Math.atan2(
+              axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
+              twistQuat.w,
+            );
           const clampedTwist = THREE.MathUtils.clamp(signedTwist, -twistLimit, twistLimit);
           const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swingQuat.w, -1, 1));
-          if (Math.abs(clampedTwist - signedTwist) > limitEpsilon || swingAngle > swingLimit + limitEpsilon) {
+          if (
+            Math.abs(clampedTwist - signedTwist) > limitEpsilon ||
+            swingAngle > swingLimit + limitEpsilon
+          ) {
             twistQuat.setFromAxisAngle(axisLocal, clampedTwist);
             if (swingAngle > 1e-5 && swingLimit < Math.PI) {
               const scale = swingLimit / swingAngle;
@@ -6465,7 +6872,12 @@ export class EditorApp {
       childQuat.copy(parentQuat).multiply(relQuat).normalize();
       currentWorldQuat.slerp(childQuat, THREE.MathUtils.clamp(sim.limitBlend, 0, 1)).normalize();
       ragBone.body.setRotation(
-        { x: currentWorldQuat.x, y: currentWorldQuat.y, z: currentWorldQuat.z, w: currentWorldQuat.w },
+        {
+          x: currentWorldQuat.x,
+          y: currentWorldQuat.y,
+          z: currentWorldQuat.z,
+          w: currentWorldQuat.w,
+        },
         false,
       );
       const avNow = ragBone.body.angvel();
@@ -6644,9 +7056,7 @@ export class EditorApp {
       if (ragBone.child) {
         ragBone.child.getWorldPosition(end);
       } else {
-        axis
-          .copy(ragBone.axis ?? up)
-          .normalize();
+        axis.copy(ragBone.axis ?? up).normalize();
         end.copy(start).addScaledVector(axis, Math.max(0.08, ragBone.baseLength ?? 0.2));
       }
       axis.copy(end).sub(start);
@@ -6679,9 +7089,18 @@ export class EditorApp {
     this.overrideRangeStartFrame = 0;
     this.overrideRangeEndFrame = Math.max(0, this.getTotalFrames() - 1);
     const overrideRangeWrap = this.hud.querySelector('[data-override-range]') as HTMLDivElement;
-    const overrideStartHandle = this.hud.querySelector('[data-override-start-handle]') as HTMLDivElement;
-    const overrideEndHandle = this.hud.querySelector('[data-override-end-handle]') as HTMLDivElement;
-    this.syncOverrideRangeUi(overrideRangeWrap, overrideStartHandle, overrideEndHandle, this.overrideMode);
+    const overrideStartHandle = this.hud.querySelector(
+      '[data-override-start-handle]',
+    ) as HTMLDivElement;
+    const overrideEndHandle = this.hud.querySelector(
+      '[data-override-end-handle]',
+    ) as HTMLDivElement;
+    this.syncOverrideRangeUi(
+      overrideRangeWrap,
+      overrideStartHandle,
+      overrideEndHandle,
+      this.overrideMode,
+    );
     this.ragdollRecording = true;
     this.drawTimeline();
   }
@@ -6712,12 +7131,8 @@ export class EditorApp {
     ctx.fillRect(0, 0, width, height);
 
     const totalFrames = this.getTotalFrames();
-    const { lanePadX, usableWidth, stepPitch, gap, cellSize, laneY } = this.computeTimelineLaneMetrics(
-      totalFrames,
-      width,
-      height,
-      this.dpr,
-    );
+    const { lanePadX, usableWidth, stepPitch, gap, cellSize, laneY } =
+      this.computeTimelineLaneMetrics(totalFrames, width, height, this.dpr);
     const cellOffsetY = laneY;
     const keyBorder = Math.max(1, Math.floor(this.dpr * 1.1));
     const gridBorder = Math.max(1, Math.floor(this.dpr * 0.75));
@@ -6727,7 +7142,12 @@ export class EditorApp {
       keyedFrames.add(THREE.MathUtils.clamp(Math.round(frame.time * this.fps), 0, totalFrames - 1));
     }
     ctx.fillStyle = 'rgba(148,163,184,0.08)';
-    ctx.fillRect(lanePadX, laneY - Math.max(1, Math.floor(4 * this.dpr)), usableWidth, cellSize + Math.max(2, Math.floor(8 * this.dpr)));
+    ctx.fillRect(
+      lanePadX,
+      laneY - Math.max(1, Math.floor(4 * this.dpr)),
+      usableWidth,
+      cellSize + Math.max(2, Math.floor(8 * this.dpr)),
+    );
 
     const majorFrameStep = Math.max(1, this.fps);
     const minorFrameStep = Math.max(1, Math.round(this.fps / 2));
@@ -6762,7 +7182,12 @@ export class EditorApp {
       ctx.fillRect(x, cellOffsetY, Math.max(1, cellSize), Math.max(1, cellSize));
       ctx.strokeStyle = frameStroke;
       ctx.lineWidth = hasKey ? keyBorder : gridBorder;
-      ctx.strokeRect(x + 0.5, cellOffsetY + 0.5, Math.max(1, cellSize - 1), Math.max(1, cellSize - 1));
+      ctx.strokeRect(
+        x + 0.5,
+        cellOffsetY + 0.5,
+        Math.max(1, cellSize - 1),
+        Math.max(1, cellSize - 1),
+      );
     }
 
     const playFrame = THREE.MathUtils.clamp(Math.round(this.time * this.fps), 0, totalFrames - 1);

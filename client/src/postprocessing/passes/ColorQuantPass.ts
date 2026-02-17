@@ -1,21 +1,21 @@
-import * as THREE from 'three'
-import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
+import * as THREE from 'three';
+import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 
 export interface ColorQuantPassParameters {
-  bits?: number // Bits per channel (5 for RGB555, 8 for RGB888)
+  bits?: number; // Bits per channel (5 for RGB555, 8 for RGB888)
 }
 
 export class ColorQuantPass extends Pass {
-  private fsQuad: FullScreenQuad
+  private fsQuad: FullScreenQuad;
   private uniforms: {
-    tDiffuse: { value: THREE.Texture | null }
-    bits: { value: number }
-  }
+    tDiffuse: { value: THREE.Texture | null };
+    bits: { value: number };
+  };
 
   constructor(params: ColorQuantPassParameters = {}) {
-    super()
+    super();
 
-    const bits = params.bits !== undefined ? params.bits : 5 // Default to 15-bit color (RGB555)
+    const bits = params.bits !== undefined ? params.bits : 5; // Default to 15-bit color (RGB555)
 
     // Create shader material
     const shader = {
@@ -46,35 +46,35 @@ export class ColorQuantPass extends Pass {
           gl_FragColor = vec4(quantized, color.a);
         }
       `,
-    }
+    };
 
-    const material = new THREE.ShaderMaterial(shader)
-    this.uniforms = material.uniforms as typeof this.uniforms
-    this.fsQuad = new FullScreenQuad(material)
+    const material = new THREE.ShaderMaterial(shader);
+    this.uniforms = material.uniforms as typeof this.uniforms;
+    this.fsQuad = new FullScreenQuad(material);
   }
 
   render(
     renderer: THREE.WebGLRenderer,
     writeBuffer: THREE.WebGLRenderTarget,
-    readBuffer: THREE.WebGLRenderTarget
+    readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.uniforms.tDiffuse.value = readBuffer.texture
+    this.uniforms.tDiffuse.value = readBuffer.texture;
 
     if (this.renderToScreen) {
-      renderer.setRenderTarget(null)
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
     } else {
-      renderer.setRenderTarget(writeBuffer)
-      if (this.clear) renderer.clear()
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+      this.fsQuad.render(renderer);
     }
   }
 
   setBits(bits: number): void {
-    this.uniforms.bits.value = bits
+    this.uniforms.bits.value = bits;
   }
 
   dispose(): void {
-    this.fsQuad.dispose()
+    this.fsQuad.dispose();
   }
 }

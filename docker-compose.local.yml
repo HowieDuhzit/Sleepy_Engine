@@ -9,7 +9,7 @@ services:
       dockerfile: Dockerfile
       target: allinone
     ports:
-      - "5173:80"
+      - '5173:80'
     environment:
       NODE_ENV: production
       PROJECTS_DIR: /app/projects
@@ -21,7 +21,7 @@ services:
       - db
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
+      test: ['CMD', 'curl', '-f', 'http://localhost/']
       interval: 30s
       timeout: 10s
       retries: 3

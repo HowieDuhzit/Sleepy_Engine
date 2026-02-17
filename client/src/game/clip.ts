@@ -15,7 +15,10 @@ export const parseClipPayload = (payload: unknown): ClipData | null => {
   if (!payload || typeof payload !== 'object') return null;
   if ('clip' in (payload as any)) {
     const clip = (payload as any).clip;
-    return clip && typeof clip === 'object' && typeof clip.duration === 'number' && Array.isArray(clip.frames)
+    return clip &&
+      typeof clip === 'object' &&
+      typeof clip.duration === 'number' &&
+      Array.isArray(clip.frames)
       ? (clip as ClipData)
       : null;
   }
@@ -58,10 +61,14 @@ export const buildAnimationClipFromData = (
   const tracks: THREE.QuaternionKeyframeTrack[] = [];
   for (const [key, track] of boneTracks.entries()) {
     if (!track.times.length) continue;
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${prefix}${key}.quaternion`, track.times, track.values));
+    tracks.push(
+      new THREE.QuaternionKeyframeTrack(`${prefix}${key}.quaternion`, track.times, track.values),
+    );
   }
   if (rootTimes.length) {
-    tracks.push(new THREE.VectorKeyframeTrack(`${prefix}${rootKey}.position`, rootTimes, rootValues));
+    tracks.push(
+      new THREE.VectorKeyframeTrack(`${prefix}${rootKey}.position`, rootTimes, rootValues),
+    );
   }
   return new THREE.AnimationClip(name, clip.duration, tracks);
 };

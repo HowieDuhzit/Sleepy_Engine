@@ -16,7 +16,13 @@ import { PSXRenderer } from '../rendering/PSXRenderer';
 import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
 import { PSXMaterial } from '../materials/PSXMaterial';
 import { psxSettings } from '../settings/PSXSettings';
-import { buildAnimationClipFromData, isClipData, mirrorClipData, parseClipPayload, type ClipData } from './clip';
+import {
+  buildAnimationClipFromData,
+  isClipData,
+  mirrorClipData,
+  parseClipPayload,
+  type ClipData,
+} from './clip';
 import { retargetMixamoClip } from './retarget';
 import {
   PlayerSnapshot,
@@ -42,7 +48,11 @@ import {
 export class GameApp {
   private sceneName: string;
   private gameId: string;
-  private obstacles: Array<{ id: string; position: { x: number; y: number; z: number }; size: { x: number; y: number; z: number } }> = [];
+  private obstacles: Array<{
+    id: string;
+    position: { x: number; y: number; z: number };
+    size: { x: number; y: number; z: number };
+  }> = [];
   private obstacleGroup: THREE.Group | null = null;
   private groundMesh: THREE.Mesh | null = null;
   private playerConfig = {
@@ -225,7 +235,10 @@ export class GameApp {
   private remoteBufferMin = 0.05; // Min 50ms
   private remoteBufferMax = 0.2; // Max 200ms
   private lastSnapshotTimes: number[] = []; // Track snapshot arrival times for adaptive buffer
-  private crowdAgents = new Map<number, { agent: CrowdSnapshot['agents'][0]; lastUpdate: number }>(); // Track by ID with timestamp
+  private crowdAgents = new Map<
+    number,
+    { agent: CrowdSnapshot['agents'][0]; lastUpdate: number }
+  >(); // Track by ID with timestamp
   private readonly CROWD_TIMEOUT = 2; // Remove crowd agents not updated for 2 seconds
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
   private remoteLatestVel = new Map<string, Vec3>();
@@ -250,7 +263,12 @@ export class GameApp {
   };
   private inputDebugTimer = 0;
   private cameraSettingsListeners = new Set<
-    (settings: { orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }) => void
+    (settings: {
+      orbitRadius: number;
+      cameraSmoothing: number;
+      cameraSensitivity: number;
+      firstPersonMode: boolean;
+    }) => void
   >();
   private onBackToMenu: (() => void) | null = null;
   private handleContainerClick = () => {
@@ -331,31 +349,26 @@ export class GameApp {
       pixelated: psxSettings.config.pixelated,
     });
 
-    this.psxPostProcessor = new PSXPostProcessor(
-      this.renderer,
-      this.scene,
-      this.camera,
-      {
-        enabled: psxSettings.config.enabled,
-        blur: psxSettings.config.blur,
-        blurStrength: psxSettings.config.blurStrength,
-        colorQuantization: psxSettings.config.colorQuantization,
-        colorBits: psxSettings.config.colorBits,
-        dithering: psxSettings.config.dithering,
-        ditherStrength: psxSettings.config.ditherStrength,
-        crtEffects: psxSettings.config.crtEffects,
-        scanlineIntensity: psxSettings.config.scanlineIntensity,
-        curvature: psxSettings.config.curvature,
-        vignette: psxSettings.config.vignette,
-        brightness: psxSettings.config.brightness,
-        chromaticAberration: psxSettings.config.chromaticAberration,
-        chromaticOffset: psxSettings.config.chromaticOffset,
-        contrast: psxSettings.config.contrast,
-        saturation: psxSettings.config.saturation,
-        gamma: psxSettings.config.gamma,
-        exposure: psxSettings.config.exposure,
-      }
-    );
+    this.psxPostProcessor = new PSXPostProcessor(this.renderer, this.scene, this.camera, {
+      enabled: psxSettings.config.enabled,
+      blur: psxSettings.config.blur,
+      blurStrength: psxSettings.config.blurStrength,
+      colorQuantization: psxSettings.config.colorQuantization,
+      colorBits: psxSettings.config.colorBits,
+      dithering: psxSettings.config.dithering,
+      ditherStrength: psxSettings.config.ditherStrength,
+      crtEffects: psxSettings.config.crtEffects,
+      scanlineIntensity: psxSettings.config.scanlineIntensity,
+      curvature: psxSettings.config.curvature,
+      vignette: psxSettings.config.vignette,
+      brightness: psxSettings.config.brightness,
+      chromaticAberration: psxSettings.config.chromaticAberration,
+      chromaticOffset: psxSettings.config.chromaticOffset,
+      contrast: psxSettings.config.contrast,
+      saturation: psxSettings.config.saturation,
+      gamma: psxSettings.config.gamma,
+      exposure: psxSettings.config.exposure,
+    });
 
     this.orbitRadius = this.playerConfig.cameraDistance ?? this.orbitRadius;
     this.cameraSensitivity = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
@@ -403,7 +416,9 @@ export class GameApp {
         return isLocalPage ? 'ws://127.0.0.1:2567' : pageDefaultUrl;
       }
       if (!isLocalPage && envLooksLocal(envUrl)) {
-        console.warn('Ignoring localhost VITE_PUBLIC_WS_URL on non-local page; using same-origin websocket URL.');
+        console.warn(
+          'Ignoring localhost VITE_PUBLIC_WS_URL on non-local page; using same-origin websocket URL.',
+        );
         return pageDefaultUrl;
       }
       try {
@@ -451,10 +466,19 @@ export class GameApp {
     if (this.psxPostProcessor) {
       this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
       this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
-      this.psxPostProcessor.setColorQuantization(psxSettings.config.colorQuantization, psxSettings.config.colorBits);
-      this.psxPostProcessor.setDithering(psxSettings.config.dithering, psxSettings.config.ditherStrength);
+      this.psxPostProcessor.setColorQuantization(
+        psxSettings.config.colorQuantization,
+        psxSettings.config.colorBits,
+      );
+      this.psxPostProcessor.setDithering(
+        psxSettings.config.dithering,
+        psxSettings.config.ditherStrength,
+      );
       this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
-      this.psxPostProcessor.setChromaticAberration(psxSettings.config.chromaticAberration, psxSettings.config.chromaticOffset);
+      this.psxPostProcessor.setChromaticAberration(
+        psxSettings.config.chromaticAberration,
+        psxSettings.config.chromaticOffset,
+      );
       this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
       this.psxPostProcessor.setContrast(psxSettings.config.contrast);
       this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
@@ -511,7 +535,12 @@ export class GameApp {
   }
 
   public setUiCameraSettings(
-    patch: Partial<{ orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }>
+    patch: Partial<{
+      orbitRadius: number;
+      cameraSmoothing: number;
+      cameraSensitivity: number;
+      firstPersonMode: boolean;
+    }>,
   ) {
     if (typeof patch.orbitRadius === 'number') {
       this.orbitRadius = Math.min(40, Math.max(1, patch.orbitRadius));
@@ -529,7 +558,12 @@ export class GameApp {
   }
 
   public onUiCameraSettingsChange(
-    listener: (settings: { orbitRadius: number; cameraSmoothing: number; cameraSensitivity: number; firstPersonMode: boolean }) => void
+    listener: (settings: {
+      orbitRadius: number;
+      cameraSmoothing: number;
+      cameraSensitivity: number;
+      firstPersonMode: boolean;
+    }) => void,
   ) {
     this.cameraSettingsListeners.add(listener);
     listener(this.getUiCameraSettings());
@@ -708,13 +742,13 @@ export class GameApp {
 
   private createObstacles() {
     const group = new THREE.Group();
-    const material = new THREE.MeshStandardMaterial({ color: 0x2a2f3c, roughness: 0.85, metalness: 0.1 });
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x2a2f3c,
+      roughness: 0.85,
+      metalness: 0.1,
+    });
     for (const obstacle of this.obstacles) {
-      const geometry = new THREE.BoxGeometry(
-        obstacle.size.x,
-        obstacle.size.y,
-        obstacle.size.z,
-      );
+      const geometry = new THREE.BoxGeometry(obstacle.size.x, obstacle.size.y, obstacle.size.z);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(obstacle.position.x, obstacle.size.y / 2, obstacle.position.z);
       group.add(mesh);
@@ -727,7 +761,10 @@ export class GameApp {
     for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
-      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+      if (
+        Math.abs(x - obstacle.position.x) <= halfX &&
+        Math.abs(z - obstacle.position.z) <= halfZ
+      ) {
         height = Math.max(height, obstacle.size.y + obstacle.position.y);
       }
     }
@@ -749,7 +786,12 @@ export class GameApp {
     mesh.position.y = radius + length / 2;
     mesh.visible = false; // Hide collider
     group.add(mesh);
-    group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
+    group.userData.capsule = {
+      mesh,
+      baseRadius: radius,
+      baseLength: length,
+      hip: null as THREE.Object3D | null,
+    };
     group.position.set(0, GROUND_Y, 0);
     return group;
   }
@@ -836,10 +878,16 @@ export class GameApp {
           .map((entry) => ({ key: entry.key, name: entry.node!.name }));
         const normalizedRootName = vrm.humanoid.normalizedHumanBonesRoot?.name ?? null;
         const idleClip = this.jsonClips.idle
-          ? buildAnimationClipFromData('idle', this.jsonClips.idle, { prefix: crowdPrefix, rootKey: 'hips' })
+          ? buildAnimationClipFromData('idle', this.jsonClips.idle, {
+              prefix: crowdPrefix,
+              rootKey: 'hips',
+            })
           : null;
         const walkClip = this.jsonClips.walk
-          ? buildAnimationClipFromData('walk', this.jsonClips.walk, { prefix: crowdPrefix, rootKey: 'hips' })
+          ? buildAnimationClipFromData('walk', this.jsonClips.walk, {
+              prefix: crowdPrefix,
+              rootKey: 'hips',
+            })
           : idleClip;
         const baseY = this.computeVrmGroundOffset(vrm);
         const count = CROWD_COUNT;
@@ -878,7 +926,8 @@ export class GameApp {
           const applyActionSettings = (name: string, action: THREE.AnimationAction) => {
             action.enabled = true;
             action.clampWhenFinished = true;
-            action.loop = name === 'jump' ||
+            action.loop =
+              name === 'jump' ||
               name === 'jump_up' ||
               name === 'run_jump' ||
               name === 'land' ||
@@ -888,13 +937,16 @@ export class GameApp {
               name === 'attack' ||
               name === 'hit' ||
               name === 'knockdown'
-              ? THREE.LoopOnce
-              : THREE.LoopRepeat;
+                ? THREE.LoopOnce
+                : THREE.LoopRepeat;
             action.play();
             action.weight = name === 'idle' ? 1 : 0;
           };
           for (const [name, clipData] of Object.entries(this.jsonClips)) {
-            const clip = buildAnimationClipFromData(name, clipData, { prefix: crowdPrefix, rootKey: 'hips' });
+            const clip = buildAnimationClipFromData(name, clipData, {
+              prefix: crowdPrefix,
+              rootKey: 'hips',
+            });
             const action = mixer.clipAction(clip);
             applyActionSettings(name, action);
             actions[name] = action;
@@ -951,7 +1003,12 @@ export class GameApp {
     mesh.position.y = radius + length / 2;
     mesh.visible = false; // Hide collider
     group.add(mesh);
-    group.userData.capsule = { mesh, baseRadius: radius, baseLength: length, hip: null as THREE.Object3D | null };
+    group.userData.capsule = {
+      mesh,
+      baseRadius: radius,
+      baseLength: length,
+      hip: null as THREE.Object3D | null,
+    };
     if (this.playerAvatarEnabled) {
       void this.loadVrmInto(group, id);
     } else {
@@ -1121,7 +1178,10 @@ export class GameApp {
     const rotated = this.rotateMovementByCamera(movement.x, movement.z);
     const moveX = rotated.x;
     const moveZ = rotated.z;
-    const groundHeight = this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z);
+    const groundHeight = this.sampleGroundHeight(
+      this.localPlayer.position.x,
+      this.localPlayer.position.z,
+    );
     const onGround = this.localPlayer.position.y <= groundHeight + 0.001;
     const movementLocked = this.localMovementLockTimer > 0;
 
@@ -1169,10 +1229,27 @@ export class GameApp {
     const speedBase = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
     const accel = Math.min(1, slideAccel * delta);
 
-    const startSlide = !movementLocked && onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
-    const startVault = !movementLocked && onGround && flags.jump && this.vaultCooldown <= 0 && this.checkVault(moveDir);
-    const startClimb = !movementLocked && !onGround && flags.jump && this.vaultCooldown <= 0 && this.checkClimb(moveDir);
-    const startFlip = !movementLocked && onGround && flags.jump && flags.sprint && this.vaultCooldown <= 0 && !startVault;
+    const startSlide =
+      !movementLocked && onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
+    const startVault =
+      !movementLocked &&
+      onGround &&
+      flags.jump &&
+      this.vaultCooldown <= 0 &&
+      this.checkVault(moveDir);
+    const startClimb =
+      !movementLocked &&
+      !onGround &&
+      flags.jump &&
+      this.vaultCooldown <= 0 &&
+      this.checkClimb(moveDir);
+    const startFlip =
+      !movementLocked &&
+      onGround &&
+      flags.jump &&
+      flags.sprint &&
+      this.vaultCooldown <= 0 &&
+      !startVault;
 
     if (startVault) {
       this.parkourState = 'vault';
@@ -1221,7 +1298,7 @@ export class GameApp {
         this.localVelocityZ = targetVz;
       }
     } else if (this.parkourState === 'slide') {
-      const damping = Math.max(0, 1 - (slideFriction * 1.4) * delta);
+      const damping = Math.max(0, 1 - slideFriction * 1.4 * delta);
       this.localVelocityX *= damping;
       this.localVelocityZ *= damping;
     } else if (movementLocked) {
@@ -1312,8 +1389,6 @@ export class GameApp {
     return false;
   }
 
-  
-
   private getStepUpHeight(dir: THREE.Vector3) {
     if (dir.lengthSq() < 0.2) return 0;
     const pos = this.localPlayer.position;
@@ -1324,7 +1399,10 @@ export class GameApp {
     for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
       const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
-      if (Math.abs(probeX - obstacle.position.x) <= halfX && Math.abs(probeZ - obstacle.position.z) <= halfZ) {
+      if (
+        Math.abs(probeX - obstacle.position.x) <= halfX &&
+        Math.abs(probeZ - obstacle.position.z) <= halfZ
+      ) {
         if (obstacle.size.y <= 1.6) {
           best = Math.max(best, obstacle.size.y);
         }
@@ -1443,9 +1521,7 @@ export class GameApp {
       forward.normalize();
     }
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-    const world = new THREE.Vector3()
-      .addScaledVector(right, x)
-      .addScaledVector(forward, zAdjusted);
+    const world = new THREE.Vector3().addScaledVector(right, x).addScaledVector(forward, zAdjusted);
     return { x: world.x, z: world.z };
   }
 
@@ -1625,7 +1701,11 @@ export class GameApp {
           mesh.rotation.y = snap.yaw;
         }
         // Update velocity for animation
-        this.remoteLatestVel.set(id, { x: snap.velocity.x, y: snap.velocity.y, z: snap.velocity.z });
+        this.remoteLatestVel.set(id, {
+          x: snap.velocity.x,
+          y: snap.velocity.y,
+          z: snap.velocity.z,
+        });
         continue;
       }
 
@@ -1694,14 +1774,14 @@ export class GameApp {
         if (typeof VRMUtils.removeUnnecessaryJoints === 'function') {
           VRMUtils.removeUnnecessaryJoints(gltf.scene);
         }
-    const vrm = gltf.userData.vrm as VRM | undefined;
-    if (!vrm) {
-      const isLocal = actorId === 'local';
-      this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
-      return;
-    }
-    vrm.humanoid.autoUpdateHumanBones = true;
-    vrm.scene.position.y = this.computeVrmGroundOffset(vrm);
+        const vrm = gltf.userData.vrm as VRM | undefined;
+        if (!vrm) {
+          const isLocal = actorId === 'local';
+          this.showCapsuleFallback(group, isLocal ? 0x6be9ff : 0xff6b6b);
+          return;
+        }
+        vrm.humanoid.autoUpdateHumanBones = true;
+        vrm.scene.position.y = this.computeVrmGroundOffset(vrm);
         vrm.scene.scale.set(1, 1, 1);
         vrm.scene.visible = true;
         vrm.scene.traverse((obj) => {
@@ -1784,8 +1864,14 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
-      const sceneAvatar = typeof (scene as any)?.player?.avatar === 'string' ? String((scene as any).player.avatar) : '';
-      const configAvatar = typeof (this.playerConfig as any).avatar === 'string' ? String((this.playerConfig as any).avatar) : '';
+      const sceneAvatar =
+        typeof (scene as any)?.player?.avatar === 'string'
+          ? String((scene as any).player.avatar)
+          : '';
+      const configAvatar =
+        typeof (this.playerConfig as any).avatar === 'string'
+          ? String((this.playerConfig as any).avatar)
+          : '';
       const playerAvatar = sceneAvatar || configAvatar;
       this.playerAvatarEnabled = playerAvatar.length > 0;
       if (this.playerAvatarEnabled) {
@@ -1798,7 +1884,9 @@ export class GameApp {
         this.showCapsuleFallback(this.localPlayer, 0x6be9ff);
       }
 
-      const crowdConfig = (scene as any)?.crowd as { enabled?: boolean; avatar?: string } | undefined;
+      const crowdConfig = (scene as any)?.crowd as
+        | { enabled?: boolean; avatar?: string }
+        | undefined;
       this.crowdEnabled = crowdConfig?.enabled === true;
       if (typeof crowdConfig?.avatar === 'string' && crowdConfig.avatar.length > 0) {
         this.crowdAvatarName = crowdConfig.avatar;
@@ -1851,7 +1939,9 @@ export class GameApp {
     this.scene.add(this.obstacleGroup);
   }
 
-  private rebuildGroundMesh(groundConfig: { width: number; depth: number; y: number; textureRepeat: number } | null) {
+  private rebuildGroundMesh(
+    groundConfig: { width: number; depth: number; y: number; textureRepeat: number } | null,
+  ) {
     if (this.groundMesh) {
       this.scene.remove(this.groundMesh);
       this.groundMesh.geometry.dispose();
@@ -1978,7 +2068,8 @@ export class GameApp {
     const applyActionSettings = (name: string, action: THREE.AnimationAction) => {
       action.enabled = true;
       action.clampWhenFinished = true;
-      action.loop = name === 'jump' ||
+      action.loop =
+        name === 'jump' ||
         name === 'jump_up' ||
         name === 'run_jump' ||
         name === 'land' ||
@@ -1988,13 +2079,16 @@ export class GameApp {
         name === 'attack' ||
         name === 'hit' ||
         name === 'knockdown'
-        ? THREE.LoopOnce
-        : THREE.LoopRepeat;
+          ? THREE.LoopOnce
+          : THREE.LoopRepeat;
       action.play();
       action.weight = name === 'idle' ? 1 : 0;
     };
     for (const [name, clipData] of Object.entries(this.jsonClips)) {
-      const clip = buildAnimationClipFromData(name, clipData, { prefix: `${actorId}_`, rootKey: 'hips' });
+      const clip = buildAnimationClipFromData(name, clipData, {
+        prefix: `${actorId}_`,
+        rootKey: 'hips',
+      });
       const action = mixer.clipAction(clip);
       applyActionSettings(name, action);
       actions[name] = action;
@@ -2040,14 +2134,17 @@ export class GameApp {
     });
   }
 
-  private updateActorAnimation(actor: {
-    vrm: VRM;
-    mixer: THREE.AnimationMixer;
-    actions: Record<string, THREE.AnimationAction>;
-    base: 'idle' | 'walk' | 'run';
-    id: string;
-    velocityOverride?: { x: number; y: number; z: number };
-  }, delta: number) {
+  private updateActorAnimation(
+    actor: {
+      vrm: VRM;
+      mixer: THREE.AnimationMixer;
+      actions: Record<string, THREE.AnimationAction>;
+      base: 'idle' | 'walk' | 'run';
+      id: string;
+      velocityOverride?: { x: number; y: number; z: number };
+    },
+    delta: number,
+  ) {
     const actorId = actor.id;
     const local = actorId === 'local';
     let speed = 0;
@@ -2086,20 +2183,26 @@ export class GameApp {
     const hit = actions.hit ?? idle;
     if (!idle || !walk || !run) return;
 
-    const state =
-      this.animStates.get(actorId) ??
-      { mode: 'idle', timer: 0, lastGrounded: true, lookYaw: 0, lookPitch: 0, lastJumpMode: 'jump' };
+    const state = this.animStates.get(actorId) ?? {
+      mode: 'idle',
+      timer: 0,
+      lastGrounded: true,
+      lookYaw: 0,
+      lookPitch: 0,
+      lastJumpMode: 'jump',
+    };
     const prevMode = state.mode;
 
-    const grounded = actorId === 'local'
-      ? this.localPlayer.position.y <=
-        this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z) + 0.001
-      : (() => {
-          const pos = this.remoteLatest.get(actorId);
-          if (!pos) return true;
-          const floor = this.sampleGroundHeight(pos.x, pos.z);
-          return pos.y <= floor + 0.001;
-        })();
+    const grounded =
+      actorId === 'local'
+        ? this.localPlayer.position.y <=
+          this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z) + 0.001
+        : (() => {
+            const pos = this.remoteLatest.get(actorId);
+            if (!pos) return true;
+            const floor = this.sampleGroundHeight(pos.x, pos.z);
+            return pos.y <= floor + 0.001;
+          })();
 
     if (!state.lastGrounded && grounded) {
       state.mode = 'land';
@@ -2138,7 +2241,8 @@ export class GameApp {
       state.mode = remote.state;
       state.timer = 0;
     } else if (!grounded) {
-      state.mode = vy > 0.5 ? (local ? this.localJumpMode : (state.lastJumpMode ?? 'jump')) : 'fall';
+      state.mode =
+        vy > 0.5 ? (local ? this.localJumpMode : (state.lastJumpMode ?? 'jump')) : 'fall';
     } else if (state.timer === 0) {
       const walkThreshold = this.playerConfig.walkThreshold ?? 0.15;
       const runThreshold = this.playerConfig.runThreshold ?? MOVE_SPEED * 0.65;
@@ -2337,8 +2441,8 @@ export class GameApp {
         ? { yaw: -this.localLookYaw, pitch: -this.localLookPitch }
         : this.remoteLatestLook.get(actorId)
           ? {
-              yaw: -(this.remoteLatestLook.get(actorId)!.yaw),
-              pitch: -(this.remoteLatestLook.get(actorId)!.pitch),
+              yaw: -this.remoteLatestLook.get(actorId)!.yaw,
+              pitch: -this.remoteLatestLook.get(actorId)!.pitch,
             }
           : { yaw: 0, pitch: 0 };
       const smooth = 1 - Math.exp(-delta * 8);
@@ -2425,7 +2529,9 @@ export class GameApp {
     if (lowerLeg.parent) {
       const kneeAxis = new THREE.Vector3(1, 0, 0); // X-axis for knee bend
       lowerLeg.parent.updateMatrixWorld(true);
-      const localKneeAxis = kneeAxis.clone().applyQuaternion(lowerLeg.parent.quaternion.clone().invert());
+      const localKneeAxis = kneeAxis
+        .clone()
+        .applyQuaternion(lowerLeg.parent.quaternion.clone().invert());
       const kneeBendQuat = new THREE.Quaternion().setFromAxisAngle(localKneeAxis, -upperAngle);
       lowerLeg.quaternion.premultiply(kneeBendQuat);
     }
@@ -2688,22 +2794,21 @@ export class GameApp {
   ) {
     const vrm = actor.vrm;
     const id = actor.id;
-    const state =
-      this.procedural.get(id) ??
-      {
-        bob: 0,
-        landKick: 0,
-        lookYaw: 0,
-        lookPitch: 0,
-        springYaw: 0,
-        springPitch: 0,
-        prevVel: new THREE.Vector3(),
-        prevGrounded: true,
-      };
+    const state = this.procedural.get(id) ?? {
+      bob: 0,
+      landKick: 0,
+      lookYaw: 0,
+      lookPitch: 0,
+      springYaw: 0,
+      springPitch: 0,
+      prevVel: new THREE.Vector3(),
+      prevGrounded: true,
+    };
 
-    const grounded = id === 'local'
-      ? this.localPlayer.position.y <= GROUND_Y + 0.001
-      : (this.remoteLatest.get(id)?.y ?? GROUND_Y) <= GROUND_Y + 0.001;
+    const grounded =
+      id === 'local'
+        ? this.localPlayer.position.y <= GROUND_Y + 0.001
+        : (this.remoteLatest.get(id)?.y ?? GROUND_Y) <= GROUND_Y + 0.001;
     if (state.prevGrounded === false && grounded === true) {
       state.landKick = Math.min(1, state.landKick + 0.35);
     }
@@ -2719,7 +2824,10 @@ export class GameApp {
             this.remoteLatestVel.get(id)?.z ?? 0,
           );
     const speed = Math.hypot(velocity.x, velocity.z);
-    const accel = velocity.clone().sub(state.prevVel).multiplyScalar(1 / Math.max(delta, 0.001));
+    const accel = velocity
+      .clone()
+      .sub(state.prevVel)
+      .multiplyScalar(1 / Math.max(delta, 0.001));
     state.prevVel.copy(velocity);
 
     state.bob += delta * (1.2 + Math.min(speed, 6) * 0.2);
@@ -2839,16 +2947,19 @@ export class GameApp {
       rightUpperLeg.rotation.x = (base.rightUpperLeg?.x ?? rightUpperLeg.rotation.x) - swing * 0.6;
     }
     if (leftLowerLeg) {
-      leftLowerLeg.rotation.x = (base.leftLowerLeg?.x ?? leftLowerLeg.rotation.x) + Math.max(0, -swing) * 0.8;
+      leftLowerLeg.rotation.x =
+        (base.leftLowerLeg?.x ?? leftLowerLeg.rotation.x) + Math.max(0, -swing) * 0.8;
     }
     if (rightLowerLeg) {
-      rightLowerLeg.rotation.x = (base.rightLowerLeg?.x ?? rightLowerLeg.rotation.x) + Math.max(0, swing) * 0.8;
+      rightLowerLeg.rotation.x =
+        (base.rightLowerLeg?.x ?? rightLowerLeg.rotation.x) + Math.max(0, swing) * 0.8;
     }
     if (leftFoot) {
       leftFoot.rotation.x = (base.leftFoot?.x ?? leftFoot.rotation.x) + lift * 0.2;
     }
     if (rightFoot) {
-      rightFoot.rotation.x = (base.rightFoot?.x ?? rightFoot.rotation.x) + (1 - lift) * 0.2 * stride;
+      rightFoot.rotation.x =
+        (base.rightFoot?.x ?? rightFoot.rotation.x) + (1 - lift) * 0.2 * stride;
     }
     const armDrop = THREE.MathUtils.lerp(0.6, 0.3, stride);
     const armOut = THREE.MathUtils.lerp(0.38, 0.45, stride);
@@ -2856,12 +2967,14 @@ export class GameApp {
     const rightBias = THREE.MathUtils.lerp(0.08, 0.04, stride);
     if (leftUpperArm) {
       leftUpperArm.rotation.x = (base.leftUpperArm?.x ?? leftUpperArm.rotation.x) - swing * 0.6;
-      leftUpperArm.rotation.y = (base.leftUpperArm?.y ?? leftUpperArm.rotation.y) - armOut - leftBias;
+      leftUpperArm.rotation.y =
+        (base.leftUpperArm?.y ?? leftUpperArm.rotation.y) - armOut - leftBias;
       leftUpperArm.rotation.z = (base.leftUpperArm?.z ?? leftUpperArm.rotation.z) + armDrop;
     }
     if (rightUpperArm) {
       rightUpperArm.rotation.x = (base.rightUpperArm?.x ?? rightUpperArm.rotation.x) + swing * 0.6;
-      rightUpperArm.rotation.y = (base.rightUpperArm?.y ?? rightUpperArm.rotation.y) + armOut + rightBias;
+      rightUpperArm.rotation.y =
+        (base.rightUpperArm?.y ?? rightUpperArm.rotation.y) + armOut + rightBias;
       rightUpperArm.rotation.z = (base.rightUpperArm?.z ?? rightUpperArm.rotation.z) - armDrop;
     }
     if (leftLowerArm) {

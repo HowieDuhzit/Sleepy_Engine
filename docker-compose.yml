@@ -28,7 +28,7 @@ services:
       - game-data:/app/data
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
+      test: ['CMD', 'curl', '-f', 'http://localhost/']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -36,7 +36,7 @@ services:
 
     labels:
       # Coolify labels for service management
-      coolify.managed: "true"
+      coolify.managed: 'true'
 
   db:
     image: postgres:16-alpine

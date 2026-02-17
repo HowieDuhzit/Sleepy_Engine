@@ -27,4 +27,3 @@ export function EditorView({ gameId, onBackToMenu }: EditorViewProps) {
     }),
   );
 }
-

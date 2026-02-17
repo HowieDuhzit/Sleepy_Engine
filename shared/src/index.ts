@@ -94,11 +94,7 @@ export const CROWD_HIT_KNOCKBACK = 2.8;
 
 export const OBSTACLES: Obstacle[] = [];
 
-export function resolveCircleAabb(
-  position: Vec3,
-  radius: number,
-  obstacle: Obstacle,
-): Vec3 {
+export function resolveCircleAabb(position: Vec3, radius: number, obstacle: Obstacle): Vec3 {
   if (position.y >= obstacle.position.y + obstacle.size.y - STEP_HEIGHT) {
     return position;
   }

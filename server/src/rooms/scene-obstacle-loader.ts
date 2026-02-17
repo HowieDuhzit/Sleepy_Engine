@@ -71,7 +71,9 @@ export const loadSceneConfig = async (options?: { gameId?: string; sceneName?: s
     const raw = await fs.readFile(scenesPath, 'utf8');
     const payload = JSON.parse(raw) as { scenes?: SceneConfig[] };
     const scene = payload.scenes?.find((entry) => entry.name === sceneName) ?? payload.scenes?.[0];
-    const obstacles = Array.isArray(scene?.obstacles) ? scene.obstacles.map((obs, index) => toObstacle(obs, index)) : [];
+    const obstacles = Array.isArray(scene?.obstacles)
+      ? scene.obstacles.map((obs, index) => toObstacle(obs, index))
+      : [];
     const crowdEnabled = scene?.crowd?.enabled === true;
     return { obstacles, crowdEnabled };
   } catch {

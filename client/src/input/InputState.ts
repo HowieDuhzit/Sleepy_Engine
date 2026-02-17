@@ -31,7 +31,13 @@ export class InputState {
   private padFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
   private touchVector = { x: 0, z: 0 };
   private touchLook = { x: 0, y: 0 };
-  private touchFlags = { sprint: false, attack: false, interact: false, jump: false, crouch: false };
+  private touchFlags = {
+    sprint: false,
+    attack: false,
+    interact: false,
+    jump: false,
+    crouch: false,
+  };
   private touchActive = false;
   private padSelectPressed = false;
   private padSelectJustPressed = false;
@@ -165,9 +171,18 @@ export class InputState {
     return (event: KeyboardEvent) => {
       this.lastKey = `${event.type}:${event.code}`;
       if (
-        ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space', 'KeyE', 'KeyF', 'KeyC', 'ControlLeft'].includes(
-          event.code,
-        )
+        [
+          'KeyW',
+          'KeyA',
+          'KeyS',
+          'KeyD',
+          'ShiftLeft',
+          'Space',
+          'KeyE',
+          'KeyF',
+          'KeyC',
+          'ControlLeft',
+        ].includes(event.code)
       ) {
         event.preventDefault();
       }

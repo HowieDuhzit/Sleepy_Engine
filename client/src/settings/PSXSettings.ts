@@ -5,70 +5,70 @@
 
 export interface PSXSettingsConfig {
   // Master toggle
-  enabled: boolean
+  enabled: boolean;
 
   // Console preset
-  consolePreset: 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern'
+  consolePreset: 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern';
 
   // Resolution
-  resolutionPreset: 'ps1' | 'ps1-high' | 'native'
-  customWidth?: number
-  customHeight?: number
+  resolutionPreset: 'ps1' | 'ps1-high' | 'native';
+  customWidth?: number;
+  customHeight?: number;
 
   // Rendering
-  jitterIntensity: number
-  affineMapping: boolean
-  pixelated: boolean
-  antiAliasing: boolean
-  textureFiltering: 'nearest' | 'bilinear' | 'trilinear'
+  jitterIntensity: number;
+  affineMapping: boolean;
+  pixelated: boolean;
+  antiAliasing: boolean;
+  textureFiltering: 'nearest' | 'bilinear' | 'trilinear';
 
   // Post-processing
-  blur: boolean
-  blurStrength: number
-  colorQuantization: boolean
-  colorBits: number
-  dithering: boolean
-  ditherStrength: number
-  crtEffects: boolean
-  scanlineIntensity: number
-  curvature: number
-  vignette: number
-  brightness: number
-  chromaticAberration: boolean
-  chromaticOffset: number
+  blur: boolean;
+  blurStrength: number;
+  colorQuantization: boolean;
+  colorBits: number;
+  dithering: boolean;
+  ditherStrength: number;
+  crtEffects: boolean;
+  scanlineIntensity: number;
+  curvature: number;
+  vignette: number;
+  brightness: number;
+  chromaticAberration: boolean;
+  chromaticOffset: number;
 
   // Color/Lighting adjustments
-  contrast: number
-  saturation: number
-  gamma: number
-  exposure: number
+  contrast: number;
+  saturation: number;
+  gamma: number;
+  exposure: number;
 }
 
 export class PSXSettings {
-  private static instance: PSXSettings
-  public config: PSXSettingsConfig
+  private static instance: PSXSettings;
+  public config: PSXSettingsConfig;
 
   private constructor() {
     // Load from localStorage or use defaults
-    const saved = localStorage.getItem('psx-settings')
+    const saved = localStorage.getItem('psx-settings');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved)
+        const parsed = JSON.parse(saved);
         // Merge with defaults to ensure all properties exist (for backwards compatibility)
-        this.config = { ...PSXSettings.getDefaultConfig(), ...parsed }
+        this.config = { ...PSXSettings.getDefaultConfig(), ...parsed };
       } catch {
-        this.config = PSXSettings.getDefaultConfig()
+        this.config = PSXSettings.getDefaultConfig();
       }
     } else {
-      this.config = PSXSettings.getDefaultConfig()
+      this.config = PSXSettings.getDefaultConfig();
     }
   }
 
   public static getInstance(): PSXSettings {
     if (!PSXSettings.instance) {
-      PSXSettings.instance = new PSXSettings()
+      PSXSettings.instance = new PSXSettings();
     }
-    return PSXSettings.instance
+    return PSXSettings.instance;
   }
 
   public static getDefaultConfig(): PSXSettingsConfig {
@@ -98,7 +98,7 @@ export class PSXSettings {
       saturation: 1.0,
       gamma: 1.0,
       exposure: 1.0,
-    }
+    };
   }
 
   public static getPreset(preset: 'authentic' | 'lite' | 'modern'): Partial<PSXSettingsConfig> {
@@ -125,7 +125,7 @@ export class PSXSettings {
           saturation: 1.0,
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
 
       case 'lite':
         return {
@@ -145,7 +145,7 @@ export class PSXSettings {
           saturation: 1.0,
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
 
       case 'modern':
         return {
@@ -163,11 +163,13 @@ export class PSXSettings {
           saturation: 1.0,
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
     }
   }
 
-  public static getConsolePreset(console: 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern'): Partial<PSXSettingsConfig> {
+  public static getConsolePreset(
+    console: 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern',
+  ): Partial<PSXSettingsConfig> {
     switch (console) {
       case 'ps1':
         return {
@@ -196,7 +198,7 @@ export class PSXSettings {
           saturation: 1.0,
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
 
       case 'n64':
         return {
@@ -225,7 +227,7 @@ export class PSXSettings {
           saturation: 0.95, // Slightly desaturated N64 look
           gamma: 1.05, // Slightly brighter gamma
           exposure: 1.0,
-        }
+        };
 
       case 'dreamcast':
         return {
@@ -254,7 +256,7 @@ export class PSXSettings {
           saturation: 1.05, // Slightly more saturated
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
 
       case 'xbox':
         return {
@@ -283,7 +285,7 @@ export class PSXSettings {
           saturation: 1.1, // More vibrant
           gamma: 1.0,
           exposure: 1.05,
-        }
+        };
 
       case 'modern':
         return {
@@ -312,55 +314,55 @@ export class PSXSettings {
           saturation: 1.0,
           gamma: 1.0,
           exposure: 1.0,
-        }
+        };
     }
   }
 
   public applyConsolePreset(console: 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern'): void {
-    const presetConfig = PSXSettings.getConsolePreset(console)
-    this.config = { ...this.config, ...presetConfig }
-    this.save()
+    const presetConfig = PSXSettings.getConsolePreset(console);
+    this.config = { ...this.config, ...presetConfig };
+    this.save();
   }
 
   public getResolution(): { width: number; height: number } {
     if (this.config.customWidth && this.config.customHeight) {
-      return { width: this.config.customWidth, height: this.config.customHeight }
+      return { width: this.config.customWidth, height: this.config.customHeight };
     }
 
-    const aspect = window.innerWidth / window.innerHeight
+    const aspect = window.innerWidth / window.innerHeight;
 
     switch (this.config.resolutionPreset) {
       case 'ps1':
-        return { width: Math.floor(240 * aspect), height: 240 }
+        return { width: Math.floor(240 * aspect), height: 240 };
 
       case 'ps1-high':
-        return { width: Math.floor(480 * aspect), height: 480 }
+        return { width: Math.floor(480 * aspect), height: 480 };
 
       case 'native':
-        return { width: window.innerWidth, height: window.innerHeight }
+        return { width: window.innerWidth, height: window.innerHeight };
     }
   }
 
   public applyPreset(preset: 'authentic' | 'lite' | 'modern'): void {
-    const presetConfig = PSXSettings.getPreset(preset)
-    this.config = { ...this.config, ...presetConfig }
-    this.save()
+    const presetConfig = PSXSettings.getPreset(preset);
+    this.config = { ...this.config, ...presetConfig };
+    this.save();
   }
 
   public update(partial: Partial<PSXSettingsConfig>): void {
-    this.config = { ...this.config, ...partial }
-    this.save()
+    this.config = { ...this.config, ...partial };
+    this.save();
   }
 
   public save(): void {
-    localStorage.setItem('psx-settings', JSON.stringify(this.config))
+    localStorage.setItem('psx-settings', JSON.stringify(this.config));
   }
 
   public reset(): void {
-    this.config = PSXSettings.getDefaultConfig()
-    this.save()
+    this.config = PSXSettings.getDefaultConfig();
+    this.save();
   }
 }
 
 // Export singleton instance
-export const psxSettings = PSXSettings.getInstance()
+export const psxSettings = PSXSettings.getInstance();

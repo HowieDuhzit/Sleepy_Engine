@@ -10,7 +10,11 @@ type LegacyAppHostProps<T extends LegacyApp> = {
 
 const h = React.createElement;
 
-export function LegacyAppHost<T extends LegacyApp>({ createApp, onAppReady, onAppDispose }: LegacyAppHostProps<T>) {
+export function LegacyAppHost<T extends LegacyApp>({
+  createApp,
+  onAppReady,
+  onAppDispose,
+}: LegacyAppHostProps<T>) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<T | null>(null);
   const onAppReadyRef = useRef<typeof onAppReady>(onAppReady);

@@ -76,7 +76,9 @@ export const listGameAnimations = async (gameId: string) => {
 };
 
 export const getGameAnimation = async (gameId: string, name: string) => {
-  const res = await fetch(`/api/games/${gameId}/animations/${encodeURIComponent(name)}`, { cache: 'no-store' });
+  const res = await fetch(`/api/games/${gameId}/animations/${encodeURIComponent(name)}`, {
+    cache: 'no-store',
+  });
   return readJson<unknown>(res);
 };
 

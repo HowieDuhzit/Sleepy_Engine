@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { psxSettings } from '../settings/PSXSettings';
-import { UiDivider, UiField, UiRangeRow, UiSectionTitle, UiSelect, UiSwitchRow } from './ui-primitives';
+import {
+  UiDivider,
+  UiField,
+  UiRangeRow,
+  UiSectionTitle,
+  UiSelect,
+  UiSwitchRow,
+} from './ui-primitives';
 
 const h = React.createElement;
 
@@ -25,14 +32,15 @@ export function ReactPSXSettingsPanel() {
   const sync = () => setSettings({ ...psxSettings.config });
 
   const sliders = useMemo(
-    () => [
-      { key: 'brightness', label: 'Brightness', min: 0.5, max: 2.0, step: 0.1 },
-      { key: 'contrast', label: 'Contrast', min: 0.5, max: 2.0, step: 0.1 },
-      { key: 'saturation', label: 'Saturation', min: 0.0, max: 2.0, step: 0.1 },
-      { key: 'gamma', label: 'Gamma', min: 0.5, max: 2.0, step: 0.1 },
-      { key: 'exposure', label: 'Exposure', min: 0.5, max: 2.0, step: 0.1 },
-    ] as const,
-    []
+    () =>
+      [
+        { key: 'brightness', label: 'Brightness', min: 0.5, max: 2.0, step: 0.1 },
+        { key: 'contrast', label: 'Contrast', min: 0.5, max: 2.0, step: 0.1 },
+        { key: 'saturation', label: 'Saturation', min: 0.0, max: 2.0, step: 0.1 },
+        { key: 'gamma', label: 'Gamma', min: 0.5, max: 2.0, step: 0.1 },
+        { key: 'exposure', label: 'Exposure', min: 0.5, max: 2.0, step: 0.1 },
+      ] as const,
+    [],
   );
 
   return h(
@@ -70,9 +78,9 @@ export function ReactPSXSettingsPanel() {
           h('option', { value: 'n64' }, 'Nintendo 64 (1996)'),
           h('option', { value: 'dreamcast' }, 'Sega Dreamcast (1998)'),
           h('option', { value: 'xbox' }, 'Xbox (2001)'),
-          h('option', { value: 'modern' }, 'Modern (No Effects)')
+          h('option', { value: 'modern' }, 'Modern (No Effects)'),
         ),
-      })
+      }),
     ),
 
     h(
@@ -95,9 +103,9 @@ export function ReactPSXSettingsPanel() {
           },
           h('option', { value: 'authentic' }, 'Authentic'),
           h('option', { value: 'lite' }, 'Enhanced'),
-          h('option', { value: 'modern' }, 'Disabled')
+          h('option', { value: 'modern' }, 'Disabled'),
         ),
-      })
+      }),
     ),
 
     h(UiDivider, { className: 'psx-divider' }),
@@ -121,8 +129,8 @@ export function ReactPSXSettingsPanel() {
             applyPatch({ [item.key]: checked } as Partial<SettingsState>);
             sync();
           },
-        })
-      )
+        }),
+      ),
     ),
 
     h(UiDivider, { className: 'psx-divider' }),
@@ -147,7 +155,7 @@ export function ReactPSXSettingsPanel() {
             sync();
           },
         });
-      })
+      }),
     ),
 
     h(
@@ -170,8 +178,8 @@ export function ReactPSXSettingsPanel() {
         ' Clean VGA output, hardware AA',
         h('br'),
         h('strong', null, 'Xbox:'),
-        ' HD-era graphics, advanced effects'
-      )
-    )
+        ' HD-era graphics, advanced effects',
+      ),
+    ),
   );
 }

@@ -1,32 +1,34 @@
-import * as THREE from 'three'
-import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
+import * as THREE from 'three';
+import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 
 export interface CRTPassParameters {
-  scanlineIntensity?: number
-  curvature?: number
-  vignette?: number
-  brightness?: number
+  scanlineIntensity?: number;
+  curvature?: number;
+  vignette?: number;
+  brightness?: number;
 }
 
 export class CRTPass extends Pass {
-  private fsQuad: FullScreenQuad
+  private fsQuad: FullScreenQuad;
   private uniforms: {
-    tDiffuse: { value: THREE.Texture | null }
-    scanlineIntensity: { value: number }
-    curvature: { value: number }
-    vignette: { value: number }
-    brightness: { value: number }
-    resolution: { value: THREE.Vector2 }
-  }
+    tDiffuse: { value: THREE.Texture | null };
+    scanlineIntensity: { value: number };
+    curvature: { value: number };
+    vignette: { value: number };
+    brightness: { value: number };
+    resolution: { value: THREE.Vector2 };
+  };
 
   constructor(params: CRTPassParameters = {}) {
-    super()
+    super();
 
     // Create shader material
     const shader = {
       uniforms: {
         tDiffuse: { value: null },
-        scanlineIntensity: { value: params.scanlineIntensity !== undefined ? params.scanlineIntensity : 0.3 },
+        scanlineIntensity: {
+          value: params.scanlineIntensity !== undefined ? params.scanlineIntensity : 0.3,
+        },
         curvature: { value: params.curvature !== undefined ? params.curvature : 0.1 },
         vignette: { value: params.vignette !== undefined ? params.vignette : 0.4 },
         brightness: { value: params.brightness !== undefined ? params.brightness : 1.1 },
@@ -95,51 +97,51 @@ export class CRTPass extends Pass {
           gl_FragColor = color;
         }
       `,
-    }
+    };
 
-    const material = new THREE.ShaderMaterial(shader)
-    this.uniforms = material.uniforms as typeof this.uniforms
-    this.fsQuad = new FullScreenQuad(material)
+    const material = new THREE.ShaderMaterial(shader);
+    this.uniforms = material.uniforms as typeof this.uniforms;
+    this.fsQuad = new FullScreenQuad(material);
   }
 
   render(
     renderer: THREE.WebGLRenderer,
     writeBuffer: THREE.WebGLRenderTarget,
-    readBuffer: THREE.WebGLRenderTarget
+    readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.uniforms.tDiffuse.value = readBuffer.texture
+    this.uniforms.tDiffuse.value = readBuffer.texture;
 
     if (this.renderToScreen) {
-      renderer.setRenderTarget(null)
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
     } else {
-      renderer.setRenderTarget(writeBuffer)
-      if (this.clear) renderer.clear()
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+      this.fsQuad.render(renderer);
     }
   }
 
   setScanlineIntensity(intensity: number): void {
-    this.uniforms.scanlineIntensity.value = intensity
+    this.uniforms.scanlineIntensity.value = intensity;
   }
 
   setCurvature(curvature: number): void {
-    this.uniforms.curvature.value = curvature
+    this.uniforms.curvature.value = curvature;
   }
 
   setVignette(vignette: number): void {
-    this.uniforms.vignette.value = vignette
+    this.uniforms.vignette.value = vignette;
   }
 
   setBrightness(brightness: number): void {
-    this.uniforms.brightness.value = brightness
+    this.uniforms.brightness.value = brightness;
   }
 
   setSize(width: number, height: number): void {
-    this.uniforms.resolution.value.set(width, height)
+    this.uniforms.resolution.value.set(width, height);
   }
 
   dispose(): void {
-    this.fsQuad.dispose()
+    this.fsQuad.dispose();
   }
 }

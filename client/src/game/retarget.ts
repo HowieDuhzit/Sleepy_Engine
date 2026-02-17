@@ -87,9 +87,7 @@ export function retargetMixamoClip(
   const vrmHips = humanoid.getNormalizedBoneNode('hips');
   const v = new THREE.Vector3();
   const hipsPositionScale =
-    mixamoHips && vrmHips
-      ? vrmHips.getWorldPosition(v).y / mixamoHips.getWorldPosition(v).y
-      : 1;
+    mixamoHips && vrmHips ? vrmHips.getWorldPosition(v).y / mixamoHips.getWorldPosition(v).y : 1;
 
   const normalizedHumanoid = (humanoid as any)._normalizedHumanBones;
   const boneRotations: Record<string, any> = normalizedHumanoid?._boneRotations ?? {};
@@ -140,14 +138,19 @@ export function retargetMixamoClip(
         const invParentWorldRotation = quatB.copy(parentWorldRotation).invert();
         const boneRotation = resolveQuat(boneRotations[vrmBone]);
 
-        quatA.multiply(parentWorldRotation).premultiply(invParentWorldRotation).multiply(boneRotation);
+        quatA
+          .multiply(parentWorldRotation)
+          .premultiply(invParentWorldRotation)
+          .multiply(boneRotation);
         quatA.toArray(newTrackValues, i);
       }
 
       const values = Array.from(newTrackValues).map((v2, i) =>
         vrmMetaVersion === '0' && i % 2 === 0 ? -v2 : v2,
       );
-      tracks.push(new THREE.QuaternionKeyframeTrack(`${vrmRawNodeName}.${property}`, times, values));
+      tracks.push(
+        new THREE.QuaternionKeyframeTrack(`${vrmRawNodeName}.${property}`, times, values),
+      );
     } else if (track instanceof THREE.VectorKeyframeTrack) {
       if (!includePosition) continue;
       const values = Array.from(track.values).map(

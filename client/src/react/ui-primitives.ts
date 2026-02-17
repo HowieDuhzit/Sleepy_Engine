@@ -30,15 +30,22 @@ type UiButtonProps = BaseProps & {
   type?: 'button' | 'submit' | 'reset';
 };
 
-export function UiButton({ className, children, variant = 'default', disabled, onClick, type = 'button' }: UiButtonProps) {
+export function UiButton({
+  className,
+  children,
+  variant = 'default',
+  disabled,
+  onClick,
+  type = 'button',
+}: UiButtonProps) {
   const variantClass =
     variant === 'primary'
       ? 'ui-button-primary'
       : variant === 'ghost'
-      ? 'ui-button-ghost'
-      : variant === 'outline'
-      ? 'ui-button-outline'
-      : '';
+        ? 'ui-button-ghost'
+        : variant === 'outline'
+          ? 'ui-button-outline'
+          : '';
   return h(
     'button',
     {
@@ -47,7 +54,7 @@ export function UiButton({ className, children, variant = 'default', disabled, o
       disabled,
       onClick,
     },
-    children
+    children,
   );
 }
 
@@ -80,7 +87,7 @@ export function UiField({ label, className, control }: UiFieldProps) {
     'label',
     { className: cx('menu-field shad-field', className) },
     h('span', { className: 'shad-field-label' }, label),
-    control
+    control,
   );
 }
 
@@ -100,7 +107,7 @@ export function UiSwitchRow({ label, checked, onChange, className }: UiSwitchRow
       checked,
       onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.checked),
     }),
-    h('span', null, label)
+    h('span', null, label),
   );
 }
 
@@ -115,7 +122,16 @@ type UiRangeRowProps = {
   className?: string;
 };
 
-export function UiRangeRow({ label, valueLabel, min, max, step, value, onInput, className }: UiRangeRowProps) {
+export function UiRangeRow({
+  label,
+  valueLabel,
+  min,
+  max,
+  step,
+  value,
+  onInput,
+  className,
+}: UiRangeRowProps) {
   return h(
     'label',
     { className: cx('settings-menu-field shad-range-row', className) },
@@ -126,7 +142,8 @@ export function UiRangeRow({ label, valueLabel, min, max, step, value, onInput, 
       max,
       step,
       value,
-      onInput: (event: React.FormEvent<HTMLInputElement>) => onInput(parseFloat(event.currentTarget.value)),
-    })
+      onInput: (event: React.FormEvent<HTMLInputElement>) =>
+        onInput(parseFloat(event.currentTarget.value)),
+    }),
   );
 }

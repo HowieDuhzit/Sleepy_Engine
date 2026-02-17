@@ -4,9 +4,7 @@ const redisUrl = process.env.REDIS_URL;
 
 export const redisEnabled = Boolean(redisUrl);
 
-export const redisClient = redisUrl
-  ? createClient({ url: redisUrl })
-  : null;
+export const redisClient = redisUrl ? createClient({ url: redisUrl }) : null;
 
 if (redisClient) {
   redisClient.on('error', (err) => {

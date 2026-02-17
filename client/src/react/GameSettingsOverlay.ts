@@ -62,7 +62,7 @@ export function GameSettingsOverlay({ open, camera, onClose, onCameraChange }: P
         checked: camera.firstPersonMode,
         onChange: (value) => onCameraChange({ firstPersonMode: value }),
       }),
-      h(UiButton, { className: 'menu-back-button', onClick: onClose }, 'Close')
-    )
+      h(UiButton, { className: 'menu-back-button', onClick: onClose }, 'Close'),
+    ),
   );
 }

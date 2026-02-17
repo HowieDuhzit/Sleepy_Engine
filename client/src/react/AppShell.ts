@@ -34,6 +34,6 @@ export function AppShell() {
           gameId: state.gameId,
           onBackToMenu: () => setState({ mode: 'menu' }),
         })
-      : null
+      : null,
   );
 }

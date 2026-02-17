@@ -33,9 +33,9 @@ export function SplashOverlay() {
           src: 'https://sleepystudio.xyz/SleepyStudioBlackShadowed.png',
           alt: 'Sleepy Studio',
         }),
-        h('div', { className: 'splash-ring' })
+        h('div', { className: 'splash-ring' }),
       ),
-      h('div', { className: 'splash-flash' })
-    )
+      h('div', { className: 'splash-flash' }),
+    ),
   );
 }

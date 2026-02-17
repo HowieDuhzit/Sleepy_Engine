@@ -25,7 +25,7 @@ export function GameView({ gameId, scene, onBackToMenu }: GameViewProps) {
 
   const createApp = useCallback(
     (container: HTMLElement) => new GameApp(container, scene, gameId, onBackToMenu),
-    [gameId, onBackToMenu, scene]
+    [gameId, onBackToMenu, scene],
   );
 
   const header = useMemo(
@@ -40,10 +40,10 @@ export function GameView({ gameId, scene, onBackToMenu }: GameViewProps) {
             variant: 'primary',
             onClick: () => setSettingsOpen((current) => !current),
           },
-          settingsOpen ? 'Close Settings' : 'Settings'
-        )
+          settingsOpen ? 'Close Settings' : 'Settings',
+        ),
       ),
-    [onBackToMenu, settingsOpen]
+    [onBackToMenu, settingsOpen],
   );
 
   return h(
@@ -70,6 +70,6 @@ export function GameView({ gameId, scene, onBackToMenu }: GameViewProps) {
       onCameraChange: (patch) => {
         appRef.current?.setUiCameraSettings(patch);
       },
-    })
+    }),
   );
 }

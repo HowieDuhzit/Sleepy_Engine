@@ -40,7 +40,9 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
   const [currentGameId, setCurrentGameId] = useState<string>('');
   const [currentStartScene, setCurrentStartScene] = useState<string>('main');
   const [activeTab, setActiveTab] = useState<MenuTab>('home');
-  const [clock, setClock] = useState<string>(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  const [clock, setClock] = useState<string>(() =>
+    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -158,7 +160,9 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
       h(
         'div',
         { className: 'nxe-subnav' },
-        ...TAB_SUBNAV[activeTab].map((item) => h('span', { key: item, className: 'nxe-subnav-item' }, item)),
+        ...TAB_SUBNAV[activeTab].map((item) =>
+          h('span', { key: item, className: 'nxe-subnav-item' }, item),
+        ),
       ),
       h(
         'section',
@@ -190,23 +194,20 @@ export function MainMenu({ onPlay, onEditor }: MainMenuProps) {
               UiSelect,
               {
                 value: currentGameId,
-                onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setCurrentGameId(event.target.value),
+                onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+                  setCurrentGameId(event.target.value),
               },
               gameOptions,
             ),
           ),
-          h(
-            UiButton,
-            { variant: 'primary', disabled, onClick: handlePlay },
-            'Play',
-          ),
-          h(
-            UiButton,
-            { disabled, onClick: handleEditor },
-            'Editor',
-          ),
+          h(UiButton, { variant: 'primary', disabled, onClick: handlePlay }, 'Play'),
+          h(UiButton, { disabled, onClick: handleEditor }, 'Editor'),
         ),
-        h(PlayerProfileCard, { gameId: currentGameId, scene: currentStartScene, gameName: selectedGameName }),
+        h(PlayerProfileCard, {
+          gameId: currentGameId,
+          scene: currentStartScene,
+          gameName: selectedGameName,
+        }),
       ),
     ),
   );

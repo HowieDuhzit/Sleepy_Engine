@@ -13,6 +13,6 @@ createRoot(container).render(
   React.createElement(
     React.StrictMode,
     null,
-    React.createElement(SolanaWalletProvider, null, React.createElement(AppShell, null))
-  )
+    React.createElement(SolanaWalletProvider, null, React.createElement(AppShell, null)),
+  ),
 );

@@ -56,7 +56,12 @@ type CardStats = {
   friendsOnline: number;
 };
 
-function drawCardUi(tab: MenuTab, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, stats: CardStats) {
+function drawCardUi(
+  tab: MenuTab,
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  stats: CardStats,
+) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = 'rgba(12,20,26,0.82)';
@@ -134,14 +139,28 @@ export function MainMenuScene3D({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<MenuTab>(activeTab);
   const gameIdRef = useRef(gameId);
-  const statsRef = useRef<CardStats>({ gameName, gameId, startScene, gamesCount, notificationsCount, friendsOnline });
+  const statsRef = useRef<CardStats>({
+    gameName,
+    gameId,
+    startScene,
+    gamesCount,
+    notificationsCount,
+    friendsOnline,
+  });
   const onSelectTabRef = useRef(onSelectTab);
   const onPlayRef = useRef(onPlay);
   const onEditorRef = useRef(onEditor);
 
   activeTabRef.current = activeTab;
   gameIdRef.current = gameId;
-  statsRef.current = { gameName, gameId, startScene, gamesCount, notificationsCount, friendsOnline };
+  statsRef.current = {
+    gameName,
+    gameId,
+    startScene,
+    gamesCount,
+    notificationsCount,
+    friendsOnline,
+  };
   onSelectTabRef.current = onSelectTab;
   onPlayRef.current = onPlay;
   onEditorRef.current = onEditor;
@@ -159,7 +178,12 @@ export function MainMenuScene3D({
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0x0b1019, 10, 24);
 
-    const camera = new THREE.PerspectiveCamera(42, host.clientWidth / Math.max(host.clientHeight, 1), 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(
+      42,
+      host.clientWidth / Math.max(host.clientHeight, 1),
+      0.1,
+      100,
+    );
     camera.position.set(0.2, 1.72, 7.6);
     camera.lookAt(0.25, 0.7, 0);
 
@@ -211,17 +235,30 @@ export function MainMenuScene3D({
 
       const frontMaterial = new THREE.MeshBasicMaterial({ map: texture, color: 0xffffff });
       const backMaterial = new THREE.MeshBasicMaterial({ map: texture, color: 0xffffff });
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(2.9, 1.6, 0.14),
-        [
-          new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.85), roughness: 0.36, metalness: 0.08 }),
-          new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.95), roughness: 0.34, metalness: 0.08 }),
-          new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(1.04), roughness: 0.33, metalness: 0.1 }),
-          new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(0.73), roughness: 0.4, metalness: 0.08 }),
-          frontMaterial,
-          backMaterial,
-        ],
-      );
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.6, 0.14), [
+        new THREE.MeshStandardMaterial({
+          color: color.clone().multiplyScalar(0.85),
+          roughness: 0.36,
+          metalness: 0.08,
+        }),
+        new THREE.MeshStandardMaterial({
+          color: color.clone().multiplyScalar(0.95),
+          roughness: 0.34,
+          metalness: 0.08,
+        }),
+        new THREE.MeshStandardMaterial({
+          color: color.clone().multiplyScalar(1.04),
+          roughness: 0.33,
+          metalness: 0.1,
+        }),
+        new THREE.MeshStandardMaterial({
+          color: color.clone().multiplyScalar(0.73),
+          roughness: 0.4,
+          metalness: 0.08,
+        }),
+        frontMaterial,
+        backMaterial,
+      ]);
       const glow = new THREE.Mesh(
         new THREE.PlaneGeometry(2.8, 1.52),
         new THREE.MeshBasicMaterial({
@@ -247,8 +284,16 @@ export function MainMenuScene3D({
     fallbackAvatar.position.set(-3.05, -0.25, 0.45);
     scene.add(fallbackAvatar);
 
-    const skin = new THREE.MeshStandardMaterial({ color: 0xd6ab86, roughness: 0.7, metalness: 0.05 });
-    const suit = new THREE.MeshStandardMaterial({ color: 0x28354d, roughness: 0.62, metalness: 0.1 });
+    const skin = new THREE.MeshStandardMaterial({
+      color: 0xd6ab86,
+      roughness: 0.7,
+      metalness: 0.05,
+    });
+    const suit = new THREE.MeshStandardMaterial({
+      color: 0x28354d,
+      roughness: 0.62,
+      metalness: 0.1,
+    });
 
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 28, 28), skin);
     head.position.y = 1.63;

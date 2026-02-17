@@ -74,7 +74,10 @@ class NavGrid {
     for (const obstacle of obstacles) {
       const halfX = obstacle.size.x / 2 + CROWD_RADIUS;
       const halfZ = obstacle.size.z / 2 + CROWD_RADIUS;
-      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+      if (
+        Math.abs(x - obstacle.position.x) <= halfX &&
+        Math.abs(z - obstacle.position.z) <= halfZ
+      ) {
         return true;
       }
     }
@@ -200,7 +203,10 @@ export class RiotRoom extends Room {
     for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
-      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+      if (
+        Math.abs(x - obstacle.position.x) <= halfX &&
+        Math.abs(z - obstacle.position.z) <= halfZ
+      ) {
         height = Math.max(height, obstacle.position.y + obstacle.size.y);
       }
     }
@@ -217,9 +223,11 @@ export class RiotRoom extends Room {
   }
 
   private sanitizeInput(input: PlayerInput): PlayerInput {
-    const clampUnit = (value: number) => Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
+    const clampUnit = (value: number) =>
+      Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
     const sanitizeBool = (value: unknown) => value === true;
-    const sanitizeNumber = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
+    const sanitizeNumber = (value: number, fallback = 0) =>
+      Number.isFinite(value) ? value : fallback;
     return {
       seq: Math.max(0, Math.floor(sanitizeNumber(input.seq))),
       moveX: clampUnit(input.moveX),
@@ -339,8 +347,18 @@ export class RiotRoom extends Room {
       for (let j = i + 1; j < playersArray.length; j += 1) {
         const a = playersArray[i]!;
         const b = playersArray[j]!;
-        const posA = resolveCircleCircle({ x: a.x, y: a.y, z: a.z }, PLAYER_RADIUS, b, PLAYER_RADIUS);
-        const posB = resolveCircleCircle({ x: b.x, y: b.y, z: b.z }, PLAYER_RADIUS, a, PLAYER_RADIUS);
+        const posA = resolveCircleCircle(
+          { x: a.x, y: a.y, z: a.z },
+          PLAYER_RADIUS,
+          b,
+          PLAYER_RADIUS,
+        );
+        const posB = resolveCircleCircle(
+          { x: b.x, y: b.y, z: b.z },
+          PLAYER_RADIUS,
+          a,
+          PLAYER_RADIUS,
+        );
         a.x = posA.x;
         a.z = posA.z;
         b.x = posB.x;

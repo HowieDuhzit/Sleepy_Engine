@@ -1,20 +1,20 @@
-import * as THREE from 'three'
-import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
+import * as THREE from 'three';
+import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 
 export interface BlurPassParameters {
-  strength?: number
+  strength?: number;
 }
 
 export class BlurPass extends Pass {
-  private fsQuad: FullScreenQuad
+  private fsQuad: FullScreenQuad;
   private uniforms: {
-    tDiffuse: { value: THREE.Texture | null }
-    strength: { value: number }
-    resolution: { value: THREE.Vector2 }
-  }
+    tDiffuse: { value: THREE.Texture | null };
+    strength: { value: number };
+    resolution: { value: THREE.Vector2 };
+  };
 
   constructor(params: BlurPassParameters = {}) {
-    super()
+    super();
 
     // Create shader material
     const shader = {
@@ -56,39 +56,39 @@ export class BlurPass extends Pass {
           gl_FragColor = color;
         }
       `,
-    }
+    };
 
-    const material = new THREE.ShaderMaterial(shader)
-    this.uniforms = material.uniforms as typeof this.uniforms
-    this.fsQuad = new FullScreenQuad(material)
+    const material = new THREE.ShaderMaterial(shader);
+    this.uniforms = material.uniforms as typeof this.uniforms;
+    this.fsQuad = new FullScreenQuad(material);
   }
 
   render(
     renderer: THREE.WebGLRenderer,
     writeBuffer: THREE.WebGLRenderTarget,
-    readBuffer: THREE.WebGLRenderTarget
+    readBuffer: THREE.WebGLRenderTarget,
   ): void {
-    this.uniforms.tDiffuse.value = readBuffer.texture
+    this.uniforms.tDiffuse.value = readBuffer.texture;
 
     if (this.renderToScreen) {
-      renderer.setRenderTarget(null)
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
     } else {
-      renderer.setRenderTarget(writeBuffer)
-      if (this.clear) renderer.clear()
-      this.fsQuad.render(renderer)
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+      this.fsQuad.render(renderer);
     }
   }
 
   setStrength(strength: number): void {
-    this.uniforms.strength.value = strength
+    this.uniforms.strength.value = strength;
   }
 
   setSize(width: number, height: number): void {
-    this.uniforms.resolution.value.set(width, height)
+    this.uniforms.resolution.value.set(width, height);
   }
 
   dispose(): void {
-    this.fsQuad.dispose()
+    this.fsQuad.dispose();
   }
 }

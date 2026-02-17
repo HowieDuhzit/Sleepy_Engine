@@ -9,7 +9,8 @@ type SolanaWalletProviderProps = {
   children: React.ReactNode;
 };
 
-const endpoint = (import.meta.env.VITE_SOLANA_RPC_URL as string | undefined) ?? clusterApiUrl('mainnet-beta');
+const endpoint =
+  (import.meta.env.VITE_SOLANA_RPC_URL as string | undefined) ?? clusterApiUrl('mainnet-beta');
 
 export function SolanaWalletProvider({ children }: SolanaWalletProviderProps) {
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
