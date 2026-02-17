@@ -732,9 +732,12 @@ export class GameApp {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       const n = (Math.random() * 0.2 - 0.1) * 255;
-      data[i] = Math.min(255, Math.max(0, data[i]! + n));
-      data[i + 1] = Math.min(255, Math.max(0, data[i + 1]! + n));
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2]! + n));
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      data[i] = Math.min(255, Math.max(0, r + n));
+      data[i + 1] = Math.min(255, Math.max(0, g + n));
+      data[i + 2] = Math.min(255, Math.max(0, b + n));
     }
     ctx.putImageData(imageData, 0, 0);
     ctx.globalAlpha = 0.1;

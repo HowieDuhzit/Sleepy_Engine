@@ -125,7 +125,8 @@ class NavGrid {
     while (open.length > 0) {
       const score = (n: NavCell) => (gScore.get(this.key(n.i, n.j)) ?? Infinity) + h(n, goal);
       open.sort((a, b) => score(a) - score(b));
-      const current = open.shift()!;
+      const current = open.shift();
+      if (!current) break;
       const currentKey = this.key(current.i, current.j);
       if (currentKey === goalKey) {
         const path: Array<{ x: number; z: number }> = [];
@@ -345,8 +346,9 @@ export class RiotRoom extends Room {
     const playersArray = Array.from(this.state.players.values());
     for (let i = 0; i < playersArray.length; i += 1) {
       for (let j = i + 1; j < playersArray.length; j += 1) {
-        const a = playersArray[i]!;
-        const b = playersArray[j]!;
+        const a = playersArray[i];
+        const b = playersArray[j];
+        if (!a || !b) continue;
         const posA = resolveCircleCircle(
           { x: a.x, y: a.y, z: a.z },
           PLAYER_RADIUS,
@@ -390,7 +392,8 @@ export class RiotRoom extends Room {
         }
       }
       if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
-        const waypoint = agent.path[agent.pathIndex]!;
+        const waypoint = agent.path[agent.pathIndex];
+        if (!waypoint) continue;
         const dx = waypoint.x - agent.x;
         const dz = waypoint.z - agent.z;
         const dist = Math.hypot(dx, dz);
@@ -415,7 +418,9 @@ export class RiotRoom extends Room {
       if (agent.behavior !== 'wander') {
         const players = Array.from(this.state.players.values());
         if (players.length > 0) {
-          let target = players[0]!;
+          const firstPlayer = players[0];
+          if (!firstPlayer) continue;
+          let target = firstPlayer;
           let best = Infinity;
           for (const player of players) {
             const dx = player.x - agent.x;
@@ -451,7 +456,8 @@ export class RiotRoom extends Room {
           }
         }
       } else if (agent.path.length > 0 && agent.pathIndex < agent.path.length) {
-        const waypoint = agent.path[agent.pathIndex]!;
+        const waypoint = agent.path[agent.pathIndex];
+        if (!waypoint) continue;
         const dx = waypoint.x - agent.x;
         const dz = waypoint.z - agent.z;
         const dist = Math.max(0.001, Math.hypot(dx, dz));

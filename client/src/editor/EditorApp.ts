@@ -1380,9 +1380,12 @@ export class EditorApp {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       const n = (Math.random() * 0.2 - 0.1) * 255;
-      data[i] = Math.min(255, Math.max(0, data[i]! + n));
-      data[i + 1] = Math.min(255, Math.max(0, data[i + 1]! + n));
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2]! + n));
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      data[i] = Math.min(255, Math.max(0, r + n));
+      data[i + 1] = Math.min(255, Math.max(0, g + n));
+      data[i + 2] = Math.min(255, Math.max(0, b + n));
     }
     ctx.putImageData(imageData, 0, 0);
     ctx.globalAlpha = 0.1;
@@ -4846,7 +4849,8 @@ export class EditorApp {
     let prev: BoneFrame | null = null;
     let next: BoneFrame | null = null;
     for (let i = 0; i < this.clip.frames.length; i += 1) {
-      const frame = this.clip.frames[i]!;
+      const frame = this.clip.frames[i];
+      if (!frame) continue;
       if (frame.time < rangeStart || frame.time > rangeEnd) continue;
       if (!frame.bones[key]) continue;
       if (frame.time <= time) prev = frame;
@@ -4887,7 +4891,8 @@ export class EditorApp {
       let prevRoot: BoneFrame | null = null;
       let nextRoot: BoneFrame | null = null;
       for (let i = 0; i < this.clip.frames.length; i += 1) {
-        const frame = this.clip.frames[i]!;
+        const frame = this.clip.frames[i];
+        if (!frame) continue;
         if (frame.time < rangeStart || frame.time > rangeEnd) continue;
         if (!frame.rootPos) continue;
         if (frame.time <= time) prevRoot = frame;
@@ -4929,8 +4934,9 @@ export class EditorApp {
     if (this.clipKeyMap.size === 0) {
       this.rebuildClipKeyMap();
     }
-    const first = frames[0]!;
-    const last = frames[frames.length - 1]!;
+    const first = frames[0];
+    const last = frames[frames.length - 1];
+    if (!first || !last) return;
     let prev = first;
     let next = last;
     if (time <= first.time) {
@@ -4944,7 +4950,8 @@ export class EditorApp {
       let hi = frames.length - 1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        const frame = frames[mid]!;
+        const frame = frames[mid];
+        if (!frame) break;
         if (frame.time < time) {
           lo = mid + 1;
         } else {
@@ -4953,8 +4960,8 @@ export class EditorApp {
       }
       const nextIndex = THREE.MathUtils.clamp(lo, 0, frames.length - 1);
       const prevIndex = THREE.MathUtils.clamp(nextIndex - 1, 0, frames.length - 1);
-      prev = frames[prevIndex]!;
-      next = frames[nextIndex]!;
+      prev = frames[prevIndex] ?? prev;
+      next = frames[nextIndex] ?? next;
     }
     const span = Math.max(0.0001, next.time - prev.time);
     const t = THREE.MathUtils.clamp((time - prev.time) / span, 0, 1);
@@ -5564,7 +5571,8 @@ export class EditorApp {
     this.boneByKey.clear();
     this.restPose.clear();
     for (let i = 0; i < bones.length; i += 1) {
-      const bone = bones[i]!;
+      const bone = bones[i];
+      if (!bone) continue;
       const key = this.getBoneKey(bone);
       const name = bone.name || key;
       if (!bone.name) bone.name = name;
