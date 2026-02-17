@@ -11,6 +11,8 @@ import {
   getGamePlayer,
   getGameScenes,
   listGameAnimations,
+  type SceneObstacleRecord,
+  type SceneRecord,
 } from '../services/game-api';
 import { PSXRenderer } from '../rendering/PSXRenderer';
 import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
@@ -39,6 +41,7 @@ import {
   GROUND_Y,
   CROWD_RADIUS,
   CROWD_COUNT,
+  type Obstacle,
   resolveCircleAabb,
   resolveCircleCircle,
   type CrowdSnapshot,
@@ -48,11 +51,7 @@ import {
 export class GameApp {
   private sceneName: string;
   private gameId: string;
-  private obstacles: Array<{
-    id: string;
-    position: { x: number; y: number; z: number };
-    size: { x: number; y: number; z: number };
-  }> = [];
+  private obstacles: Obstacle[] = [];
   private obstacleGroup: THREE.Group | null = null;
   private groundMesh: THREE.Mesh | null = null;
   private playerConfig = {
@@ -310,6 +309,43 @@ export class GameApp {
     };
   }
 
+  private parseSceneObstacles(obstacles: SceneRecord['obstacles']): Obstacle[] {
+    if (!Array.isArray(obstacles)) return [];
+    return obstacles.map((obstacle, index) => this.parseSceneObstacle(obstacle, index));
+  }
+
+  private parseSceneObstacle(obstacle: SceneObstacleRecord, index: number): Obstacle {
+    if ('position' in obstacle && 'size' in obstacle) {
+      return {
+        id: obstacle.id,
+        position: {
+          x: Number(obstacle.position.x ?? 0),
+          y: Number(obstacle.position.y ?? 0),
+          z: Number(obstacle.position.z ?? 0),
+        },
+        size: {
+          x: Number(obstacle.size.x ?? 1),
+          y: Number(obstacle.size.y ?? 1),
+          z: Number(obstacle.size.z ?? 1),
+        },
+      };
+    }
+
+    return {
+      id: obstacle.id ?? `obstacle_${index}`,
+      position: {
+        x: Number(obstacle.x ?? 0),
+        y: Number(obstacle.y ?? 0),
+        z: Number(obstacle.z ?? 0),
+      },
+      size: {
+        x: Number(obstacle.width ?? 1),
+        y: Number(obstacle.height ?? 1),
+        z: Number(obstacle.depth ?? 1),
+      },
+    };
+  }
+
   constructor(
     container: HTMLElement | null,
     sceneName = 'main',
@@ -385,8 +421,7 @@ export class GameApp {
     void this.loadSceneConfig();
     this.crowd = this.createCrowd();
     this.input = new InputState();
-    const env = (import.meta as any).env || {};
-    const envUrl = env.VITE_PUBLIC_WS_URL as string | undefined;
+    const envUrl = import.meta.env.VITE_PUBLIC_WS_URL;
     const isLocalPage = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
     const pageProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const pageDefaultUrl = `${pageProtocol}//${window.location.host}`;
@@ -873,7 +908,12 @@ export class GameApp {
           .map(([key, bone]) => ({ key, name: bone!.node!.name }));
         const rawKeys = Object.keys(normalized);
         const rawMap = rawKeys
-          .map((key) => ({ key, node: vrm.humanoid.getRawBoneNode(key as any) }))
+          .map((key) => ({
+            key,
+            node: vrm.humanoid.getRawBoneNode(
+              key as Parameters<VRM['humanoid']['getRawBoneNode']>[0],
+            ),
+          }))
           .filter((entry) => entry.node)
           .map((entry) => ({ key: entry.key, name: entry.node!.name }));
         const normalizedRootName = vrm.humanoid.normalizedHumanBonesRoot?.name ?? null;
@@ -1864,14 +1904,9 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
-      const sceneAvatar =
-        typeof (scene as any)?.player?.avatar === 'string'
-          ? String((scene as any).player.avatar)
-          : '';
+      const sceneAvatar = typeof scene?.player?.avatar === 'string' ? scene.player.avatar : '';
       const configAvatar =
-        typeof (this.playerConfig as any).avatar === 'string'
-          ? String((this.playerConfig as any).avatar)
-          : '';
+        typeof this.playerConfig.avatar === 'string' ? this.playerConfig.avatar : '';
       const playerAvatar = sceneAvatar || configAvatar;
       this.playerAvatarEnabled = playerAvatar.length > 0;
       if (this.playerAvatarEnabled) {
@@ -1884,9 +1919,7 @@ export class GameApp {
         this.showCapsuleFallback(this.localPlayer, 0x6be9ff);
       }
 
-      const crowdConfig = (scene as any)?.crowd as
-        | { enabled?: boolean; avatar?: string }
-        | undefined;
+      const crowdConfig = scene?.crowd;
       this.crowdEnabled = crowdConfig?.enabled === true;
       if (typeof crowdConfig?.avatar === 'string' && crowdConfig.avatar.length > 0) {
         this.crowdAvatarName = crowdConfig.avatar;
@@ -1903,28 +1936,8 @@ export class GameApp {
         if (crowdNode) crowdNode.textContent = this.statusLines.crowd;
       }
 
-      this.rebuildGroundMesh(this.parseSceneGround((scene as any)?.ground));
-      // Convert editor format {x, y, z, width, height, depth} to game format
-      this.obstacles = (scene?.obstacles ?? []).map((obs: any, index: number) => {
-        // If already in game format (has position and size), use as-is
-        if (obs.position && obs.size) {
-          return obs;
-        }
-        // Convert from editor format
-        return {
-          id: obs.id || `obstacle_${index}`,
-          position: {
-            x: obs.x ?? 0,
-            y: obs.y ?? 0,
-            z: obs.z ?? 0,
-          },
-          size: {
-            x: obs.width ?? 1,
-            y: obs.height ?? 1,
-            z: obs.depth ?? 1,
-          },
-        };
-      });
+      this.rebuildGroundMesh(this.parseSceneGround(scene?.ground));
+      this.obstacles = this.parseSceneObstacles(scene?.obstacles);
       this.rebuildObstacleMeshes();
     } catch (err) {
       console.error('Failed to load scene config:', err);
@@ -2659,7 +2672,7 @@ export class GameApp {
     lookZone.addEventListener('pointercancel', handleLookEnd);
 
     const setFlag = (name: 'jump' | 'sprint' | 'crouch' | 'attack', active: boolean) => {
-      this.input.setTouchFlags({ [name]: active } as any);
+      this.input.setTouchFlags({ [name]: active });
     };
 
     const bindButton = (btn: HTMLButtonElement, name: 'jump' | 'sprint' | 'crouch' | 'attack') => {

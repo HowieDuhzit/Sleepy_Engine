@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -104,6 +104,34 @@ type StateMachineTransitionDef = {
   blendMs: number;
   priority: number;
   interruptible: boolean;
+};
+
+type HumanBoneName = Parameters<VRM['humanoid']['getRawBoneNode']>[0];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object';
+
+const parseStateMachineState = (value: unknown): StateMachineStateDef => {
+  const state = isRecord(value) ? value : {};
+  return {
+    id: String(state.id ?? '').trim(),
+    clip: String(state.clip ?? '').trim(),
+    speed: Number(state.speed ?? 1) || 1,
+    loop: Boolean(state.loop ?? true),
+    tags: Array.isArray(state.tags) ? state.tags.map((tag) => String(tag)) : [],
+  };
+};
+
+const parseStateMachineTransition = (value: unknown): StateMachineTransitionDef => {
+  const transition = isRecord(value) ? value : {};
+  return {
+    from: String(transition.from ?? 'any'),
+    to: String(transition.to ?? '').trim(),
+    condition: String(transition.condition ?? '').trim(),
+    blendMs: Math.max(0, Number(transition.blendMs ?? 120) || 120),
+    priority: Math.max(0, Number(transition.priority ?? 1) || 1),
+    interruptible: Boolean(transition.interruptible ?? true),
+  };
 };
 
 type PlayerCapsuleConfig = {
@@ -2754,8 +2782,8 @@ export class EditorApp {
               name: scene.name || `scene_${sceneIndex + 1}`,
               obstacles,
               ground: ground ?? undefined,
-              player: (scene as any).player ? { ...(scene as any).player } : undefined,
-              crowd: (scene as any).crowd ? { ...(scene as any).crowd } : undefined,
+              player: scene.player ? { ...scene.player } : undefined,
+              crowd: scene.crowd ? { ...scene.crowd } : undefined,
             };
           },
         );
@@ -3265,15 +3293,7 @@ export class EditorApp {
         const statesRaw = JSON.parse(stateMachineStatesInput.value || '[]');
         parsedStates = Array.isArray(statesRaw)
           ? statesRaw
-              .map((state) => ({
-                id: String((state as any).id ?? '').trim(),
-                clip: String((state as any).clip ?? '').trim(),
-                speed: Number((state as any).speed ?? 1) || 1,
-                loop: Boolean((state as any).loop ?? true),
-                tags: Array.isArray((state as any).tags)
-                  ? (state as any).tags.map((tag: unknown) => String(tag))
-                  : [],
-              }))
+              .map((state) => parseStateMachineState(state))
               .filter((state) => state.id.length > 0)
           : parsedStates;
       } catch {
@@ -3283,14 +3303,7 @@ export class EditorApp {
         const transitionsRaw = JSON.parse(stateMachineTransitionsInput.value || '[]');
         parsedTransitions = Array.isArray(transitionsRaw)
           ? transitionsRaw
-              .map((transition) => ({
-                from: String((transition as any).from ?? 'any'),
-                to: String((transition as any).to ?? '').trim(),
-                condition: String((transition as any).condition ?? '').trim(),
-                blendMs: Math.max(0, Number((transition as any).blendMs ?? 120) || 120),
-                priority: Math.max(0, Number((transition as any).priority ?? 1) || 1),
-                interruptible: Boolean((transition as any).interruptible ?? true),
-              }))
+              .map((transition) => parseStateMachineTransition(transition))
               .filter((transition) => transition.to.length > 0)
           : parsedTransitions;
       } catch {
@@ -5007,13 +5020,7 @@ export class EditorApp {
         states: Array.isArray(data.stateMachine?.states)
           ? data
               .stateMachine!.states.map((state) => ({
-                id: String((state as any).id ?? ''),
-                clip: String((state as any).clip ?? ''),
-                speed: Number((state as any).speed ?? 1) || 1,
-                loop: Boolean((state as any).loop ?? true),
-                tags: Array.isArray((state as any).tags)
-                  ? (state as any).tags.map((tag: unknown) => String(tag))
-                  : [],
+                ...parseStateMachineState(state),
               }))
               .filter((state) => state.id.length > 0)
           : defaults.stateMachine.states.map((state) => ({
@@ -5023,12 +5030,7 @@ export class EditorApp {
         transitions: Array.isArray(data.stateMachine?.transitions)
           ? data
               .stateMachine!.transitions.map((transition) => ({
-                from: String((transition as any).from ?? 'any'),
-                to: String((transition as any).to ?? ''),
-                condition: String((transition as any).condition ?? ''),
-                blendMs: Number((transition as any).blendMs ?? 120) || 120,
-                priority: Number((transition as any).priority ?? 1) || 1,
-                interruptible: Boolean((transition as any).interruptible ?? true),
+                ...parseStateMachineTransition(transition),
               }))
               .filter((transition) => transition.to.length > 0)
           : defaults.stateMachine.transitions.map((transition) => ({ ...transition })),
@@ -5114,7 +5116,7 @@ export class EditorApp {
     this.gltfLoader.load(
       url,
       (gltf) => {
-        this.applyVrm(gltf as any);
+        this.applyVrm(gltf);
       },
       undefined,
       (err) => console.warn('VRM load failed', err),
@@ -5280,7 +5282,7 @@ export class EditorApp {
     return tex;
   }
 
-  private applyVrm(gltf: { scene: THREE.Group; userData: any }) {
+  private applyVrm(gltf: GLTF) {
     const scene = gltf.scene;
     if (typeof VRMUtils.removeUnnecessaryVertices === 'function') {
       VRMUtils.removeUnnecessaryVertices(scene);
@@ -5397,7 +5399,7 @@ export class EditorApp {
     this.gltfLoader.parse(
       buffer,
       '',
-      (gltf) => this.applyVrm(gltf as any),
+      (gltf) => this.applyVrm(gltf),
       (err) => console.warn('VRM parse failed', err),
     );
   };
@@ -5516,7 +5518,7 @@ export class EditorApp {
       'rightLittleDistal',
     ];
     for (const name of humanoidNames) {
-      const bone = this.vrm.humanoid?.getRawBoneNode(name as any);
+      const bone = this.vrm.humanoid?.getRawBoneNode(name as HumanBoneName);
       if (bone) {
         bone.userData.humanoidKey = name;
       }
@@ -6327,7 +6329,7 @@ export class EditorApp {
     }
     this.ragdollDebugMeshes = [];
     const humanoid = this.vrm.humanoid;
-    const getBone = (name: string) => humanoid.getRawBoneNode(name as any);
+    const getBone = (name: string) => humanoid.getRawBoneNode(name as HumanBoneName);
     const defs = this.ragdollDefs;
 
     const tmpVec = new THREE.Vector3();

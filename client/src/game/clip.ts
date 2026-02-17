@@ -11,28 +11,57 @@ export type ClipData = {
   frames: BoneFrame[];
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object';
+
+const isQuaternionLike = (
+  value: unknown,
+): value is {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+} => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.x === 'number' &&
+    typeof value.y === 'number' &&
+    typeof value.z === 'number' &&
+    typeof value.w === 'number'
+  );
+};
+
+const isBoneFrame = (value: unknown): value is BoneFrame => {
+  if (!isRecord(value) || typeof value.time !== 'number' || !isRecord(value.bones)) return false;
+  if (!Object.values(value.bones).every((bone) => isQuaternionLike(bone))) return false;
+  if (value.rootPos === undefined) return true;
+  return (
+    isRecord(value.rootPos) &&
+    typeof value.rootPos.x === 'number' &&
+    typeof value.rootPos.y === 'number' &&
+    typeof value.rootPos.z === 'number'
+  );
+};
+
 export const parseClipPayload = (payload: unknown): ClipData | null => {
-  if (!payload || typeof payload !== 'object') return null;
-  if ('clip' in (payload as any)) {
-    const clip = (payload as any).clip;
-    return clip &&
-      typeof clip === 'object' &&
-      typeof clip.duration === 'number' &&
-      Array.isArray(clip.frames)
-      ? (clip as ClipData)
-      : null;
+  if (!isRecord(payload)) return null;
+  if ('clip' in payload) {
+    const clip = payload.clip;
+    return isClipData(clip) ? clip : null;
   }
-  if ('duration' in (payload as any) && 'frames' in (payload as any)) {
-    const clip = payload as ClipData;
-    return typeof clip.duration === 'number' && Array.isArray(clip.frames) ? clip : null;
+  if ('duration' in payload && 'frames' in payload) {
+    return isClipData(payload) ? payload : null;
   }
   return null;
 };
 
 export const isClipData = (payload: unknown): payload is ClipData => {
-  if (!payload || typeof payload !== 'object') return false;
-  const data = payload as ClipData;
-  return typeof data.duration === 'number' && Array.isArray(data.frames);
+  if (!isRecord(payload)) return false;
+  return (
+    typeof payload.duration === 'number' &&
+    Array.isArray(payload.frames) &&
+    payload.frames.every(isBoneFrame)
+  );
 };
 
 export const buildAnimationClipFromData = (

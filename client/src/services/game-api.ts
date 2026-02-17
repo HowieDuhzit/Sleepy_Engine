@@ -1,3 +1,5 @@
+import type { Obstacle } from '@sleepy/shared';
+
 export type GameMeta = {
   id: string;
   name: string;
@@ -6,10 +8,41 @@ export type GameMeta = {
   updatedAt?: string;
 };
 
+export type SceneGroundRecord = {
+  type?: string;
+  width?: number;
+  depth?: number;
+  y?: number;
+  textureRepeat?: number;
+};
+
+export type ScenePlayerRecord = {
+  avatar?: string;
+};
+
+export type SceneCrowdRecord = {
+  enabled?: boolean;
+  avatar?: string;
+};
+
+export type SceneObstacleRecord =
+  | Obstacle
+  | {
+      id?: string;
+      x?: number;
+      y?: number;
+      z?: number;
+      width?: number;
+      height?: number;
+      depth?: number;
+    };
+
 export type SceneRecord = {
   name: string;
-  obstacles?: unknown[];
-  ground?: unknown;
+  obstacles?: SceneObstacleRecord[];
+  ground?: SceneGroundRecord;
+  player?: ScenePlayerRecord;
+  crowd?: SceneCrowdRecord;
 };
 
 const readJson = async <T>(response: Response): Promise<T> => {
