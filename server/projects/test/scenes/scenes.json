@@ -1,0 +1,25 @@
+{
+  "scenes": [
+    {
+      "name": "main",
+      "obstacles": [],
+      "ground": {
+        "type": "concrete",
+        "width": 108,
+        "depth": 108,
+        "y": 0,
+        "textureRepeat": 12,
+        "terrain": {
+          "enabled": true,
+          "preset": "dunes",
+          "size": 96,
+          "resolution": 28,
+          "maxHeight": 10,
+          "roughness": 0.56,
+          "seed": 630377
+        }
+      },
+      "player": {}
+    }
+  ]
+}

@@ -43,6 +43,16 @@ type RoomOptions = {
   gameId?: string;
   sceneName?: string;
 };
+type TerrainPreset = 'cinematic' | 'alpine' | 'dunes' | 'islands';
+type SceneTerrain = {
+  enabled: boolean;
+  preset: TerrainPreset;
+  size: number;
+  resolution: number;
+  maxHeight: number;
+  roughness: number;
+  seed: number;
+};
 
 class NavGrid {
   private half: number;
@@ -169,6 +179,8 @@ export class RiotRoom extends Room {
   declare state: RiotState;
   private obstacles: Obstacle[] = OBSTACLES;
   private crowdEnabled = false;
+  private groundY = GROUND_Y;
+  private terrain: SceneTerrain | null = null;
   private inputBuffer = new Map<string, PlayerInput>();
   private lastInputSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
@@ -199,8 +211,77 @@ export class RiotRoom extends Room {
     threatId: '' as string,
   }));
 
+  private terrainHash2d(x: number, z: number, seed: number) {
+    const value = Math.sin(x * 127.1 + z * 311.7 + seed * 74.7) * 43758.5453123;
+    return value - Math.floor(value);
+  }
+
+  private terrainNoise2d(x: number, z: number, seed: number) {
+    const x0 = Math.floor(x);
+    const z0 = Math.floor(z);
+    const x1 = x0 + 1;
+    const z1 = z0 + 1;
+    const tx = x - x0;
+    const tz = z - z0;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sz = tz * tz * (3 - 2 * tz);
+    const n00 = this.terrainHash2d(x0, z0, seed);
+    const n10 = this.terrainHash2d(x1, z0, seed);
+    const n01 = this.terrainHash2d(x0, z1, seed);
+    const n11 = this.terrainHash2d(x1, z1, seed);
+    const ix0 = n00 + (n10 - n00) * sx;
+    const ix1 = n01 + (n11 - n01) * sx;
+    return ix0 + (ix1 - ix0) * sz;
+  }
+
+  private terrainFbm(x: number, z: number, seed: number, octaves: number, roughness: number) {
+    let sum = 0;
+    let amp = 0.5;
+    let freq = 1;
+    let norm = 0;
+    for (let i = 0; i < octaves; i += 1) {
+      sum += this.terrainNoise2d(x * freq, z * freq, seed + i * 17.41) * amp;
+      norm += amp;
+      amp *= roughness;
+      freq *= 2;
+    }
+    return norm > 0 ? sum / norm : 0;
+  }
+
+  private sampleTerrainHeight(terrain: SceneTerrain, x: number, z: number) {
+    const size = Math.max(16, Math.min(320, terrain.size));
+    const maxHeight = Math.max(1, Math.min(64, terrain.maxHeight));
+    const roughness = Math.max(0.2, Math.min(0.95, terrain.roughness));
+    const nx = x / size;
+    const nz = z / size;
+    const macro = this.terrainFbm(nx * 4.2, nz * 4.2, terrain.seed, 5, roughness);
+    const detail = this.terrainFbm(nx * 10.5, nz * 10.5, terrain.seed + 101, 3, roughness);
+    const ridge =
+      1 - Math.abs(2 * this.terrainFbm(nx * 6.5, nz * 6.5, terrain.seed + 53, 4, 0.6) - 1);
+    const radius = Math.sqrt(nx * nx + nz * nz);
+    const islandMask = Math.max(0, 1 - Math.min(1, Math.pow(radius / 0.68, 2.4)));
+    const spawnMask = Math.min(1, Math.max(0, (radius - 0.09) / 0.16));
+
+    let elevation = macro * 0.68 + detail * 0.22 + ridge * 0.35;
+    if (terrain.preset === 'alpine') elevation = macro * 0.55 + ridge * 0.6 + detail * 0.25;
+    if (terrain.preset === 'dunes') elevation = macro * 0.45 + detail * 0.2;
+    if (terrain.preset === 'islands') elevation = (macro * 0.58 + ridge * 0.26) * islandMask;
+    if (terrain.preset === 'cinematic') {
+      elevation = (macro * 0.64 + ridge * 0.4 + detail * 0.18) * (0.55 + islandMask * 0.45);
+    }
+    elevation *= spawnMask;
+    return Math.max(0, elevation * maxHeight);
+  }
+
   private sampleGroundHeight(x: number, z: number) {
-    let height = GROUND_Y;
+    let height = this.groundY;
+    const terrain = this.terrain?.enabled ? this.terrain : null;
+    if (terrain) {
+      const half = Math.max(16, terrain.size) * 0.5;
+      if (Math.abs(x) <= half && Math.abs(z) <= half) {
+        height = this.groundY + this.sampleTerrainHeight(terrain, x, z);
+      }
+    }
     for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
@@ -218,6 +299,8 @@ export class RiotRoom extends Room {
     const sceneConfig = await loadSceneConfig(options);
     this.obstacles = sceneConfig.obstacles;
     this.crowdEnabled = sceneConfig.crowdEnabled;
+    this.groundY = Number.isFinite(sceneConfig.groundY) ? sceneConfig.groundY : GROUND_Y;
+    this.terrain = sceneConfig.terrain;
     if (!this.crowdEnabled) {
       this.crowd = [];
     }
@@ -246,10 +329,18 @@ export class RiotRoom extends Room {
   }
 
   async onCreate(options?: RoomOptions) {
+    const sanitizeSegment = (value: string | undefined, fallback: string) => {
+      const cleaned = (value ?? '').replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+      return cleaned || fallback;
+    };
+    const gameId = sanitizeSegment(options?.gameId, 'prototype');
+    const sceneName = sanitizeSegment(options?.sceneName, 'prototype');
+
+    this.setMetadata({ gameId, sceneName });
     this.setState(new RiotState());
     this.maxClients = 16;
     this.setPrivate(false);
-    await this.loadRoomObstacles(options);
+    await this.loadRoomObstacles({ gameId, sceneName });
     this.setSimulationInterval((dt) => this.update(dt), 1000 / 20);
     this.navGrid = new NavGrid(this.navHalf, this.navCell, this.obstacles);
 
@@ -267,7 +358,7 @@ export class RiotRoom extends Room {
     player.id = client.sessionId;
     player.x = (Math.random() - 0.5) * 10;
     player.z = (Math.random() - 0.5) * 10;
-    player.y = GROUND_Y;
+    player.y = this.sampleGroundHeight(player.x, player.z);
     player.vy = 0;
     this.state.players.set(client.sessionId, player);
   }

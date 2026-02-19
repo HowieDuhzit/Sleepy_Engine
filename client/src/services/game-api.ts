@@ -14,6 +14,15 @@ export type SceneGroundRecord = {
   depth?: number;
   y?: number;
   textureRepeat?: number;
+  terrain?: {
+    enabled?: boolean;
+    preset?: 'cinematic' | 'alpine' | 'dunes' | 'islands';
+    size?: number;
+    resolution?: number;
+    maxHeight?: number;
+    roughness?: number;
+    seed?: number;
+  };
 };
 
 export type ScenePlayerRecord = {
@@ -43,6 +52,36 @@ export type SceneRecord = {
   ground?: SceneGroundRecord;
   player?: ScenePlayerRecord;
   crowd?: SceneCrowdRecord;
+};
+
+export type SocialProfileRecord = {
+  id: string;
+  displayName: string;
+  status: string;
+  bio: string;
+  updatedAt: string;
+  lastSeenAt: string;
+};
+
+export type SocialFriendRecord = {
+  id: string;
+  name: string;
+  status: string;
+  online: boolean;
+};
+
+export type SocialMessageRecord = {
+  id: string;
+  from: string;
+  to: string;
+  text: string;
+  createdAt: string;
+};
+
+export type SocialStateRecord = {
+  profile: SocialProfileRecord;
+  friends: SocialFriendRecord[];
+  chats: Record<string, SocialMessageRecord[]>;
 };
 
 const readJson = async <T>(response: Response): Promise<T> => {
@@ -140,4 +179,43 @@ export const uploadGameAvatar = async (gameId: string, name: string, file: File)
     body,
   });
   return readJson<{ ok: boolean; file: string }>(res);
+};
+
+export const getSocialState = async (clientId: string) => {
+  const res = await fetch(`/api/social/state?clientId=${encodeURIComponent(clientId)}`, {
+    cache: 'no-store',
+  });
+  return readJson<SocialStateRecord>(res);
+};
+
+export const saveSocialProfile = async (payload: {
+  clientId: string;
+  displayName: string;
+  status: string;
+  bio: string;
+}) => {
+  const res = await fetch('/api/social/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson<{ ok: boolean; profile: SocialProfileRecord }>(res);
+};
+
+export const sendSocialMessage = async (payload: { clientId: string; friendId: string; text: string }) => {
+  const res = await fetch('/api/social/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson<{ ok: boolean; message: SocialMessageRecord }>(res);
+};
+
+export const addSocialFriend = async (payload: { clientId: string; friendId: string }) => {
+  const res = await fetch('/api/social/friends', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson<{ ok: boolean }>(res);
 };

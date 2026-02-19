@@ -38,6 +38,7 @@ type MixamoEntry = {
   name: string;
   clip: THREE.AnimationClip;
   rig: THREE.Object3D;
+  source: 'mixamo' | 'generic';
 };
 
 type RestPose = {
@@ -61,6 +62,24 @@ type LevelGround = {
   depth?: number;
   y?: number;
   textureRepeat?: number;
+  terrain?: {
+    enabled?: boolean;
+    preset?: 'cinematic' | 'alpine' | 'dunes' | 'islands';
+    size?: number;
+    resolution?: number;
+    maxHeight?: number;
+    roughness?: number;
+    seed?: number;
+  };
+};
+type LevelTerrainConfig = NonNullable<LevelGround['terrain']>;
+type NormalizedLevelGround = {
+  type: 'concrete';
+  width: number;
+  depth: number;
+  y: number;
+  textureRepeat: number;
+  terrain?: Required<LevelTerrainConfig>;
 };
 type LevelScene = {
   name: string;
@@ -573,6 +592,12 @@ export class EditorApp {
   private levelObjectSelectEl: HTMLSelectElement | null = null;
   private levelHierarchyEl: HTMLDivElement | null = null;
   private levelSceneStateRef: { scenes: LevelScene[] } | null = null;
+  private levelCameraMode: 'free' | 'locked' = 'free';
+  private levelCameraModeButton: HTMLButtonElement | null = null;
+  private levelFreeFlyActive = false;
+  private levelFreeFlyPointerId: number | null = null;
+  private levelFreeFlyLastMouse = { x: 0, y: 0 };
+  private levelFreeFlyKeys = new Set<string>();
   private playerCapsulePreview: THREE.Group | null = null;
   private playerCapsulePreviewMaterial = new THREE.MeshBasicMaterial({
     color: 0x36d4ff,
@@ -983,6 +1008,9 @@ export class EditorApp {
       this.drawTimeline();
     });
     this.renderer.domElement.addEventListener('pointerdown', this.handleViewportPick);
+    window.addEventListener('pointermove', this.handleLevelFreeFlyPointerMove);
+    window.addEventListener('pointerup', this.handleLevelFreeFlyPointerUp);
+    this.renderer.domElement.addEventListener('contextmenu', this.handleLevelFreeFlyContextMenu);
     window.addEventListener('pointermove', this.handleRagdollDrag);
     window.addEventListener('pointerup', this.handleRagdollDragEnd);
     this.viewport?.addEventListener('dragover', this.handleDragOver);
@@ -997,6 +1025,8 @@ export class EditorApp {
 
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('keydown', this.handleKeyboard);
+    window.addEventListener('keydown', this.handleLevelFreeFlyKeyDown);
+    window.addEventListener('keyup', this.handleLevelFreeFlyKeyUp);
     window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     if (this.viewport) {
       this.viewportObserver = new ResizeObserver(() => {
@@ -1142,9 +1172,7 @@ export class EditorApp {
     }
     if (host instanceof HTMLDivElement) {
       host.style.display = 'block';
-      if (area === 'left') {
-        host.style.minWidth = tab === 'player' || tab === 'level' ? '300px' : '220px';
-      }
+      host.style.minWidth = '0';
     }
     host.appendChild(panel);
     requestAnimationFrame(() => {
@@ -1165,8 +1193,13 @@ export class EditorApp {
     }
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyboard);
+    window.removeEventListener('keydown', this.handleLevelFreeFlyKeyDown);
+    window.removeEventListener('keyup', this.handleLevelFreeFlyKeyUp);
     window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
     this.renderer.domElement.removeEventListener('pointerdown', this.handleViewportPick);
+    window.removeEventListener('pointermove', this.handleLevelFreeFlyPointerMove);
+    window.removeEventListener('pointerup', this.handleLevelFreeFlyPointerUp);
+    this.renderer.domElement.removeEventListener('contextmenu', this.handleLevelFreeFlyContextMenu);
     window.removeEventListener('pointermove', this.handleRagdollDrag);
     window.removeEventListener('pointerup', this.handleRagdollDragEnd);
     // Remove gesture listeners
@@ -1192,6 +1225,7 @@ export class EditorApp {
     }
     this.playerCapsulePreviewMaterial.dispose();
     this.playerCapsuleWireframe.dispose();
+    this.stopLevelFreeFly();
     this.renderer.dispose();
     this.levelTransform?.removeEventListener('objectChange', this.handleLevelTransformObjectChange);
     this.container.innerHTML = '';
@@ -1269,6 +1303,9 @@ export class EditorApp {
 
   private switchToTab(tab: 'animation' | 'player' | 'level' | 'settings') {
     this.currentTab = tab;
+    if (tab !== 'level') {
+      this.stopLevelFreeFly();
+    }
 
     // VRM stays in character scene for both animation and player tabs
     // No need to move it between scenes anymore since they're consolidated
@@ -1309,18 +1346,22 @@ export class EditorApp {
       this.camera.position.set(0, 5, 10);
       if (this.controls) {
         this.controls.target.set(0, 0, 0);
+        this.controls.enablePan = this.levelCameraMode === 'free';
       }
+      this.syncLevelCameraTarget();
     } else if (tab === 'settings') {
       // Minimal camera setup for settings
       this.camera.position.set(0, 2, 5);
       if (this.controls) {
         this.controls.target.set(0, 1, 0);
+        this.controls.enablePan = true;
       }
     } else {
       // Animation and player tabs
       this.camera.position.set(0, 1.6, -4.2);
       if (this.controls) {
         this.controls.target.set(0, 1.2, 0);
+        this.controls.enablePan = true;
       }
     }
     if (tab !== 'level' && this.levelTransform) {
@@ -1350,14 +1391,30 @@ export class EditorApp {
     };
   }
 
-  private normalizeLevelGround(ground: LevelGround | undefined): Required<LevelGround> | null {
+  private normalizeLevelGround(ground: LevelGround | undefined): NormalizedLevelGround | null {
     if (!ground) return null;
+    const terrain = ground.terrain
+      ? {
+          enabled: ground.terrain.enabled === true,
+          preset: (ground.terrain.preset ?? 'cinematic') as
+            | 'cinematic'
+            | 'alpine'
+            | 'dunes'
+            | 'islands',
+          size: Math.max(16, Number(ground.terrain.size ?? ground.width ?? 120)),
+          resolution: Math.max(8, Math.min(128, Number(ground.terrain.resolution ?? 48))),
+          maxHeight: Math.max(1, Number(ground.terrain.maxHeight ?? 12)),
+          roughness: Math.max(0.2, Math.min(0.95, Number(ground.terrain.roughness ?? 0.56))),
+          seed: Math.floor(Number(ground.terrain.seed ?? 1337)),
+        }
+      : undefined;
     return {
       type: 'concrete',
       width: Math.max(1, Number(ground.width ?? 120)),
       depth: Math.max(1, Number(ground.depth ?? 120)),
       y: Number(ground.y ?? 0),
       textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+      terrain,
     };
   }
 
@@ -1423,6 +1480,75 @@ export class EditorApp {
     this.levelSceneJsonEl.value = JSON.stringify(this.levelSceneStateRef, null, 2);
   }
 
+  private terrainHash2d(x: number, z: number, seed: number) {
+    const value = Math.sin(x * 127.1 + z * 311.7 + seed * 74.7) * 43758.5453123;
+    return value - Math.floor(value);
+  }
+
+  private terrainNoise2d(x: number, z: number, seed: number) {
+    const x0 = Math.floor(x);
+    const z0 = Math.floor(z);
+    const x1 = x0 + 1;
+    const z1 = z0 + 1;
+    const tx = x - x0;
+    const tz = z - z0;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sz = tz * tz * (3 - 2 * tz);
+    const n00 = this.terrainHash2d(x0, z0, seed);
+    const n10 = this.terrainHash2d(x1, z0, seed);
+    const n01 = this.terrainHash2d(x0, z1, seed);
+    const n11 = this.terrainHash2d(x1, z1, seed);
+    const ix0 = n00 + (n10 - n00) * sx;
+    const ix1 = n01 + (n11 - n01) * sx;
+    return ix0 + (ix1 - ix0) * sz;
+  }
+
+  private terrainFbm(x: number, z: number, seed: number, octaves: number, roughness: number) {
+    let sum = 0;
+    let amp = 0.5;
+    let freq = 1;
+    let norm = 0;
+    for (let i = 0; i < octaves; i += 1) {
+      sum += this.terrainNoise2d(x * freq, z * freq, seed + i * 17.41) * amp;
+      norm += amp;
+      amp *= roughness;
+      freq *= 2;
+    }
+    return norm > 0 ? sum / norm : 0;
+  }
+
+  private sampleTerrainHeight(options: {
+    preset: 'cinematic' | 'alpine' | 'dunes' | 'islands';
+    size: number;
+    maxHeight: number;
+    roughness: number;
+    seed: number;
+    x: number;
+    z: number;
+  }) {
+    const size = Math.max(16, Math.min(320, options.size));
+    const maxHeight = Math.max(1, Math.min(64, options.maxHeight));
+    const roughness = Math.max(0.2, Math.min(0.95, options.roughness));
+    const nx = options.x / size;
+    const nz = options.z / size;
+    const macro = this.terrainFbm(nx * 4.2, nz * 4.2, options.seed, 5, roughness);
+    const detail = this.terrainFbm(nx * 10.5, nz * 10.5, options.seed + 101, 3, roughness);
+    const ridge = 1 - Math.abs(2 * this.terrainFbm(nx * 6.5, nz * 6.5, options.seed + 53, 4, 0.6) - 1);
+    const radius = Math.sqrt(nx * nx + nz * nz);
+    const islandMask = Math.max(0, 1 - Math.min(1, Math.pow(radius / 0.68, 2.4)));
+    const spawnMask = Math.min(1, Math.max(0, (radius - 0.09) / 0.16));
+
+    let elevation = macro * 0.68 + detail * 0.22 + ridge * 0.35;
+    if (options.preset === 'alpine') elevation = macro * 0.55 + ridge * 0.6 + detail * 0.25;
+    if (options.preset === 'dunes') elevation = macro * 0.45 + detail * 0.2;
+    if (options.preset === 'islands') elevation = (macro * 0.58 + ridge * 0.26) * islandMask;
+    if (options.preset === 'cinematic') {
+      elevation = (macro * 0.64 + ridge * 0.4 + detail * 0.18) * (0.55 + islandMask * 0.45);
+    }
+    elevation *= spawnMask;
+    return Math.max(0, elevation * maxHeight);
+  }
+
   private refreshLevelObjectSelect() {
     if (!this.levelObjectSelectEl) return;
     this.levelObjectSelectEl.innerHTML = '';
@@ -1461,6 +1587,105 @@ export class EditorApp {
       }
     }
   }
+
+  private syncLevelCameraTarget() {
+    if (!this.controls) return;
+    if (this.currentTab !== 'level') return;
+    if (this.levelCameraMode !== 'locked') return;
+    const entry = this.selectedLevelObjectId
+      ? (this.levelSceneObjects.get(this.selectedLevelObjectId) ?? null)
+      : null;
+    if (!entry) return;
+    entry.object.getWorldPosition(this.controls.target);
+  }
+
+  private setLevelCameraMode(mode: 'free' | 'locked') {
+    this.levelCameraMode = mode;
+    if (mode !== 'free') {
+      this.stopLevelFreeFly();
+    }
+    if (this.controls) {
+      this.controls.enablePan = mode === 'free';
+    }
+    if (this.levelCameraModeButton) {
+      const label = mode === 'free' ? 'Camera: Free Fly' : 'Camera: Object Locked';
+      this.levelCameraModeButton.textContent = label;
+      this.levelCameraModeButton.dataset.mode = mode;
+      this.levelCameraModeButton.title =
+        mode === 'free'
+          ? 'Free-fly camera: pan/rotate/zoom anywhere'
+          : 'Object-locked camera: orbits selected object';
+    }
+    this.syncLevelCameraTarget();
+  }
+
+  private canUseLevelFreeFly() {
+    return this.currentTab === 'level' && this.levelCameraMode === 'free';
+  }
+
+  private startLevelFreeFly(event: PointerEvent) {
+    if (!this.canUseLevelFreeFly()) return;
+    this.levelFreeFlyActive = true;
+    this.levelFreeFlyPointerId = event.pointerId;
+    this.levelFreeFlyLastMouse = { x: event.clientX, y: event.clientY };
+    this.levelFreeFlyKeys.clear();
+    if (this.controls) this.controls.enabled = false;
+    this.renderer.domElement.style.cursor = 'grabbing';
+  }
+
+  private stopLevelFreeFly() {
+    if (!this.levelFreeFlyActive) return;
+    this.levelFreeFlyActive = false;
+    this.levelFreeFlyPointerId = null;
+    this.levelFreeFlyKeys.clear();
+    if (this.controls) this.controls.enabled = true;
+    this.renderer.domElement.style.cursor = '';
+  }
+
+  private handleLevelFreeFlyPointerMove = (event: PointerEvent) => {
+    if (!this.levelFreeFlyActive || !this.canUseLevelFreeFly()) return;
+    if (this.levelFreeFlyPointerId !== null && event.pointerId !== this.levelFreeFlyPointerId) return;
+    const dx = event.clientX - this.levelFreeFlyLastMouse.x;
+    const dy = event.clientY - this.levelFreeFlyLastMouse.y;
+    this.levelFreeFlyLastMouse = { x: event.clientX, y: event.clientY };
+    const lookSpeed = 0.0022;
+    const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+    euler.y -= dx * lookSpeed;
+    euler.x -= dy * lookSpeed;
+    euler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, euler.x));
+    this.camera.quaternion.setFromEuler(euler);
+  };
+
+  private handleLevelFreeFlyPointerUp = (event: PointerEvent) => {
+    if (!this.levelFreeFlyActive) return;
+    if (this.levelFreeFlyPointerId === null || event.pointerId === this.levelFreeFlyPointerId) {
+      this.stopLevelFreeFly();
+    }
+  };
+
+  private handleLevelFreeFlyKeyDown = (event: KeyboardEvent) => {
+    if (!this.levelFreeFlyActive || !this.canUseLevelFreeFly()) return;
+    const key = event.key.toLowerCase();
+    if (['w', 'a', 's', 'd', 'q', 'e', ' ', 'shift'].includes(key)) {
+      this.levelFreeFlyKeys.add(key);
+      event.preventDefault();
+    }
+  };
+
+  private handleLevelFreeFlyKeyUp = (event: KeyboardEvent) => {
+    if (!this.levelFreeFlyActive) return;
+    const key = event.key.toLowerCase();
+    if (this.levelFreeFlyKeys.has(key)) {
+      this.levelFreeFlyKeys.delete(key);
+      event.preventDefault();
+    }
+  };
+
+  private handleLevelFreeFlyContextMenu = (event: MouseEvent) => {
+    if (this.currentTab === 'level' && this.levelCameraMode === 'free') {
+      event.preventDefault();
+    }
+  };
 
   private rebuildLevelSceneObjects() {
     this.levelSceneObjects.clear();
@@ -1514,18 +1739,51 @@ export class EditorApp {
     if (ground) {
       const concreteTexture = this.createEditorConcreteTexture();
       concreteTexture.repeat.set(ground.textureRepeat, ground.textureRepeat);
+      const terrain = ground.terrain?.enabled ? ground.terrain : null;
+      const terrainSize = terrain ? Math.max(16, Number(terrain.size ?? ground.width)) : ground.width;
+      const terrainDepth = terrain ? Math.max(16, Number(terrain.size ?? ground.depth)) : ground.depth;
+      const terrainResolution = terrain
+        ? Math.max(8, Math.min(128, Math.floor(Number(terrain.resolution ?? 48))))
+        : 1;
+      const groundGeometry = new THREE.PlaneGeometry(
+        terrainSize,
+        terrainDepth,
+        terrainResolution,
+        terrainResolution,
+      );
+      groundGeometry.rotateX(-Math.PI / 2);
+      if (terrain) {
+        const position = groundGeometry.getAttribute('position');
+        if (position instanceof THREE.BufferAttribute) {
+          for (let i = 0; i < position.count; i += 1) {
+            const x = position.getX(i);
+            const z = position.getZ(i);
+            const h = this.sampleTerrainHeight({
+              preset: terrain.preset ?? 'cinematic',
+              size: terrain.size ?? Math.max(terrainSize, terrainDepth),
+              maxHeight: terrain.maxHeight ?? 12,
+              roughness: terrain.roughness ?? 0.56,
+              seed: Math.floor(terrain.seed ?? 1337),
+              x,
+              z,
+            });
+            position.setY(i, h);
+          }
+          position.needsUpdate = true;
+        }
+        groundGeometry.computeVertexNormals();
+      }
       this.levelGroundMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(1, 1),
+        groundGeometry,
         new THREE.MeshStandardMaterial({
           map: concreteTexture,
+          flatShading: terrain !== null,
           roughness: 0.95,
           metalness: 0.05,
           color: 0xffffff,
         }),
       );
-      this.levelGroundMesh.rotation.x = -Math.PI / 2;
       this.levelGroundMesh.position.y = ground.y;
-      this.levelGroundMesh.scale.set(ground.width, ground.depth, 1);
       this.levelGroundMesh.userData.levelObjectId = 'ground';
       this.levelScene.add(this.levelGroundMesh);
     }
@@ -1681,6 +1939,7 @@ export class EditorApp {
       this.levelTransform.detach();
       setTransformControlsVisible(this.levelTransform, false);
     }
+    this.syncLevelCameraTarget();
   }
 
   private handleLevelTransformObjectChange = () => {
@@ -1708,16 +1967,22 @@ export class EditorApp {
       }
       scene.obstacles = obstacles;
     } else if (entry.kind === 'ground') {
-      const ground = this.normalizeLevelGround(scene.ground ?? undefined) ?? {
+      const ground: NormalizedLevelGround = this.normalizeLevelGround(scene.ground ?? undefined) ?? {
         type: 'concrete',
         width: 120,
         depth: 120,
         y: 0,
         textureRepeat: 12,
       };
-      ground.width = Math.max(1, entry.object.scale.x);
-      ground.depth = Math.max(1, Math.max(entry.object.scale.y, entry.object.scale.z));
+      const bounds = new THREE.Box3().setFromObject(entry.object);
+      const size = new THREE.Vector3();
+      bounds.getSize(size);
+      ground.width = Math.max(1, size.x);
+      ground.depth = Math.max(1, size.z);
       ground.y = entry.object.position.y;
+      if (ground.terrain?.enabled) {
+        ground.terrain.size = Math.max(ground.width, ground.depth);
+      }
       scene.ground = ground;
     } else if (entry.kind === 'player') {
       const player = scene.player ?? {};
@@ -1871,6 +2136,27 @@ export class EditorApp {
         if (hips) {
           hips.getWorldPosition(controls.target);
           this.lastHipsTargetUpdateMs = now;
+        }
+      }
+    }
+    if (this.currentTab === 'level') {
+      this.syncLevelCameraTarget();
+      if (this.levelFreeFlyActive && this.canUseLevelFreeFly()) {
+        const forward = new THREE.Vector3();
+        this.camera.getWorldDirection(forward).normalize();
+        const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const move = new THREE.Vector3();
+        if (this.levelFreeFlyKeys.has('w')) move.add(forward);
+        if (this.levelFreeFlyKeys.has('s')) move.sub(forward);
+        if (this.levelFreeFlyKeys.has('d')) move.add(right);
+        if (this.levelFreeFlyKeys.has('a')) move.sub(right);
+        if (this.levelFreeFlyKeys.has('e') || this.levelFreeFlyKeys.has(' ')) move.add(up);
+        if (this.levelFreeFlyKeys.has('q')) move.sub(up);
+        if (move.lengthSq() > 0) {
+          move.normalize();
+          const speed = (this.levelFreeFlyKeys.has('shift') ? 22 : 11) * delta;
+          this.camera.position.addScaledVector(move, speed);
         }
       }
     }
@@ -2115,6 +2401,19 @@ export class EditorApp {
       '<label class="field"><span>Transform Mode</span><select data-level-transform-mode><option value="translate">Move</option><option value="rotate">Rotate</option><option value="scale">Scale</option></select></label>',
       '<label class="field"><span>Snap Step</span><input data-level-snap type="number" min="0" step="0.1" value="0.5" /></label>',
       '<button data-level-focus>Focus Selected</button>',
+      '<div class="panel-title">Terrain Generator</div>',
+      '<label class="field"><span>Preset</span><select data-level-terrain-preset><option value="cinematic">Cinematic</option><option value="alpine">Alpine</option><option value="dunes">Dunes</option><option value="islands">Islands</option></select></label>',
+      '<label class="field"><span>Size</span><input data-level-terrain-size type="number" min="16" max="320" step="4" value="96" /></label>',
+      '<label class="field"><span>Resolution</span><input data-level-terrain-res type="number" min="8" max="56" step="1" value="28" /></label>',
+      '<label class="field"><span>Max Height</span><input data-level-terrain-height type="number" min="1" max="64" step="0.5" value="10" /></label>',
+      '<label class="field"><span>Roughness</span><input data-level-terrain-roughness type="number" min="0.2" max="0.95" step="0.01" value="0.56" /></label>',
+      '<label class="field"><span>Seed</span><input data-level-terrain-seed type="number" step="1" value="1337" /></label>',
+      '<div class="panel-actions">',
+      '<button data-level-terrain-generate>Apply Mesh</button>',
+      '<button data-level-terrain-append>Remix Seed</button>',
+      '<button data-level-terrain-clear>Clear Terrain</button>',
+      '</div>',
+      '<div class="clip-status" data-level-terrain-status>Procedural terrain deforms the ground mesh from a seeded heightfield.</div>',
       '<div class="clip-status" data-level-status>Select an object in viewport or list to edit transform.</div>',
       '</div>',
       '</div>',
@@ -2131,6 +2430,7 @@ export class EditorApp {
       '<button class="icon-btn" data-clear title="Clear Clip">C</button>',
       '</div>',
       '</div>',
+      '<button class="level-camera-toggle" data-level-camera-mode title="Free-fly camera: pan/rotate/zoom anywhere">Camera: Free Fly</button>',
       '<div class="overlay-bottom-left">',
       '<div class="overlay-panel">',
       '<label class="field"><span>FBX</span><input data-mixamo-file type="file" accept=".fbx" multiple /></label>',
@@ -2140,7 +2440,7 @@ export class EditorApp {
       '<button data-mixamo-bake>Bake</button>',
       '<button data-mixamo-stop>Stop</button>',
       '</div>',
-      '<div class="clip-status" data-mixamo-status>Mixamo: none</div>',
+      '<div class="clip-status" data-mixamo-status>FBX: none</div>',
       '<div class="overlay-clip-panel" data-clip-panel>',
       '<div class="panel-title">Clip Data</div>',
       '<label class="field"><span>Name</span><input data-clip-name type="text" placeholder="idle" /></label>',
@@ -2193,7 +2493,7 @@ export class EditorApp {
       `<label class="duration-field"><span>FPS</span><input data-fps type="number" min="5" max="60" step="1" value="${SAMPLE_RATE}" /></label>`,
       `<label class="duration-field"><span>Frames</span><input data-duration type="number" min="1" max="600" step="1" value="${DEFAULT_TIMELINE_FRAMES}" /></label>`,
       '</div>',
-      '<span class="timeline-status" data-mixamo-status>Mixamo: none</span>',
+      '<span class="timeline-status" data-mixamo-status>FBX: none</span>',
       '<span class="timeline-status" data-ragdoll-status>Ragdoll: off</span>',
       '</div>',
       '<div class="timeline-grid timeline-midi">',
@@ -2732,7 +3032,39 @@ export class EditorApp {
     ) as HTMLSelectElement;
     const levelSnapInput = hud.querySelector('[data-level-snap]') as HTMLInputElement;
     const levelFocusBtn = hud.querySelector('[data-level-focus]') as HTMLButtonElement;
+    const levelTerrainPreset = hud.querySelector('[data-level-terrain-preset]') as HTMLSelectElement;
+    const levelTerrainSize = hud.querySelector('[data-level-terrain-size]') as HTMLInputElement;
+    const levelTerrainRes = hud.querySelector('[data-level-terrain-res]') as HTMLInputElement;
+    const levelTerrainHeight = hud.querySelector('[data-level-terrain-height]') as HTMLInputElement;
+    const levelTerrainRoughness = hud.querySelector(
+      '[data-level-terrain-roughness]',
+    ) as HTMLInputElement;
+    const levelTerrainSeed = hud.querySelector('[data-level-terrain-seed]') as HTMLInputElement;
+    const levelTerrainGenerateBtn = hud.querySelector(
+      '[data-level-terrain-generate]',
+    ) as HTMLButtonElement;
+    const levelTerrainAppendBtn = hud.querySelector(
+      '[data-level-terrain-append]',
+    ) as HTMLButtonElement;
+    const levelTerrainClearBtn = hud.querySelector(
+      '[data-level-terrain-clear]',
+    ) as HTMLButtonElement;
+    const levelTerrainStatus = hud.querySelector('[data-level-terrain-status]') as HTMLDivElement;
     const levelStatus = hud.querySelector('[data-level-status]') as HTMLDivElement;
+    const levelCameraModeBtn = hud.querySelector(
+      '[data-level-camera-mode]',
+    ) as HTMLButtonElement | null;
+    this.levelCameraModeButton = levelCameraModeBtn;
+    this.setLevelCameraMode('free');
+    levelCameraModeBtn?.addEventListener('click', () => {
+      this.setLevelCameraMode(this.levelCameraMode === 'free' ? 'locked' : 'free');
+      if (levelStatus) {
+        levelStatus.textContent =
+          this.levelCameraMode === 'free'
+            ? 'Camera mode: free fly'
+            : 'Camera mode: object locked';
+      }
+    });
 
     // Settings tab controls
     const consolePresetSelect = hud.querySelector('[data-console-preset]') as HTMLSelectElement;
@@ -2776,6 +3108,17 @@ export class EditorApp {
       sceneList.value = entry.name;
       sceneNameInput.value = entry.name;
       sceneObstacles.value = JSON.stringify(entry.obstacles ?? [], null, 2);
+      const terrain = this.normalizeLevelGround(entry.ground)?.terrain;
+      if (terrain) {
+        levelTerrainPreset.value = terrain.preset ?? 'cinematic';
+        levelTerrainSize.value = String(Math.max(16, Number(terrain.size ?? 96)));
+        levelTerrainRes.value = String(Math.max(8, Number(terrain.resolution ?? 28)));
+        levelTerrainHeight.value = String(Math.max(1, Number(terrain.maxHeight ?? 10)));
+        levelTerrainRoughness.value = String(
+          Math.max(0.2, Math.min(0.95, Number(terrain.roughness ?? 0.56))),
+        );
+        levelTerrainSeed.value = String(Math.floor(Number(terrain.seed ?? 1337)));
+      }
       syncSceneJson();
       // Update level scene visualization
       this.updateLevelVisualization(entry.obstacles ?? []);
@@ -2987,6 +3330,84 @@ export class EditorApp {
       );
       this.controls.update();
     });
+
+    const setTerrainStatus = (text: string, tone: 'ok' | 'warn' = 'ok') => {
+      if (!levelTerrainStatus) return;
+      levelTerrainStatus.textContent = text;
+      levelTerrainStatus.dataset.tone = tone;
+    };
+
+    const runTerrainGeneration = (mode: 'apply' | 'remix' | 'clear') => {
+      const scene = this.getCurrentLevelSceneEntry();
+      if (!scene) {
+        setTerrainStatus('No level scene loaded', 'warn');
+        return;
+      }
+      const currentObstacles = scene.obstacles ?? [];
+      if (mode === 'clear') {
+        const nextGround = this.normalizeLevelGround(scene.ground ?? undefined);
+        if (nextGround?.terrain) {
+          nextGround.terrain.enabled = false;
+          scene.ground = nextGround;
+        }
+        scene.obstacles = currentObstacles.filter((item, idx) => {
+          const id = this.normalizeLevelObstacle(item ?? {}, idx).id;
+          return !id.startsWith('terrain_');
+        });
+        this.updateLevelVisualization(scene.obstacles);
+        this.syncLevelTextEditors();
+        setTerrainStatus('Cleared terrain mesh and legacy terrain blocks', 'ok');
+        if (levelStatus) levelStatus.textContent = 'Terrain mesh cleared';
+        return;
+      }
+
+      const size = Number(levelTerrainSize.value) || 96;
+      const resolution = Number(levelTerrainRes.value) || 28;
+      const maxHeight = Number(levelTerrainHeight.value) || 10;
+      const roughness = Number(levelTerrainRoughness.value) || 0.56;
+      const currentSeed = Math.floor(Number(levelTerrainSeed.value) || 1337);
+      const seed =
+        mode === 'remix' ? Math.floor(1000 + Math.random() * 999999) : Math.floor(currentSeed);
+      if (mode === 'remix') {
+        levelTerrainSeed.value = String(seed);
+      }
+      const nextGround: NormalizedLevelGround = this.normalizeLevelGround(scene.ground) ?? {
+        type: 'concrete',
+        width: size + 12,
+        depth: size + 12,
+        y: 0,
+        textureRepeat: 12,
+      };
+      nextGround.width = Math.max(nextGround.width, size + 12);
+      nextGround.depth = Math.max(nextGround.depth, size + 12);
+      nextGround.terrain = {
+        enabled: true,
+        preset: (levelTerrainPreset.value as 'cinematic' | 'alpine' | 'dunes' | 'islands') || 'cinematic',
+        size,
+        resolution,
+        maxHeight,
+        roughness,
+        seed,
+      };
+      scene.ground = nextGround;
+      // Clear legacy generated block terrain from previous implementation.
+      scene.obstacles = currentObstacles.filter((item, idx) => {
+        const id = this.normalizeLevelObstacle(item ?? {}, idx).id;
+        return !id.startsWith('terrain_');
+      });
+
+      this.updateLevelVisualization(scene.obstacles);
+      this.syncLevelTextEditors();
+      setTerrainStatus(
+        `${mode === 'remix' ? 'Remixed' : 'Applied'} ${levelTerrainPreset.value} mesh (seed ${seed})`,
+        'ok',
+      );
+      if (levelStatus) levelStatus.textContent = `Terrain mesh ready (${levelTerrainPreset.value})`;
+    };
+
+    levelTerrainGenerateBtn?.addEventListener('click', () => runTerrainGeneration('apply'));
+    levelTerrainAppendBtn?.addEventListener('click', () => runTerrainGeneration('remix'));
+    levelTerrainClearBtn?.addEventListener('click', () => runTerrainGeneration('clear'));
 
     void loadScenes();
 
@@ -4320,7 +4741,7 @@ export class EditorApp {
 
     mixamoStop.addEventListener('click', () => {
       this.stopMixamoPreview();
-      mixamoStatus.textContent = 'Mixamo: stopped';
+      mixamoStatus.textContent = 'FBX: stopped';
     });
 
     mixamoBake.addEventListener('click', () => {
@@ -5818,6 +6239,12 @@ export class EditorApp {
     if (!this.viewport) return;
     this.sanitizeTransformControls();
     if (this.currentTab === 'level') {
+      if (event.button === 2 && this.levelCameraMode === 'free') {
+        event.preventDefault();
+        this.startLevelFreeFly(event);
+        return;
+      }
+      if (event.button !== 0) return;
       if (this.levelTransform?.dragging || this.isTransformGizmoActive(this.levelTransform)) {
         return;
       }
@@ -6087,25 +6514,59 @@ export class EditorApp {
     if (!this.vrm) return;
     const arrayBuffer = await file.arrayBuffer();
     const object = this.fbxLoader.parse(arrayBuffer, '');
-    const clip = object.animations?.[0];
-    if (!clip) {
-      status.textContent = 'Mixamo: no animation found';
+    const clips = Array.isArray(object.animations) ? object.animations : [];
+    if (clips.length === 0) {
+      status.textContent = 'FBX: no animation found';
       return;
     }
-    const entry: MixamoEntry = {
-      name: file.name.replace(/\.fbx$/i, ''),
-      clip,
-      rig: object,
+    const source: MixamoEntry['source'] = (() => {
+      const names = new Set<string>();
+      object.traverse((node) => {
+        const raw = node.name?.toLowerCase?.() ?? '';
+        if (raw) names.add(raw);
+      });
+      if ([...names].some((n) => n.includes('mixamorig'))) return 'mixamo';
+      return 'generic';
+    })();
+
+    let loaded = 0;
+    const baseName = file.name.replace(/\.fbx$/i, '');
+    const ensureUniqueName = (candidate: string) => {
+      let name = candidate;
+      let i = 2;
+      while (this.mixamoEntries.some((entry) => entry.name === name)) {
+        name = `${candidate}_${i}`;
+        i += 1;
+      }
+      return name;
     };
-    this.mixamoEntries.push(entry);
-    const option = document.createElement('option');
-    option.value = entry.name;
-    option.textContent = entry.name;
-    select.appendChild(option);
-    if (!select.value) select.value = entry.name;
-    status.textContent = `Mixamo: loaded ${entry.name}`;
-    if (previewStatus && this.currentMixamo == null) {
-      this.previewMixamo(entry.name, previewStatus);
+    for (const [index, clip] of clips.entries()) {
+      const clipName = (clip.name || '').trim();
+      const entryName = ensureUniqueName(
+        clipName && clipName.toLowerCase() !== 'take 001'
+          ? `${baseName}_${clipName.replace(/\s+/g, '_')}`
+          : clips.length > 1
+            ? `${baseName}_clip_${index + 1}`
+            : baseName,
+      );
+      const entry: MixamoEntry = {
+        name: entryName,
+        clip,
+        rig: object,
+        source,
+      };
+      this.mixamoEntries.push(entry);
+      const option = document.createElement('option');
+      option.value = entry.name;
+      option.textContent = entry.name;
+      option.dataset.source = source;
+      select.appendChild(option);
+      loaded += 1;
+      if (!select.value) select.value = entry.name;
+    }
+    status.textContent = `FBX: loaded ${loaded} clip${loaded > 1 ? 's' : ''} from ${baseName} (${source})`;
+    if (previewStatus && this.currentMixamo == null && select.value) {
+      this.previewMixamo(select.value, previewStatus);
     }
   }
 
@@ -6130,7 +6591,7 @@ export class EditorApp {
     this.currentMixamo = this.mixer.clipAction(retargeted);
     this.currentMixamo.setLoop(THREE.LoopRepeat, Infinity);
     this.currentMixamo.play();
-    status.textContent = `Mixamo: preview ${entry.name}`;
+    status.textContent = `FBX: preview ${entry.name} (${entry.source})`;
   }
 
   private stopMixamoPreview() {
@@ -6210,7 +6671,7 @@ export class EditorApp {
       overrideEndHandle,
       this.overrideMode,
     );
-    status.textContent = `Mixamo: baked ${entry.name}`;
+    status.textContent = `FBX: baked ${entry.name} (${entry.source})`;
   }
 
   private buildAnimationClip() {

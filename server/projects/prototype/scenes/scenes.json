@@ -2,13 +2,32 @@
   "scenes": [
     {
       "name": "prototype",
-      "obstacles": [],
+      "obstacles": [
+        {
+          "id": "obstacle_1",
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "width": 1,
+          "height": 1,
+          "depth": 1
+        }
+      ],
       "ground": {
         "type": "concrete",
-        "width": 120,
-        "depth": 120,
+        "width": 1012,
+        "depth": 1012,
         "y": 0,
-        "textureRepeat": 12
+        "textureRepeat": 12,
+        "terrain": {
+          "enabled": true,
+          "preset": "dunes",
+          "size": 1000,
+          "resolution": 256,
+          "maxHeight": 15,
+          "roughness": 0.56,
+          "seed": 1337
+        }
       },
       "player": {
         "avatar": "default.vrm",

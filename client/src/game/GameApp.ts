@@ -48,12 +48,32 @@ import {
   type Vec3,
 } from '@sleepy/shared';
 
+type TerrainPreset = 'cinematic' | 'alpine' | 'dunes' | 'islands';
+type SceneGroundTerrainConfig = {
+  enabled: boolean;
+  preset: TerrainPreset;
+  size: number;
+  resolution: number;
+  maxHeight: number;
+  roughness: number;
+  seed: number;
+};
+type SceneGroundConfig = {
+  type: 'concrete';
+  width: number;
+  depth: number;
+  y: number;
+  textureRepeat: number;
+  terrain?: SceneGroundTerrainConfig;
+};
+
 export class GameApp {
   private sceneName: string;
   private gameId: string;
   private obstacles: Obstacle[] = [];
   private obstacleGroup: THREE.Group | null = null;
   private groundMesh: THREE.Mesh | null = null;
+  private groundConfig: SceneGroundConfig | null = null;
   private playerConfig = {
     avatar: '',
     ikOffset: 0.02,
@@ -291,7 +311,7 @@ export class GameApp {
       this.emitCameraSettingsChange();
     }
   };
-  private parseSceneGround(input: unknown) {
+  private parseSceneGround(input: unknown): SceneGroundConfig | null {
     if (!input || typeof input !== 'object') return null;
     const ground = input as {
       type?: string;
@@ -299,13 +319,34 @@ export class GameApp {
       depth?: number;
       y?: number;
       textureRepeat?: number;
+      terrain?: {
+        enabled?: boolean;
+        preset?: string;
+        size?: number;
+        resolution?: number;
+        maxHeight?: number;
+        roughness?: number;
+        seed?: number;
+      };
     };
+    const terrain = ground.terrain
+      ? {
+          enabled: ground.terrain.enabled === true,
+          preset: (ground.terrain.preset ?? 'cinematic') as TerrainPreset,
+          size: Math.max(16, Number(ground.terrain.size ?? ground.width ?? 120)),
+          resolution: Math.max(8, Math.min(128, Number(ground.terrain.resolution ?? 48))),
+          maxHeight: Math.max(1, Number(ground.terrain.maxHeight ?? 12)),
+          roughness: Math.max(0.2, Math.min(0.95, Number(ground.terrain.roughness ?? 0.56))),
+          seed: Math.floor(Number(ground.terrain.seed ?? 1337)),
+        }
+      : undefined;
     return {
       type: 'concrete',
       width: Math.max(1, Number(ground.width ?? 120)),
       depth: Math.max(1, Number(ground.depth ?? 120)),
       y: Number(ground.y ?? 0),
       textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+      terrain,
     };
   }
 
@@ -697,8 +738,103 @@ export class GameApp {
     return group;
   }
 
-  private createGround(config: { width: number; depth: number; y: number; textureRepeat: number }) {
-    const geometry = new THREE.PlaneGeometry(config.width, config.depth, 1, 1);
+  private terrainHash2d(x: number, z: number, seed: number) {
+    const value = Math.sin(x * 127.1 + z * 311.7 + seed * 74.7) * 43758.5453123;
+    return value - Math.floor(value);
+  }
+
+  private terrainNoise2d(x: number, z: number, seed: number) {
+    const x0 = Math.floor(x);
+    const z0 = Math.floor(z);
+    const x1 = x0 + 1;
+    const z1 = z0 + 1;
+    const tx = x - x0;
+    const tz = z - z0;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sz = tz * tz * (3 - 2 * tz);
+    const n00 = this.terrainHash2d(x0, z0, seed);
+    const n10 = this.terrainHash2d(x1, z0, seed);
+    const n01 = this.terrainHash2d(x0, z1, seed);
+    const n11 = this.terrainHash2d(x1, z1, seed);
+    const ix0 = n00 + (n10 - n00) * sx;
+    const ix1 = n01 + (n11 - n01) * sx;
+    return ix0 + (ix1 - ix0) * sz;
+  }
+
+  private terrainFbm(x: number, z: number, seed: number, octaves: number, roughness: number) {
+    let sum = 0;
+    let amp = 0.5;
+    let freq = 1;
+    let norm = 0;
+    for (let i = 0; i < octaves; i += 1) {
+      sum += this.terrainNoise2d(x * freq, z * freq, seed + i * 17.41) * amp;
+      norm += amp;
+      amp *= roughness;
+      freq *= 2;
+    }
+    return norm > 0 ? sum / norm : 0;
+  }
+
+  private sampleTerrainHeight(options: {
+    preset: TerrainPreset;
+    size: number;
+    maxHeight: number;
+    roughness: number;
+    seed: number;
+    x: number;
+    z: number;
+  }) {
+    const size = Math.max(16, Math.min(320, options.size));
+    const maxHeight = Math.max(1, Math.min(64, options.maxHeight));
+    const roughness = Math.max(0.2, Math.min(0.95, options.roughness));
+    const nx = options.x / size;
+    const nz = options.z / size;
+    const macro = this.terrainFbm(nx * 4.2, nz * 4.2, options.seed, 5, roughness);
+    const detail = this.terrainFbm(nx * 10.5, nz * 10.5, options.seed + 101, 3, roughness);
+    const ridge = 1 - Math.abs(2 * this.terrainFbm(nx * 6.5, nz * 6.5, options.seed + 53, 4, 0.6) - 1);
+    const radius = Math.sqrt(nx * nx + nz * nz);
+    const islandMask = Math.max(0, 1 - Math.min(1, Math.pow(radius / 0.68, 2.4)));
+    const spawnMask = Math.min(1, Math.max(0, (radius - 0.09) / 0.16));
+
+    let elevation = macro * 0.68 + detail * 0.22 + ridge * 0.35;
+    if (options.preset === 'alpine') elevation = macro * 0.55 + ridge * 0.6 + detail * 0.25;
+    if (options.preset === 'dunes') elevation = macro * 0.45 + detail * 0.2;
+    if (options.preset === 'islands') elevation = (macro * 0.58 + ridge * 0.26) * islandMask;
+    if (options.preset === 'cinematic') {
+      elevation = (macro * 0.64 + ridge * 0.4 + detail * 0.18) * (0.55 + islandMask * 0.45);
+    }
+    elevation *= spawnMask;
+    return Math.max(0, elevation * maxHeight);
+  }
+
+  private createGround(config: SceneGroundConfig) {
+    const terrain = config.terrain?.enabled ? config.terrain : null;
+    const width = terrain ? Math.max(16, Number(terrain.size ?? config.width)) : config.width;
+    const depth = terrain ? Math.max(16, Number(terrain.size ?? config.depth)) : config.depth;
+    const resolution = terrain
+      ? Math.max(8, Math.min(128, Math.floor(Number(terrain.resolution ?? 48))))
+      : 1;
+    const geometry = new THREE.PlaneGeometry(width, depth, resolution, resolution);
+    geometry.rotateX(-Math.PI / 2);
+    if (terrain) {
+      const position = geometry.getAttribute('position');
+      for (let i = 0; i < position.count; i += 1) {
+        const x = position.getX(i);
+        const z = position.getZ(i);
+        const h = this.sampleTerrainHeight({
+          preset: terrain.preset,
+          size: terrain.size,
+          maxHeight: terrain.maxHeight,
+          roughness: terrain.roughness,
+          seed: terrain.seed,
+          x,
+          z,
+        });
+        position.setY(i, h);
+      }
+      position.needsUpdate = true;
+      geometry.computeVertexNormals();
+    }
     const texture = this.createConcreteTexture();
     texture.repeat.set(config.textureRepeat, config.textureRepeat);
     const material = new THREE.MeshStandardMaterial({
@@ -706,9 +842,9 @@ export class GameApp {
       roughness: 0.95,
       metalness: 0.05,
       color: 0xffffff,
+      flatShading: terrain !== null,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.rotation.x = -Math.PI / 2;
     mesh.position.y = config.y;
     return mesh;
   }
@@ -795,7 +931,15 @@ export class GameApp {
   }
 
   private sampleGroundHeight(x: number, z: number) {
-    let height = GROUND_Y;
+    const terrain = this.groundConfig?.terrain?.enabled ? this.groundConfig.terrain : null;
+    const baseHeight = this.groundConfig?.y ?? GROUND_Y;
+    let height = baseHeight;
+    if (terrain) {
+      const terrainHalf = Math.max(16, terrain.size) * 0.5;
+      if (Math.abs(x) <= terrainHalf && Math.abs(z) <= terrainHalf) {
+        height = baseHeight + this.sampleTerrainHeight({ ...terrain, x, z });
+      }
+    }
     for (const obstacle of this.obstacles) {
       const halfX = obstacle.size.x / 2;
       const halfZ = obstacle.size.z / 2;
@@ -1168,7 +1312,9 @@ export class GameApp {
   private async connect() {
     try {
       await this.roomClient.connect({ gameId: this.gameId, sceneName: this.sceneName });
-      this.localId = this.roomClient.getSessionId();
+      const sessionId = this.roomClient.getSessionId();
+      if (!sessionId) return;
+      this.localId = sessionId;
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
       this.roomClient.onCrowd((snapshot) => {
@@ -1394,11 +1540,20 @@ export class GameApp {
       resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, pos, PLAYER_RADIUS);
     }
 
+    const floor = this.sampleGroundHeight(resolved.x, resolved.z);
+    const terrainStickRange = 0.7;
+    const isNearGround = resolved.y <= floor + terrainStickRange;
+    if (isNearGround && this.localVelocityY <= 0) {
+      const stickStrength = Math.min(1, delta * 18);
+      resolved.y = THREE.MathUtils.lerp(resolved.y, floor, stickStrength);
+      if (Math.abs(resolved.y - floor) < 0.015) {
+        resolved.y = floor;
+      }
+      this.localVelocityY = 0;
+    }
+
     this.localPlayer.position.x = resolved.x;
-    this.localPlayer.position.y = Math.max(
-      resolved.y,
-      this.sampleGroundHeight(resolved.x, resolved.z),
-    );
+    this.localPlayer.position.y = Math.max(resolved.y, floor - 0.02);
     this.localPlayer.position.z = resolved.z;
   }
 
@@ -1616,6 +1771,16 @@ export class GameApp {
   };
 
   private syncRemotePlayers(snapshot: WorldSnapshot) {
+    if (this.localId) {
+      const staleLocalEntry = this.remotePlayers.get(this.localId);
+      if (staleLocalEntry) {
+        this.scene.remove(staleLocalEntry.mesh);
+        this.remotePlayers.delete(this.localId);
+        this.remoteLatest.delete(this.localId);
+        this.remoteLatestVel.delete(this.localId);
+        this.remoteLatestAnim.delete(this.localId);
+      }
+    }
     this.setHud('players', `players: ${Object.keys(snapshot.players).length}`);
     this.statusLines.heat = this.formatHeat(snapshot.heat);
     this.statusLines.phase = `Phase: ${snapshot.phase}`;
@@ -1797,6 +1962,11 @@ export class GameApp {
           y: older.velocity.y,
           z: older.velocity.z * dampingFactor,
         });
+        const floor = this.sampleGroundHeight(mesh.position.x, mesh.position.z);
+        if (mesh.position.y <= floor + 0.75 && older.velocity.y <= 1.0) {
+          mesh.position.y = THREE.MathUtils.lerp(mesh.position.y, floor, 0.3);
+          if (Math.abs(mesh.position.y - floor) < 0.015) mesh.position.y = floor;
+        }
         continue;
       }
 
@@ -1819,6 +1989,11 @@ export class GameApp {
         y: latest.velocity.y,
         z: latest.velocity.z,
       });
+      const floor = this.sampleGroundHeight(mesh.position.x, mesh.position.z);
+      if (mesh.position.y <= floor + 0.75 && latest.velocity.y <= 1.0) {
+        mesh.position.y = THREE.MathUtils.lerp(mesh.position.y, floor, 0.3);
+        if (Math.abs(mesh.position.y - floor) < 0.015) mesh.position.y = floor;
+      }
     }
   }
 
@@ -1972,7 +2147,7 @@ export class GameApp {
   }
 
   private rebuildGroundMesh(
-    groundConfig: { width: number; depth: number; y: number; textureRepeat: number } | null,
+    groundConfig: SceneGroundConfig | null,
   ) {
     if (this.groundMesh) {
       this.scene.remove(this.groundMesh);
@@ -1983,6 +2158,7 @@ export class GameApp {
       }
       this.groundMesh = null;
     }
+    this.groundConfig = groundConfig;
     if (!groundConfig) return;
     this.groundMesh = this.createGround(groundConfig);
     this.scene.add(this.groundMesh);

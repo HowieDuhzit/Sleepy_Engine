@@ -17,6 +17,28 @@ type SceneConfig = {
   name: string;
   obstacles?: SceneObstacle[];
   crowd?: { enabled?: boolean };
+  ground?: {
+    y?: number;
+    terrain?: {
+      enabled?: boolean;
+      preset?: 'cinematic' | 'alpine' | 'dunes' | 'islands';
+      size?: number;
+      resolution?: number;
+      maxHeight?: number;
+      roughness?: number;
+      seed?: number;
+    };
+  };
+};
+
+type SceneGroundTerrainConfig = {
+  enabled: boolean;
+  preset: 'cinematic' | 'alpine' | 'dunes' | 'islands';
+  size: number;
+  resolution: number;
+  maxHeight: number;
+  roughness: number;
+  seed: number;
 };
 
 const defaultGameId = 'prototype';
@@ -75,9 +97,23 @@ export const loadSceneConfig = async (options?: { gameId?: string; sceneName?: s
       ? scene.obstacles.map((obs, index) => toObstacle(obs, index))
       : [];
     const crowdEnabled = scene?.crowd?.enabled === true;
-    return { obstacles, crowdEnabled };
+    const groundY = asNumber(scene?.ground?.y, 0);
+    const terrainRaw = scene?.ground?.terrain;
+    const terrain: SceneGroundTerrainConfig | null =
+      terrainRaw && terrainRaw.enabled === true
+        ? {
+            enabled: true,
+            preset: (terrainRaw.preset ?? 'cinematic') as SceneGroundTerrainConfig['preset'],
+            size: Math.max(16, asNumber(terrainRaw.size, 120)),
+            resolution: Math.max(8, Math.min(128, asNumber(terrainRaw.resolution, 48))),
+            maxHeight: Math.max(1, asNumber(terrainRaw.maxHeight, 12)),
+            roughness: Math.max(0.2, Math.min(0.95, asNumber(terrainRaw.roughness, 0.56))),
+            seed: Math.floor(asNumber(terrainRaw.seed, 1337)),
+          }
+        : null;
+    return { obstacles, crowdEnabled, groundY, terrain };
   } catch {
-    return { obstacles: [], crowdEnabled: false };
+    return { obstacles: [], crowdEnabled: false, groundY: 0, terrain: null };
   }
 };
 

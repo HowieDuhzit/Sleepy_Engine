@@ -25,7 +25,10 @@ const gameServer = redisUrl
     })
   : new Server();
 
-gameServer.define('riot_room', RiotRoom).enableRealtimeListing();
+gameServer
+  .define('riot_room', RiotRoom)
+  .filterBy(['gameId', 'sceneName'])
+  .enableRealtimeListing();
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -118,6 +121,51 @@ const scenesPayloadSchema = z.object({
     .max(500),
 });
 
+const socialClientIdSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(64)
+  .regex(/^[a-z0-9_-]+$/i);
+const socialProfileSchema = z.object({
+  clientId: socialClientIdSchema,
+  displayName: z.string().trim().min(1).max(24),
+  status: z.string().trim().min(1).max(64),
+  bio: z.string().trim().max(220),
+});
+const socialMessageSchema = z.object({
+  clientId: socialClientIdSchema,
+  friendId: socialClientIdSchema,
+  text: z.string().trim().min(1).max(220),
+});
+const socialAddFriendSchema = z.object({
+  clientId: socialClientIdSchema,
+  friendId: socialClientIdSchema,
+});
+
+type SocialProfile = {
+  id: string;
+  displayName: string;
+  status: string;
+  bio: string;
+  updatedAt: string;
+  lastSeenAt: string;
+};
+
+type SocialMessage = {
+  id: string;
+  from: string;
+  to: string;
+  text: string;
+  createdAt: string;
+};
+
+type SocialState = {
+  profiles: Record<string, SocialProfile>;
+  messages: SocialMessage[];
+  friends: Record<string, string[]>;
+};
+
 app.get('/api/db/health', async (_req: Request, res: Response) => {
   const status = await dbHealth();
   res.json(status);
@@ -159,6 +207,83 @@ const safeGameId = (id: string) => {
 };
 
 const cacheKey = (...parts: string[]) => `sleepy:${parts.join(':')}`;
+const socialDir = path.join(serverDir, 'social');
+const socialStateFile = path.join(socialDir, 'state.json');
+
+const ensureSocialDir = async () => {
+  await fs.mkdir(socialDir, { recursive: true });
+};
+
+const readSocialState = async (): Promise<SocialState> => {
+  await ensureSocialDir();
+  try {
+    const raw = await fs.readFile(socialStateFile, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<SocialState>;
+    return {
+      profiles: parsed.profiles ?? {},
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      friends:
+        parsed.friends && typeof parsed.friends === 'object'
+          ? (parsed.friends as Record<string, string[]>)
+          : {},
+    };
+  } catch {
+    return { profiles: {}, messages: [], friends: {} };
+  }
+};
+
+const writeSocialState = async (state: SocialState) => {
+  await ensureSocialDir();
+  await fs.writeFile(socialStateFile, JSON.stringify(state, null, 2));
+};
+
+const sanitizeClientId = (id: string) => safeGameId(id).slice(0, 64);
+const defaultProfileFor = (clientId: string): SocialProfile => ({
+  id: clientId,
+  displayName: `Player ${clientId.slice(-4).toUpperCase()}`,
+  status: 'Online',
+  bio: '',
+  updatedAt: new Date().toISOString(),
+  lastSeenAt: new Date().toISOString(),
+});
+
+const toSocialView = (state: SocialState, clientId: string) => {
+  const nowMs = Date.now();
+  const self = state.profiles[clientId] ?? defaultProfileFor(clientId);
+  const friendIds = Array.from(new Set(state.friends[clientId] ?? []));
+  const friends = friendIds
+    .map((friendId) => state.profiles[friendId] ?? defaultProfileFor(friendId))
+    .sort((a, b) => {
+      return (
+        new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime() ||
+        a.displayName.localeCompare(b.displayName)
+      );
+    })
+    .map((profile) => ({
+      id: profile.id,
+      name: profile.displayName,
+      status: profile.status,
+      online: nowMs - new Date(profile.lastSeenAt).getTime() < 120_000,
+    }));
+
+  const chats: Record<string, SocialMessage[]> = {};
+  for (const message of state.messages) {
+    if (message.from !== clientId && message.to !== clientId) continue;
+    const friendId = message.from === clientId ? message.to : message.from;
+    if (!chats[friendId]) chats[friendId] = [];
+    chats[friendId]?.push(message);
+  }
+
+  for (const key of Object.keys(chats)) {
+    chats[key] = (chats[key] ?? []).slice(-80);
+  }
+
+  return {
+    profile: self,
+    friends,
+    chats,
+  };
+};
 const readGameMeta = async (gameId: string) => {
   const gameMetaPath = path.join(gamesDir, gameId, 'game.json');
   const legacyMetaPath = path.join(gamesDir, gameId, 'project.json');
@@ -596,6 +721,148 @@ app.post('/api/games/:gameId/scenes', requireAdmin, async (req: Request, res: Re
     res.json({ ok: true, file: 'scenes.json' });
   } catch (err) {
     res.status(500).json({ error: 'failed_to_save', detail: String(err) });
+  }
+});
+
+// SOCIAL API
+app.get('/api/social/state', async (req: Request, res: Response) => {
+  try {
+    const parsed = socialClientIdSchema.safeParse(req.query.clientId);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_client_id', detail: parsed.error.flatten() });
+      return;
+    }
+    const clientId = sanitizeClientId(parsed.data);
+    if (!clientId) {
+      res.status(400).json({ error: 'invalid_client_id' });
+      return;
+    }
+
+    const state = await readSocialState();
+    const existing = state.profiles[clientId];
+    const now = new Date().toISOString();
+    state.profiles[clientId] = existing
+      ? { ...existing, lastSeenAt: now }
+      : defaultProfileFor(clientId);
+    if (!existing) {
+      state.profiles[clientId].lastSeenAt = now;
+      await writeSocialState(state);
+    } else {
+      await writeSocialState(state);
+    }
+
+    res.json(toSocialView(state, clientId));
+  } catch (err) {
+    res.status(500).json({ error: 'social_state_failed', detail: String(err) });
+  }
+});
+
+app.post('/api/social/profile', async (req: Request, res: Response) => {
+  try {
+    const parsed = socialProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+    const payload = parsed.data;
+    const clientId = sanitizeClientId(payload.clientId);
+    if (!clientId) {
+      res.status(400).json({ error: 'invalid_client_id' });
+      return;
+    }
+
+    const state = await readSocialState();
+    const prev = state.profiles[clientId] ?? defaultProfileFor(clientId);
+    state.profiles[clientId] = {
+      ...prev,
+      id: clientId,
+      displayName: payload.displayName,
+      status: payload.status,
+      bio: payload.bio,
+      updatedAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString(),
+    };
+    await writeSocialState(state);
+    res.json({ ok: true, profile: state.profiles[clientId] });
+  } catch (err) {
+    res.status(500).json({ error: 'social_profile_failed', detail: String(err) });
+  }
+});
+
+app.post('/api/social/messages', async (req: Request, res: Response) => {
+  try {
+    const parsed = socialMessageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+    const payload = parsed.data;
+    const clientId = sanitizeClientId(payload.clientId);
+    const friendId = sanitizeClientId(payload.friendId);
+    if (!clientId || !friendId || clientId === friendId) {
+      res.status(400).json({ error: 'invalid_participants' });
+      return;
+    }
+
+    const state = await readSocialState();
+    if (!state.profiles[clientId]) state.profiles[clientId] = defaultProfileFor(clientId);
+    if (!state.profiles[friendId]) state.profiles[friendId] = defaultProfileFor(friendId);
+    if (!state.friends[clientId]) state.friends[clientId] = [];
+    if (!state.friends[friendId]) state.friends[friendId] = [];
+
+    const now = new Date().toISOString();
+    state.profiles[clientId].lastSeenAt = now;
+    state.profiles[friendId].lastSeenAt = state.profiles[friendId].lastSeenAt || now;
+
+    const message: SocialMessage = {
+      id: randomUUID(),
+      from: clientId,
+      to: friendId,
+      text: payload.text,
+      createdAt: now,
+    };
+    state.messages.push(message);
+    if (state.messages.length > 5000) {
+      state.messages = state.messages.slice(-5000);
+    }
+    await writeSocialState(state);
+    res.json({ ok: true, message });
+  } catch (err) {
+    res.status(500).json({ error: 'social_message_failed', detail: String(err) });
+  }
+});
+
+app.post('/api/social/friends', async (req: Request, res: Response) => {
+  try {
+    const parsed = socialAddFriendSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+    const payload = parsed.data;
+    const clientId = sanitizeClientId(payload.clientId);
+    const friendId = sanitizeClientId(payload.friendId);
+    if (!clientId || !friendId || clientId === friendId) {
+      res.status(400).json({ error: 'invalid_participants' });
+      return;
+    }
+
+    const state = await readSocialState();
+    if (!state.profiles[clientId]) state.profiles[clientId] = defaultProfileFor(clientId);
+    if (!state.profiles[friendId]) state.profiles[friendId] = defaultProfileFor(friendId);
+    if (!state.friends[clientId]) state.friends[clientId] = [];
+    if (!state.friends[friendId]) state.friends[friendId] = [];
+
+    if (!state.friends[clientId].includes(friendId)) state.friends[clientId].push(friendId);
+    if (!state.friends[friendId].includes(clientId)) state.friends[friendId].push(clientId);
+
+    const now = new Date().toISOString();
+    state.profiles[clientId].lastSeenAt = now;
+    state.profiles[friendId].lastSeenAt = now;
+    await writeSocialState(state);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'social_add_friend_failed', detail: String(err) });
   }
 });
 

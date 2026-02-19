@@ -78,9 +78,40 @@ export function retargetMixamoClip(
     mixamorigRightLeg: 'rightLowerLeg',
     mixamorigRightFoot: 'rightFoot',
     mixamorigRightToeBase: 'rightToes',
+    // Common alternates
+    leftshoulder: 'leftShoulder',
+    leftarm: 'leftUpperArm',
+    leftforearm: 'leftLowerArm',
+    lefthand: 'leftHand',
+    rightshoulder: 'rightShoulder',
+    rightarm: 'rightUpperArm',
+    rightforearm: 'rightLowerArm',
+    righthand: 'rightHand',
+    leftupleg: 'leftUpperLeg',
+    leftleg: 'leftLowerLeg',
+    leftfoot: 'leftFoot',
+    lefttoebase: 'leftToes',
+    rightupleg: 'rightUpperLeg',
+    rightleg: 'rightLowerLeg',
+    rightfoot: 'rightFoot',
+    righttoebase: 'rightToes',
+  };
+  const normalizeTrackNodeName = (name: string) => {
+    const dotSplit = name.split('.')[0] ?? name;
+    const pathSplit = dotSplit.split(/[|/]/);
+    const node = pathSplit[pathSplit.length - 1] ?? dotSplit;
+    return node.trim();
+  };
+  const getTrackPathNodes = (name: string) => {
+    const dotSplit = name.split('.')[0] ?? name;
+    return dotSplit
+      .split(/[|/]/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
   };
   const normalizeMixamoName = (name: string) => {
     let cleaned = name;
+    cleaned = normalizeTrackNodeName(cleaned);
     cleaned = cleaned.replace(/^mixamorig1/i, 'mixamorig');
     cleaned = cleaned.replace(/^mixamorig[:_]/i, 'mixamorig');
     cleaned = cleaned.replace(/^MixamoRig/i, '');
@@ -90,9 +121,38 @@ export function retargetMixamoClip(
     if (/^(Hips|Spine|Spine1|Spine2|Neck|Head|Left|Right)/.test(cleaned)) {
       return `mixamorig${cleaned}`;
     }
-    return cleaned;
+    return cleaned.toLowerCase();
   };
+  const resolveMappedBone = (nodeName: string): HumanBoneName | undefined => {
+    const pathNodes = getTrackPathNodes(nodeName);
+    const pathNormalized = pathNodes.map((node) => normalizeMixamoName(node));
+    const clean = pathNormalized[pathNormalized.length - 1] ?? normalizeMixamoName(nodeName);
+    const direct = mixamoVRMRigMap[clean];
+    if (direct) return direct;
 
+    const pathJoined = pathNormalized.join('|');
+    const isLeft = /(_l\b|\bleft\b|mixamorigleft)/i.test(pathJoined);
+    const isRight = /(_r\b|\bright\b|mixamorigright)/i.test(pathJoined);
+    const side: 'left' | 'right' | null = isLeft && !isRight ? 'left' : isRight ? 'right' : null;
+    if (!side) return undefined;
+
+    if (clean.startsWith('thumb_01')) return side === 'left' ? 'leftThumbProximal' : 'rightThumbProximal';
+    if (clean.startsWith('thumb_02')) return side === 'left' ? 'leftThumbProximal' : 'rightThumbProximal';
+    if (clean.startsWith('thumb_03')) return side === 'left' ? 'leftThumbDistal' : 'rightThumbDistal';
+    if (clean.startsWith('indexfinger_01')) return side === 'left' ? 'leftIndexProximal' : 'rightIndexProximal';
+    if (clean.startsWith('indexfinger_02')) return side === 'left' ? 'leftIndexIntermediate' : 'rightIndexIntermediate';
+    if (clean.startsWith('indexfinger_03') || clean.startsWith('indexfinger_04')) {
+      return side === 'left' ? 'leftIndexDistal' : 'rightIndexDistal';
+    }
+    if (clean.startsWith('finger_01')) return side === 'left' ? 'leftMiddleProximal' : 'rightMiddleProximal';
+    if (clean.startsWith('finger_02')) {
+      return side === 'left' ? 'leftMiddleIntermediate' : 'rightMiddleIntermediate';
+    }
+    if (clean.startsWith('finger_03') || clean.startsWith('finger_04')) {
+      return side === 'left' ? 'leftMiddleDistal' : 'rightMiddleDistal';
+    }
+    return undefined;
+  };
   const humanoid = vrm.humanoid;
   const vrmMetaVersion = vrm.meta?.metaVersion ?? '1';
   const mixamoHips =
@@ -120,13 +180,12 @@ export function retargetMixamoClip(
   const parentRestWorldRotation = new THREE.Quaternion();
   const quatA = new THREE.Quaternion();
   const quatB = new THREE.Quaternion();
-
   const tracks: THREE.KeyframeTrack[] = [];
   for (const track of clip.tracks) {
     const [nodeName, property] = track.name.split('.');
     if (!nodeName || !property) continue;
     const clean = normalizeMixamoName(nodeName);
-    const vrmBone = mixamoVRMRigMap[clean];
+    const vrmBone = resolveMappedBone(nodeName);
     if (!vrmBone) continue;
     const vrmNormalizedNode = humanoid.getNormalizedBoneNode(vrmBone);
     const vrmRawNode = humanoid.getRawBoneNode(vrmBone);
@@ -135,12 +194,14 @@ export function retargetMixamoClip(
     vrmRawNode.name = vrmRawNodeName;
     const mixamoRigNode =
       mixamoRig.getObjectByName(nodeName) ??
+      mixamoRig.getObjectByName(normalizeTrackNodeName(nodeName)) ??
       mixamoRig.getObjectByName(clean) ??
       mixamoRig.getObjectByName(clean.replace(/^mixamorig/, 'mixamorig:'));
     if (!mixamoRigNode) continue;
     const times = track.times;
 
     if (track instanceof THREE.QuaternionKeyframeTrack) {
+      if (track.values.length < 4) continue;
       const newTrackValues = new Float32Array(track.values.length);
       mixamoRigNode.getWorldQuaternion(restRotationInverse).invert();
       mixamoRigNode.parent?.getWorldQuaternion(parentRestWorldRotation);
@@ -163,9 +224,7 @@ export function retargetMixamoClip(
       const values = Array.from(newTrackValues).map((v2, i) =>
         vrmMetaVersion === '0' && i % 2 === 0 ? -v2 : v2,
       );
-      tracks.push(
-        new THREE.QuaternionKeyframeTrack(`${vrmRawNodeName}.${property}`, times, values),
-      );
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${vrmRawNodeName}.${property}`, times, values));
     } else if (track instanceof THREE.VectorKeyframeTrack) {
       if (!includePosition) continue;
       const values = Array.from(track.values).map(

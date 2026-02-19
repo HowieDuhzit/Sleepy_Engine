@@ -5,14 +5,21 @@ export class RoomClient {
   private client: Client;
   private room: Room | null = null;
   private sessionId: string | null = null;
+  private lifecycleToken = 0;
 
   constructor(private endpoint: string) {
     this.client = new Client(endpoint);
   }
 
   async connect(options?: { gameId?: string; sceneName?: string }) {
-    this.room = await this.client.joinOrCreate('riot_room', options);
-    this.sessionId = this.room.sessionId;
+    const token = ++this.lifecycleToken;
+    const room = await this.client.joinOrCreate('riot_room', options);
+    if (token !== this.lifecycleToken) {
+      await room.leave();
+      return;
+    }
+    this.room = room;
+    this.sessionId = room.sessionId;
   }
 
   sendInput(input: PlayerInput) {
@@ -37,9 +44,14 @@ export class RoomClient {
   }
 
   async disconnect() {
-    if (!this.room) return;
-    await this.room.leave();
+    this.lifecycleToken += 1;
+    if (!this.room) {
+      this.sessionId = null;
+      return;
+    }
+    const room = this.room;
     this.room = null;
     this.sessionId = null;
+    await room.leave();
   }
 }
