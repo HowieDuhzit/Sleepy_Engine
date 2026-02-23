@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
-export interface PSXRendererSettings {
+export interface RetroRendererSettings {
   baseWidth: number;
   baseHeight: number;
   enabled: boolean;
   pixelated: boolean; // Use nearest-neighbor filtering
 }
 
-export class PSXRenderer {
+export class RetroRenderer {
   private renderer: THREE.WebGLRenderer;
   private lowResTarget: THREE.WebGLRenderTarget;
   private blitScene: THREE.Scene;
@@ -15,12 +15,12 @@ export class PSXRenderer {
   private blitQuad: THREE.Mesh;
   private blitMaterial: THREE.ShaderMaterial;
 
-  public settings: PSXRendererSettings;
+  public settings: RetroRendererSettings;
   private uniform<T>(key: string) {
     return this.blitMaterial.uniforms[key] as THREE.IUniform<T>;
   }
 
-  constructor(renderer: THREE.WebGLRenderer, settings: Partial<PSXRendererSettings> = {}) {
+  constructor(renderer: THREE.WebGLRenderer, settings: Partial<RetroRendererSettings> = {}) {
     this.renderer = renderer;
 
     // Default settings

@@ -1,9 +1,10 @@
 export type Vec3 = { x: number; y: number; z: number };
+export type BoxSize = Vec3;
 
 export type Obstacle = {
   id: string;
   position: Vec3;
-  size: { x: number; y: number; z: number };
+  size: BoxSize;
 };
 
 export type PlayerInput = {
@@ -19,6 +20,7 @@ export type PlayerInput = {
   interact: boolean;
   jump: boolean;
   crouch: boolean;
+  ragdoll?: boolean;
 };
 
 export type PlayerSnapshot = {
@@ -31,7 +33,9 @@ export type PlayerSnapshot = {
   lookPitch: number;
   animState: string;
   animTime: number;
+  // Facing/body yaw used for character orientation (separate from camera look).
   yaw: number;
+  ragdoll?: boolean;
 };
 
 export type WorldSnapshot = {
@@ -52,6 +56,14 @@ export type CrowdSnapshot = {
   agents: CrowdAgentSnapshot[];
 };
 
+export type ObstacleDynamicsSnapshot = {
+  obstacles: Array<{
+    id: string;
+    position: Vec3;
+    size: BoxSize;
+  }>;
+};
+
 export type ZoneHeat = {
   zoneId: string;
   heat: number;
@@ -62,6 +74,7 @@ export const PROTOCOL = {
   input: 'input',
   snapshot: 'snapshot',
   crowd: 'crowd',
+  obstacleDynamics: 'obstacle_dynamics',
   event: 'event',
 } as const;
 
@@ -165,3 +178,5 @@ export function resolveCircleCircle(
     z: position.z + dz * push,
   };
 }
+
+export * from './model-assets.js';

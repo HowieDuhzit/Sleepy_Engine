@@ -1,5 +1,11 @@
 import { Client, Room } from 'colyseus.js';
-import { PROTOCOL, PlayerInput, CrowdSnapshot, WorldSnapshot } from '@sleepy/shared';
+import {
+  PROTOCOL,
+  PlayerInput,
+  CrowdSnapshot,
+  WorldSnapshot,
+  ObstacleDynamicsSnapshot,
+} from '@sleepy/shared';
 
 export class RoomClient {
   private client: Client;
@@ -13,7 +19,7 @@ export class RoomClient {
 
   async connect(options?: { gameId?: string; sceneName?: string }) {
     const token = ++this.lifecycleToken;
-    const room = await this.client.joinOrCreate('riot_room', options);
+    const room = await this.client.joinOrCreate('engine_room', options);
     if (token !== this.lifecycleToken) {
       await room.leave();
       return;
@@ -37,6 +43,13 @@ export class RoomClient {
   onCrowd(handler: (snapshot: CrowdSnapshot) => void) {
     if (!this.room) return;
     this.room.onMessage(PROTOCOL.crowd, (snapshot: CrowdSnapshot) => handler(snapshot));
+  }
+
+  onObstacleDynamics(handler: (snapshot: ObstacleDynamicsSnapshot) => void) {
+    if (!this.room) return;
+    this.room.onMessage(PROTOCOL.obstacleDynamics, (snapshot: ObstacleDynamicsSnapshot) =>
+      handler(snapshot),
+    );
   }
 
   getSessionId() {

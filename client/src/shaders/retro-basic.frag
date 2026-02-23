@@ -1,4 +1,4 @@
-// PS1-style fragment shader with affine texture mapping and color quantization
+// Retro-style fragment shader with affine texture mapping and color quantization
 precision mediump float;
 
 uniform sampler2D map;
@@ -40,11 +40,11 @@ vec3 quantizeColor(vec3 col, float depth) {
 }
 
 void main() {
-  // Affine texture mapping (PS1-style warping)
+  // Affine texture mapping for stylized warping
   vec2 uv = vUv;
   if (useAffineMapping) {
     // Divide UV by depth to remove perspective correction
-    // This creates the characteristic PS1 texture warping
+    // This creates a characteristic retro texture warp
     uv = vUv * vDepth / (vDepth + 1.0);
   }
 
@@ -54,7 +54,7 @@ void main() {
   // Apply base color and vertex color
   vec3 finalColor = texColor.rgb * color * vColor;
 
-  // Simple vertex lighting (PS1-style)
+  // Simple vertex lighting (retro style)
   vec3 normal = normalize(vNormal);
   vec3 lightDir = normalize(directionalLightDirection);
   float diffuse = max(dot(normal, lightDir), 0.0);

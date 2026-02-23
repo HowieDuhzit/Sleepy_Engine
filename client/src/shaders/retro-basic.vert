@@ -1,4 +1,4 @@
-// PS1-style vertex shader with vertex jitter and affine texture mapping setup
+// Retro-style vertex shader with jitter and affine texture mapping setup
 uniform vec2 uResolution;
 uniform float uJitterIntensity;
 
@@ -22,7 +22,7 @@ void main() {
   // Transform to clip space
   vec4 clipPos = projectionMatrix * mvPosition;
 
-  // Apply vertex jitter (PS1-style vertex snapping)
+  // Apply vertex jitter for retro vertex snapping
   if (uJitterIntensity > 0.0) {
     // Convert to normalized device coordinates
     vec3 ndc = clipPos.xyz / clipPos.w;

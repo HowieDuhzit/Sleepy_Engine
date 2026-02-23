@@ -2,24 +2,144 @@
   "scenes": [
     {
       "name": "main",
-      "obstacles": [],
+      "obstacles": [
+        {
+          "id": "model_1",
+          "x": 0.3120338524697825,
+          "y": 4.328697800767478,
+          "z": 11.5,
+          "width": 1,
+          "height": 1,
+          "depth": 1
+        }
+      ],
+      "zones": [],
+      "roads": [],
+      "environment": {
+        "preset": "clear_day",
+        "fogNear": 12,
+        "fogFar": 140,
+        "skybox": {
+          "enabled": false,
+          "preset": "clear_day",
+          "intensity": 1
+        }
+      },
+      "components": {
+        "obstacle:model_1": {
+          "type": "model_instance",
+          "name": "Sweepo",
+          "modelId": "sweepo",
+          "sourceFile": "SM_Veh_Sweepo_01.fbx",
+          "originOffset": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "collider": {
+            "shape": "box",
+            "size": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "radius": 0.5,
+            "height": 1.8,
+            "offset": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "isTrigger": false
+          },
+          "physics": {
+            "enabled": true,
+            "bodyType": "dynamic",
+            "mass": 1,
+            "friction": 0.6,
+            "restitution": 0.1,
+            "linearDamping": 0.05,
+            "angularDamping": 0.1,
+            "gravityScale": 1,
+            "spawnHeightOffset": 1,
+            "initialVelocity": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          "textures": {
+            "baseColor": "PolygonSciFiSpace_Texture_01_A.png",
+            "normal": "",
+            "roughness": "",
+            "metalness": "",
+            "emissive": "PolygonSciFiSpace_Emissive_01.png"
+          }
+        }
+      },
+      "logic": {
+        "nodes": [
+          {
+            "id": "trg_1771542471420_4266",
+            "kind": "trigger",
+            "trigger": "onZoneEnter",
+            "target": "zone:zone_1",
+            "params": {},
+            "x": 18.9140625,
+            "y": 38.05859375
+          },
+          {
+            "id": "act_1771542471420_487",
+            "kind": "action",
+            "action": "spawn",
+            "target": "zone:zone_1",
+            "params": {},
+            "x": 209.19140625,
+            "y": 131.8359375
+          }
+        ],
+        "links": [
+          {
+            "from": "trg_1771542471420_4266",
+            "to": "act_1771542471420_487"
+          }
+        ]
+      },
       "ground": {
         "type": "concrete",
-        "width": 108,
-        "depth": 108,
+        "width": 1000,
+        "depth": 1000,
         "y": 0,
         "textureRepeat": 12,
+        "texturePreset": "concrete",
+        "water": {
+          "enabled": false,
+          "level": 0.08,
+          "opacity": 0.78,
+          "waveAmplitude": 0.22,
+          "waveFrequency": 0.16,
+          "waveSpeed": 1.1,
+          "colorShallow": "#2f97d0",
+          "colorDeep": "#081c47",
+          "specularStrength": 1.35
+        },
         "terrain": {
           "enabled": true,
           "preset": "dunes",
-          "size": 96,
-          "resolution": 28,
-          "maxHeight": 10,
+          "size": 1000,
+          "resolution": 128,
+          "maxHeight": 15,
           "roughness": 0.56,
-          "seed": 630377
+          "seed": 289943,
+          "sculptStamps": []
         }
       },
-      "player": {}
+      "player": {
+        "x": 0.00009931881626736966,
+        "y": 0,
+        "z": -0.02383319991514989,
+        "yaw": 0.2646656935489322
+      }
     }
   ]
 }

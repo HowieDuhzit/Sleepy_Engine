@@ -13,13 +13,13 @@ Think of it as a development console: a game engine that runs in \"console mode\
 ## Core Goals
 
 - **Console feel**: boot splash, menu, and fast load into games.
-- **Retro aesthetic**: PSX/retro rendering pipeline with adjustable presets.
+- **Retro aesthetic**: retro/retro rendering pipeline with adjustable presets.
 - **Editor-first**: animation, player, and scene editing inside the same runtime.
 - **Authoritative multiplayer**: Colyseus server with shared protocol for live testing.
 
 ## Repo Layout
 
-- `client/` - Three.js + Vite app (game runtime + editor UI + PSX renderer).
+- `client/` - Three.js + Vite app (game runtime + editor UI + retro renderer).
 - `server/` - Colyseus + Express server, game APIs, and game rooms.
 - `shared/` - Shared constants/types for client + server.
 - `server/projects/` - Game data (animations, scenes, avatars, configs, logic, assets).
@@ -95,7 +95,7 @@ The `Dockerfile` builds an all-in-one image with Nginx + server.
 
 ## Rendering Presets
 
-PSX-style rendering is integrated in both game and editor. Presets, post-processing, and color adjustments are managed via the shared settings system.
+retro-style rendering is integrated in both game and editor. Presets, post-processing, and color adjustments are managed via the shared settings system.
 
 ## Editor Tools
 

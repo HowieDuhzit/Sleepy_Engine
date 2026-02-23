@@ -92,8 +92,6 @@ export function MainMenu({ onPlay, onEditor, showForeground = true }: MainMenuPr
         });
       } catch (error) {
         console.error('Failed to load games:', error);
-        if (!mounted) return;
-        setGames((prev) => prev);
       }
     };
 

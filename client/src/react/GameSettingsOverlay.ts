@@ -1,5 +1,5 @@
 import React from 'react';
-import { ReactPSXSettingsPanel } from './ReactPSXSettingsPanel';
+import { ReactRetroSettingsPanel } from './ReactRetroSettingsPanel';
 import { UiButton, UiCard, UiRangeRow, UiSectionTitle, UiSwitchRow } from './ui-primitives';
 
 const h = React.createElement;
@@ -28,7 +28,7 @@ export function GameSettingsOverlay({ open, camera, onClose, onCameraChange }: P
       UiCard,
       { className: 'settings-menu game-settings-panel' },
       h('h2', { className: 'settings-menu-title' }, 'Settings'),
-      h(ReactPSXSettingsPanel),
+      h(ReactRetroSettingsPanel),
       h(UiSectionTitle, { className: 'settings-menu-subtitle' }, 'Camera'),
       h(UiRangeRow, {
         label: 'Camera Distance',

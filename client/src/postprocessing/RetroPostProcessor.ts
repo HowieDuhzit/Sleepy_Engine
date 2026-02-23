@@ -8,7 +8,7 @@ import { ChromaticAberrationPass } from './passes/ChromaticAberrationPass';
 import { ColorAdjustmentPass } from './passes/ColorAdjustmentPass';
 import { BlurPass } from './passes/BlurPass';
 
-export interface PSXPostProcessorSettings {
+export interface RetroPostProcessorSettings {
   enabled: boolean;
 
   // Color quantization
@@ -36,12 +36,12 @@ export interface PSXPostProcessorSettings {
   gamma: number;
   exposure: number;
 
-  // Blur (for N64 look)
+  // Blur (for soft retro look)
   blur: boolean;
   blurStrength: number;
 }
 
-export class PSXPostProcessor {
+export class RetroPostProcessor {
   private composer: EffectComposer;
   private renderPass: RenderPass;
   private colorQuantPass: ColorQuantPass;
@@ -51,13 +51,13 @@ export class PSXPostProcessor {
   private colorAdjustmentPass: ColorAdjustmentPass;
   private blurPass: BlurPass;
 
-  public settings: PSXPostProcessorSettings;
+  public settings: RetroPostProcessorSettings;
 
   constructor(
     renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
     camera: THREE.Camera,
-    settings: Partial<PSXPostProcessorSettings> = {},
+    settings: Partial<RetroPostProcessorSettings> = {},
   ) {
     // Default settings
     this.settings = {
@@ -124,7 +124,7 @@ export class PSXPostProcessor {
     // Always start with render pass
     this.composer.addPass(this.renderPass);
 
-    // Blur pass (N64 bilinear look)
+    // Blur pass (soft bilinear look)
     if (this.settings.blur) {
       this.composer.addPass(this.blurPass);
     }

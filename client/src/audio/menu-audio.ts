@@ -1,6 +1,10 @@
 type PendingEvent = 'boot' | 'load';
 
 class MenuAudio {
+  private readonly baseMasterGain = 3.2;
+  private readonly baseUiGain = 2.4;
+  private readonly baseAmbientGain = 2.8;
+
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private uiBus: GainNode | null = null;
@@ -10,6 +14,10 @@ class MenuAudio {
   private unlocked = false;
   private pending = new Set<PendingEvent>();
   private ambientDesired = false;
+  private muteAll = false;
+  private masterVolume = 1;
+  private uiVolume = 1;
+  private ambientVolume = 1;
   private noiseBuffer: AudioBuffer | null = null;
   private impulseBuffer: AudioBuffer | null = null;
 
@@ -30,7 +38,7 @@ class MenuAudio {
       this.ctx = new AudioCtx();
 
       const master = this.ctx.createGain();
-      master.gain.value = 3.2;
+      master.gain.value = this.baseMasterGain;
 
       const glue = this.ctx.createDynamicsCompressor();
       glue.threshold.value = -16;
@@ -45,10 +53,10 @@ class MenuAudio {
       tonalTilt.gain.value = -1.2;
 
       const uiBus = this.ctx.createGain();
-      uiBus.gain.value = 2.4;
+      uiBus.gain.value = this.baseUiGain;
 
       const ambientBus = this.ctx.createGain();
-      ambientBus.gain.value = 2.8;
+      ambientBus.gain.value = this.baseAmbientGain;
 
       uiBus.connect(master);
       ambientBus.connect(master);
@@ -73,8 +81,18 @@ class MenuAudio {
       ambientReverbGain.gain.value = 1.8;
       this.ambientReverb.connect(ambientReverbGain);
       ambientReverbGain.connect(this.ambientBus);
+
+      this.applyMixSettings();
     }
     return this.ctx;
+  }
+
+  configureMix(options: { muteAll?: boolean; master?: number; ui?: number; ambient?: number }) {
+    if (typeof options.muteAll === 'boolean') this.muteAll = options.muteAll;
+    if (typeof options.master === 'number') this.masterVolume = Math.max(0, Math.min(1, options.master));
+    if (typeof options.ui === 'number') this.uiVolume = Math.max(0, Math.min(1, options.ui));
+    if (typeof options.ambient === 'number') this.ambientVolume = Math.max(0, Math.min(1, options.ambient));
+    this.applyMixSettings();
   }
 
   unlock() {
@@ -169,6 +187,17 @@ class MenuAudio {
     if (this.pending.has('boot')) this.playBoot();
     if (this.pending.has('load')) this.playLoad();
     this.pending.clear();
+  }
+
+  private applyMixSettings() {
+    if (!this.master || !this.uiBus || !this.ambientBus) return;
+    const masterMix = this.muteAll ? 0 : this.masterVolume;
+    const uiMix = this.muteAll ? 0 : this.uiVolume;
+    const ambientMix = this.muteAll ? 0 : this.ambientVolume;
+
+    this.master.gain.value = this.baseMasterGain * masterMix;
+    this.uiBus.gain.value = this.baseUiGain * uiMix;
+    this.ambientBus.gain.value = this.baseAmbientGain * ambientMix;
   }
 
   private playTone(

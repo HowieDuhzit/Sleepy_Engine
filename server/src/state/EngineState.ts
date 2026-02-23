@@ -15,9 +15,10 @@ export class PlayerState extends Schema {
   @type('string') animState = 'idle';
   @type('number') animTime = 0;
   @type('number') yaw = 0;
+  @type('boolean') ragdoll = false;
 }
 
-export class RiotState extends Schema {
+export class EngineState extends Schema {
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
   @type('number') heat = 0.1;
   @type('number') phase = 0;

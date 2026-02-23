@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { psxSettings } from '../settings/PSXSettings';
+import { retroRenderSettings, type RenderStylePreset } from '../settings/RetroRenderSettings';
 import {
   UiDivider,
   UiField,
@@ -11,25 +11,23 @@ import {
 
 const h = React.createElement;
 
-type ConsolePreset = 'ps1' | 'n64' | 'dreamcast' | 'xbox' | 'modern';
 type QualityPreset = 'authentic' | 'lite' | 'modern';
-
-type SettingsState = typeof psxSettings.config;
+type SettingsState = typeof retroRenderSettings.config;
 
 function notifyChange() {
-  window.dispatchEvent(new CustomEvent('psx-settings-changed'));
+  window.dispatchEvent(new CustomEvent('retro-settings-changed'));
 }
 
 function applyPatch(patch: Partial<SettingsState>) {
-  psxSettings.update(patch);
+  retroRenderSettings.update(patch);
   notifyChange();
 }
 
-export function ReactPSXSettingsPanel() {
-  const [settings, setSettings] = useState<SettingsState>({ ...psxSettings.config });
+export function ReactRetroSettingsPanel() {
+  const [settings, setSettings] = useState<SettingsState>({ ...retroRenderSettings.config });
   const [qualityPreset, setQualityPreset] = useState<QualityPreset>('authentic');
 
-  const sync = () => setSettings({ ...psxSettings.config });
+  const sync = () => setSettings({ ...retroRenderSettings.config });
 
   const sliders = useMemo(
     () =>
@@ -45,11 +43,11 @@ export function ReactPSXSettingsPanel() {
 
   return h(
     'div',
-    { id: 'psx-settings-panel', className: 'psx-settings-panel' },
-    h(UiSectionTitle, { className: 'psx-settings-title' }, 'Retro Console Graphics'),
+    { id: 'retro-settings-panel', className: 'retro-settings-panel' },
+    h(UiSectionTitle, { className: 'retro-settings-title' }, 'Retro Render Settings'),
 
     h(UiSwitchRow, {
-      className: 'psx-check',
+      className: 'retro-check',
       label: 'Enable Retro Mode',
       checked: settings.enabled,
       onChange: (enabled) => {
@@ -60,24 +58,24 @@ export function ReactPSXSettingsPanel() {
 
     h(
       'div',
-      { className: 'psx-section' },
+      { className: 'retro-section' },
       h(UiField, {
-        className: 'psx-field',
-        label: 'Console Preset',
+        className: 'retro-field',
+        label: 'Style Preset',
         control: h(
           UiSelect,
           {
-            value: settings.consolePreset,
+            value: settings.stylePreset,
             onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
-              psxSettings.applyConsolePreset(event.target.value as ConsolePreset);
+              retroRenderSettings.applyStylePreset(event.target.value as RenderStylePreset);
               notifyChange();
               sync();
             },
           },
-          h('option', { value: 'ps1' }, 'PlayStation 1 (1994)'),
-          h('option', { value: 'n64' }, 'Nintendo 64 (1996)'),
-          h('option', { value: 'dreamcast' }, 'Sega Dreamcast (1998)'),
-          h('option', { value: 'xbox' }, 'Xbox (2001)'),
+          h('option', { value: 'legacy' }, 'Legacy'),
+          h('option', { value: 'soft' }, 'Soft Focus'),
+          h('option', { value: 'arcade' }, 'Arcade Clean'),
+          h('option', { value: 'cinematic' }, 'Cinematic'),
           h('option', { value: 'modern' }, 'Modern (No Effects)'),
         ),
       }),
@@ -85,9 +83,9 @@ export function ReactPSXSettingsPanel() {
 
     h(
       'div',
-      { className: 'psx-section' },
+      { className: 'retro-section' },
       h(UiField, {
-        className: 'psx-field',
+        className: 'retro-field',
         label: 'Quality Preset',
         control: h(
           UiSelect,
@@ -96,7 +94,7 @@ export function ReactPSXSettingsPanel() {
             onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
               const nextPreset = event.target.value as QualityPreset;
               setQualityPreset(nextPreset);
-              psxSettings.applyPreset(nextPreset);
+              retroRenderSettings.applyPreset(nextPreset);
               notifyChange();
               sync();
             },
@@ -108,21 +106,21 @@ export function ReactPSXSettingsPanel() {
       }),
     ),
 
-    h(UiDivider, { className: 'psx-divider' }),
+    h(UiDivider, { className: 'retro-divider' }),
 
     h(
       'div',
-      { className: 'psx-section' },
+      { className: 'retro-section' },
       ...[
         { key: 'affineMapping', label: 'Affine Texture Mapping' },
-        { key: 'colorQuantization', label: '15-bit Color (Color Banding)' },
+        { key: 'colorQuantization', label: 'Reduced Color Depth' },
         { key: 'dithering', label: 'Dithering' },
         { key: 'crtEffects', label: 'CRT Effects' },
         { key: 'chromaticAberration', label: 'Chromatic Aberration' },
       ].map((item) =>
         h(UiSwitchRow, {
           key: item.key,
-          className: 'psx-check',
+          className: 'retro-check',
           label: item.label,
           checked: settings[item.key as keyof SettingsState] as boolean,
           onChange: (checked) => {
@@ -133,17 +131,17 @@ export function ReactPSXSettingsPanel() {
       ),
     ),
 
-    h(UiDivider, { className: 'psx-divider' }),
+    h(UiDivider, { className: 'retro-divider' }),
 
     h(
       'div',
-      { className: 'psx-section' },
-      h(UiSectionTitle, { className: 'psx-subtitle' }, 'Color & Lighting'),
+      { className: 'retro-section' },
+      h(UiSectionTitle, { className: 'retro-subtitle' }, 'Color & Lighting'),
       ...sliders.map((slider) => {
         const value = settings[slider.key as keyof SettingsState] as number;
         return h(UiRangeRow, {
           key: slider.key,
-          className: 'psx-slider',
+          className: 'retro-slider',
           label: slider.label,
           valueLabel: value.toFixed(1),
           min: slider.min,
@@ -160,25 +158,19 @@ export function ReactPSXSettingsPanel() {
 
     h(
       'div',
-      { className: 'psx-note' },
+      { className: 'retro-note' },
       h(
         'small',
         null,
-        h('strong', null, 'Retro Console Mode'),
-        ' recreates authentic classic console graphics.',
+        h('strong', null, 'Style Notes'),
         h('br'),
+        'Legacy: low-res jittered retro look',
         h('br'),
-        h('strong', null, 'PS1:'),
-        ' Wobbly textures, vertex jitter, 15-bit color',
+        'Soft Focus: filtered, smoother retro look',
         h('br'),
-        h('strong', null, 'N64:'),
-        ' Blurry bilinear filtering, fog, 21-bit color',
+        'Arcade Clean: cleaner image with subtle CRT response',
         h('br'),
-        h('strong', null, 'Dreamcast:'),
-        ' Clean VGA output, hardware AA',
-        h('br'),
-        h('strong', null, 'Xbox:'),
-        ' HD-era graphics, advanced effects',
+        'Cinematic: polished grading with minimal retro artifacts',
       ),
     ),
   );

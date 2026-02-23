@@ -1,4 +1,15 @@
+import type {
+  GameModelRecord,
+  GameModelTextureRecord,
+  SaveGameModelPayload,
+} from '@sleepy/shared/model-assets';
 import type { Obstacle } from '@sleepy/shared';
+
+export type {
+  GameModelRecord,
+  GameModelTextureRecord,
+  SaveGameModelPayload,
+} from '@sleepy/shared/model-assets';
 
 export type GameMeta = {
   id: string;
@@ -14,6 +25,18 @@ export type SceneGroundRecord = {
   depth?: number;
   y?: number;
   textureRepeat?: number;
+  texturePreset?: 'concrete' | 'grass' | 'sand' | 'rock' | 'snow' | 'lava';
+  water?: {
+    enabled?: boolean;
+    level?: number;
+    opacity?: number;
+    waveAmplitude?: number;
+    waveFrequency?: number;
+    waveSpeed?: number;
+    colorShallow?: string;
+    colorDeep?: string;
+    specularStrength?: number;
+  };
   terrain?: {
     enabled?: boolean;
     preset?: 'cinematic' | 'alpine' | 'dunes' | 'islands';
@@ -22,11 +45,20 @@ export type SceneGroundRecord = {
     maxHeight?: number;
     roughness?: number;
     seed?: number;
+    sculptStamps?: Array<{
+      x?: number;
+      z?: number;
+      radius?: number;
+      strength?: number;
+      mode?: 'raise' | 'lower' | 'smooth' | 'flatten';
+      targetHeight?: number;
+    }>;
   };
 };
 
 export type ScenePlayerRecord = {
   avatar?: string;
+  controller?: 'third_person' | 'first_person' | 'ragdoll' | 'ai_only' | 'hybrid';
 };
 
 export type SceneCrowdRecord = {
@@ -49,6 +81,41 @@ export type SceneObstacleRecord =
 export type SceneRecord = {
   name: string;
   obstacles?: SceneObstacleRecord[];
+  zones?: Array<{
+    id?: string;
+    name?: string;
+    tag?: string;
+    x?: number;
+    y?: number;
+    z?: number;
+    width?: number;
+    height?: number;
+    depth?: number;
+    type?: 'trigger' | 'spawn' | 'damage' | 'safe';
+  }>;
+  roads?: Array<{
+    id?: string;
+    name?: string;
+    width?: number;
+    yOffset?: number;
+    material?: 'asphalt' | 'dirt' | 'neon';
+    points?: Array<{ x?: number; y?: number; z?: number }>;
+  }>;
+  environment?: {
+    preset?: 'clear_day' | 'sunset' | 'night' | 'foggy' | 'overcast';
+    fogNear?: number;
+    fogFar?: number;
+    skybox?: {
+      enabled?: boolean;
+      preset?: 'clear_day' | 'sunset_clouds' | 'midnight_stars' | 'nebula';
+      intensity?: number;
+    };
+  };
+  logic?: {
+    nodes?: Array<Record<string, unknown>>;
+    links?: Array<Record<string, unknown>>;
+  };
+  components?: Record<string, Record<string, unknown>>;
   ground?: SceneGroundRecord;
   player?: ScenePlayerRecord;
   crowd?: SceneCrowdRecord;
@@ -83,6 +150,79 @@ export type SocialStateRecord = {
   friends: SocialFriendRecord[];
   chats: Record<string, SocialMessageRecord[]>;
 };
+
+const MODEL_PHYSICS_DEFAULTS = {
+  enabled: true,
+  bodyType: 'dynamic' as const,
+  mass: 1,
+  friction: 0.6,
+  restitution: 0.1,
+  linearDamping: 0.05,
+  angularDamping: 0.1,
+  gravityScale: 1,
+  spawnHeightOffset: 1,
+  initialVelocity: { x: 0, y: 0, z: 0 },
+};
+
+const asFiniteNumber = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const clampFiniteNumber = (value: unknown, min: number, max: number, fallback: number) =>
+  Math.min(max, Math.max(min, asFiniteNumber(value, fallback)));
+
+const normalizeModelPhysics = (physics: unknown): NonNullable<GameModelRecord['physics']> => {
+  const raw = physics && typeof physics === 'object' ? (physics as Record<string, unknown>) : {};
+  const bodyTypeRaw = String(raw.bodyType ?? MODEL_PHYSICS_DEFAULTS.bodyType).toLowerCase();
+  const bodyType =
+    bodyTypeRaw === 'dynamic' || bodyTypeRaw === 'kinematic' || bodyTypeRaw === 'static'
+      ? bodyTypeRaw
+      : MODEL_PHYSICS_DEFAULTS.bodyType;
+  const damping =
+    raw.damping && typeof raw.damping === 'object' ? (raw.damping as Record<string, unknown>) : {};
+  const spawn =
+    raw.spawn && typeof raw.spawn === 'object' ? (raw.spawn as Record<string, unknown>) : null;
+  const velocity =
+    raw.initialVelocity && typeof raw.initialVelocity === 'object'
+      ? (raw.initialVelocity as Record<string, unknown>)
+      : raw.velocity && typeof raw.velocity === 'object'
+        ? (raw.velocity as Record<string, unknown>)
+        : {};
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : MODEL_PHYSICS_DEFAULTS.enabled,
+    bodyType,
+    mass: Math.max(bodyType === 'dynamic' ? 0.01 : 0, asFiniteNumber(raw.mass, MODEL_PHYSICS_DEFAULTS.mass)),
+    friction: Math.max(0, asFiniteNumber(raw.friction, MODEL_PHYSICS_DEFAULTS.friction)),
+    restitution: clampFiniteNumber(raw.restitution, 0, 1, MODEL_PHYSICS_DEFAULTS.restitution),
+    linearDamping: Math.max(
+      0,
+      asFiniteNumber(raw.linearDamping ?? damping.linear, MODEL_PHYSICS_DEFAULTS.linearDamping),
+    ),
+    angularDamping: Math.max(
+      0,
+      asFiniteNumber(raw.angularDamping ?? damping.angular, MODEL_PHYSICS_DEFAULTS.angularDamping),
+    ),
+    gravityScale: asFiniteNumber(raw.gravityScale, MODEL_PHYSICS_DEFAULTS.gravityScale),
+    spawnHeightOffset: clampFiniteNumber(
+      raw.spawnHeightOffset ?? (typeof raw.spawn === 'number' ? raw.spawn : spawn?.heightOffset),
+      -10,
+      50,
+      MODEL_PHYSICS_DEFAULTS.spawnHeightOffset,
+    ),
+    initialVelocity: {
+      x: clampFiniteNumber(velocity.x, -30, 30, MODEL_PHYSICS_DEFAULTS.initialVelocity.x),
+      y: clampFiniteNumber(velocity.y, -30, 30, MODEL_PHYSICS_DEFAULTS.initialVelocity.y),
+      z: clampFiniteNumber(velocity.z, -30, 30, MODEL_PHYSICS_DEFAULTS.initialVelocity.z),
+    },
+  };
+};
+
+const normalizeModelRecord = (record: GameModelRecord, modelIdFallback?: string): GameModelRecord => ({
+  ...record,
+  id: String(record.id || modelIdFallback || '').trim(),
+  physics: normalizeModelPhysics(record.physics),
+});
 
 const readJson = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
@@ -179,6 +319,101 @@ export const uploadGameAvatar = async (gameId: string, name: string, file: File)
     body,
   });
   return readJson<{ ok: boolean; file: string }>(res);
+};
+
+export const listGameModels = async (gameId: string) => {
+  const res = await fetch(`/api/games/${encodeURIComponent(gameId)}/assets/models`, {
+    cache: 'no-store',
+  });
+  const data = await readJson<{
+    items?: GameModelRecord[];
+    models?: Array<GameModelRecord | string>;
+  }>(res);
+  if (Array.isArray(data.items)) return data.items.map((entry) => normalizeModelRecord(entry));
+  if (!Array.isArray(data.models)) return [];
+  const records = data.models.filter((entry): entry is GameModelRecord => typeof entry === 'object');
+  if (records.length > 0) return records.map((entry) => normalizeModelRecord(entry));
+  const ids = data.models.filter((entry): entry is string => typeof entry === 'string');
+  const loaded = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return await getGameModel(gameId, id);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return loaded
+    .filter((entry: GameModelRecord | null): entry is GameModelRecord => Boolean(entry))
+    .map((entry: GameModelRecord) => normalizeModelRecord(entry));
+};
+
+export const getGameModel = async (gameId: string, modelId: string) => {
+  const res = await fetch(
+    `/api/games/${encodeURIComponent(gameId)}/assets/models/${encodeURIComponent(modelId)}`,
+    {
+      cache: 'no-store',
+    },
+  );
+  const record = await readJson<GameModelRecord>(res);
+  return normalizeModelRecord(record, modelId);
+};
+
+export const saveGameModel = async (gameId: string, payload: SaveGameModelPayload) => {
+  const modelId = (payload.id ?? payload.name).trim();
+  const record = {
+    id: modelId,
+    name: payload.name,
+    sourceFile: payload.sourceFile,
+    originOffset: payload.originOffset,
+    collider: payload.collider,
+    physics: normalizeModelPhysics(payload.physics),
+    textures: payload.textures,
+    sourcePath: payload.sourcePath ?? payload.sourceFile,
+    files: payload.files ?? [],
+    materials: payload.materials ?? [],
+    updatedAt: new Date().toISOString(),
+  };
+  const res = await fetch(`/api/games/${encodeURIComponent(gameId)}/assets/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      modelId,
+      record,
+    }),
+  });
+  return readJson<{ ok: boolean; model?: GameModelRecord; file?: string; id?: string }>(res);
+};
+
+export const getGameModelFileUrl = (gameId: string, modelId: string, name: string) =>
+  `/api/games/${encodeURIComponent(gameId)}/assets/models/${encodeURIComponent(modelId)}/files/${encodeURIComponent(name)}`;
+
+export const uploadGameModelFile = async (
+  gameId: string,
+  modelId: string,
+  name: string,
+  file: File,
+) => {
+  const body = await file.arrayBuffer();
+  const res = await fetch(
+    `/api/games/${encodeURIComponent(gameId)}/assets/models/${encodeURIComponent(modelId)}/files/${encodeURIComponent(name)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body,
+    },
+  );
+  return readJson<{ ok: boolean; file: string }>(res);
+};
+
+export const deleteGameModel = async (gameId: string, modelId: string) => {
+  const res = await fetch(
+    `/api/games/${encodeURIComponent(gameId)}/assets/models/${encodeURIComponent(modelId)}`,
+    {
+      method: 'DELETE',
+    },
+  );
+  return readJson<{ ok: boolean; id?: string }>(res);
 };
 
 export const getSocialState = async (clientId: string) => {

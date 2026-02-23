@@ -2,9 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
-import { PlayerProfileCard } from './PlayerProfileCard';
+import { ConsoleSettingsCard } from './ConsoleSettingsCard';
 import { buildAnimationClipFromData, parseClipPayload, type ClipData } from '../game/clip';
 import { menuAudio } from '../audio/menu-audio';
+import {
+  applyGlobalSettings,
+  type GlobalSettings,
+  loadGlobalSettings,
+  resetGlobalSettings,
+  saveGlobalSettings,
+} from '../settings/global-settings';
 import {
   addSocialFriend,
   getSocialState,
@@ -105,6 +112,46 @@ const toUiMessage = (message: SocialMessageRecord, clientId: string): SocialMess
   text: message.text,
   at: new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 });
+
+const mapSocialFriends = (friends: SocialFriendRecord[]): SocialFriend[] =>
+  friends.map((friend) => ({
+    id: friend.id,
+    name: friend.name,
+    status: friend.status,
+    online: friend.online,
+  }));
+
+const mapSocialChats = (
+  chats: Record<string, SocialMessageRecord[]>,
+  clientId: string,
+): Record<string, SocialMessage[]> => {
+  const mapped: Record<string, SocialMessage[]> = {};
+  for (const [friendId, messages] of Object.entries(chats)) {
+    mapped[friendId] = messages.map((message) => toUiMessage(message, clientId));
+  }
+  return mapped;
+};
+
+const getMenuQualityProfile = (settings: GlobalSettings) => {
+  const reducedMotion = settings.accessibility.reducedMotion;
+  const qualityPreset = settings.video.qualityPreset;
+  const base =
+    qualityPreset === 'performance'
+      ? { particles: 1200, motion: 0.55, size: 0.04 }
+      : qualityPreset === 'balanced'
+        ? { particles: 2200, motion: 0.78, size: 0.046 }
+        : qualityPreset === 'cinematic'
+          ? { particles: 4800, motion: 1.2, size: 0.056 }
+          : { particles: 3200, motion: 1, size: 0.048 };
+  if (reducedMotion) {
+    return {
+      particles: Math.round(base.particles * 0.65),
+      motion: base.motion * 0.34,
+      size: base.size,
+    };
+  }
+  return base;
+};
 
 function buildMenuCards(games: Array<{ id: string; name: string }>): MenuCard[] {
   const projectCards: MenuCard[] = games.map((game, index) => ({
@@ -223,7 +270,7 @@ function drawCardUi(
         ? `${stats.gameName} | ${stats.startScene}`
         : card.kind === 'social'
           ? `${stats.friendsOnline} online | ${stats.notificationsCount} alerts`
-          : `wallet + avatar | ${stats.gameName}`;
+          : `global console settings | ${stats.gameName}`;
   ctx.fillStyle = 'rgba(190,216,248,0.92)';
   ctx.font = '600 17px "Space Grotesk", sans-serif';
   ctx.fillText(subtitle, panelX + 30, panelY + 114);
@@ -253,9 +300,9 @@ function drawCardUi(
     lines.push(`Notifications: ${stats.notificationsCount}`);
     lines.push(`Local clock: ${stats.clock}`);
   } else {
-    lines.push('Wallet and avatar settings');
+    lines.push('Global settings across all games');
     lines.push(`Current project: ${stats.gameName}`);
-    lines.push('Press Enter / A to open settings');
+    lines.push('Press Enter / A for profile, audio, video, network');
   }
 
   lines.forEach((line, index) => {
@@ -291,6 +338,8 @@ export function MainMenuScene3D({
   const [activeCardId, setActiveCardId] = useState<string>('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [socialOpen, setSocialOpen] = useState(false);
+  const [globalSettings, setGlobalSettings] = useState(() => loadGlobalSettings());
+  const [fpsText, setFpsText] = useState('');
   const [socialClientId] = useState<string>(() => getOrCreateSocialClientId());
   const [friends, setFriends] = useState<SocialFriend[]>([]);
   const [profile, setProfile] = useState({
@@ -304,6 +353,11 @@ export function MainMenuScene3D({
   const [chatByFriend, setChatByFriend] = useState<Record<string, SocialMessage[]>>({});
   const [chatDraft, setChatDraft] = useState('');
   const [addFriendDraft, setAddFriendDraft] = useState('');
+
+  useEffect(() => {
+    saveGlobalSettings(globalSettings);
+    applyGlobalSettings(globalSettings);
+  }, [globalSettings]);
 
   const activeCardIdRef = useRef(activeCardId);
   const settingsOpenRef = useRef(settingsOpen);
@@ -323,6 +377,7 @@ export function MainMenuScene3D({
   const onGameChangeRef = useRef(onGameChange);
   const onPlayRef = useRef(onPlay);
   const onEditorRef = useRef(onEditor);
+  const globalSettingsRef = useRef(globalSettings);
 
   useEffect(() => {
     if (menuCards.length === 0) {
@@ -353,6 +408,7 @@ export function MainMenuScene3D({
   onGameChangeRef.current = onGameChange;
   onPlayRef.current = onPlay;
   onEditorRef.current = onEditor;
+  globalSettingsRef.current = globalSettings;
 
   const cycleCard = (delta: number) => {
     if (!showForegroundRef.current) return;
@@ -398,6 +454,9 @@ export function MainMenuScene3D({
       if (card.gameId !== gameIdRef.current) {
         onGameChangeRef.current(card.gameId);
         setActiveCardId(card.id);
+        window.setTimeout(() => {
+          onPlayRef.current();
+        }, 120);
         return;
       }
       onPlayRef.current();
@@ -448,23 +507,13 @@ export function MainMenuScene3D({
             bio: state.profile.bio,
           });
         }
-        const nextFriends: SocialFriend[] = state.friends.map((friend: SocialFriendRecord) => ({
-          id: friend.id,
-          name: friend.name,
-          status: friend.status,
-          online: friend.online,
-        }));
+        const nextFriends = mapSocialFriends(state.friends);
         setFriends(nextFriends);
         setSelectedFriendId((prev) => {
           if (prev && nextFriends.some((friend) => friend.id === prev)) return prev;
           return nextFriends[0]?.id ?? '';
         });
-
-        const chats: Record<string, SocialMessage[]> = {};
-        for (const [friendId, messages] of Object.entries(state.chats)) {
-          chats[friendId] = messages.map((message) => toUiMessage(message, socialClientId));
-        }
-        setChatByFriend(chats);
+        setChatByFriend(mapSocialChats(state.chats, socialClientId));
       } catch (error) {
         console.error('Social sync failed:', error);
       }
@@ -551,6 +600,7 @@ export function MainMenuScene3D({
         avatarZ: 2.25,
       },
     };
+    const cameraBase = { x: 0.2, y: 1.72, z: 7.6 };
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -654,7 +704,7 @@ export function MainMenuScene3D({
     backdrop.position.set(0, 1.2, -30);
     scene.add(backdrop);
 
-    const PARTICLE_COUNT = 3200;
+    const PARTICLE_COUNT = 4800;
     const PARTICLE_MIN_X = -34;
     const PARTICLE_MAX_X = 34;
     const PARTICLE_MIN_Y = -18;
@@ -865,6 +915,10 @@ export function MainMenuScene3D({
       } else {
         menuAudio.playNavigate();
         setActiveCardId(hit.cardId);
+        const targetCard = menuCardsRef.current.find((entry) => entry.id === hit.cardId);
+        if (targetCard?.kind === 'project') {
+          window.setTimeout(() => activateCard(hit.cardId), 0);
+        }
       }
     };
 
@@ -875,6 +929,10 @@ export function MainMenuScene3D({
     const clock3d = new THREE.Clock();
     let lastStatKey = '';
     let lastFocusedCardId = '';
+    let lastFpsReadAt = performance.now();
+    let fpsFrames = 0;
+    let lastFov = 0;
+    let lastParticleBudget = -1;
 
     const setCardTargets = (selectedCardId: string) => {
       const selectedIndex = menuCards.findIndex((card) => card.id === selectedCardId);
@@ -931,15 +989,15 @@ export function MainMenuScene3D({
       };
 
       camera.aspect = w / h2;
-      camera.position.set(
-        portraitMobile ? 0.02 : mobile ? 0.14 : 0.24,
-        portraitMobile ? 1.96 : mobile ? 1.6 : 1.74,
-        portraitMobile
-          ? 10.6
-          : mobile
-            ? 8.2
-            : THREE.MathUtils.lerp(7.2, 8.0, THREE.MathUtils.clamp((w - 900) / 700, 0, 1)),
-      );
+      camera.fov = THREE.MathUtils.clamp(globalSettingsRef.current.video.fieldOfView, 70, 120);
+      cameraBase.x = portraitMobile ? 0.02 : mobile ? 0.14 : 0.24;
+      cameraBase.y = portraitMobile ? 1.96 : mobile ? 1.6 : 1.74;
+      cameraBase.z = portraitMobile
+        ? 10.6
+        : mobile
+          ? 8.2
+          : THREE.MathUtils.lerp(7.2, 8.0, THREE.MathUtils.clamp((w - 900) / 700, 0, 1));
+      camera.position.set(cameraBase.x, cameraBase.y, cameraBase.z);
       camera.lookAt(
         portraitMobile ? 0.12 : mobile ? 0.48 : 0.92,
         portraitMobile ? 0.72 : mobile ? 0.56 : 0.72,
@@ -1029,35 +1087,54 @@ export function MainMenuScene3D({
     const animate = () => {
       const delta = Math.min(clock3d.getDelta(), 1 / 20);
       const elapsed = clock3d.getElapsedTime();
+      const settings = globalSettingsRef.current;
+      const profile = getMenuQualityProfile(settings);
+      const motionScale = profile.motion;
+      const shakeScale = settings.gameplay.cameraShake / 100;
+      const motionBlurStrength = settings.video.motionBlur / 100;
 
       setCardTargets(activeCardIdRef.current);
       cardRoot.visible = showForegroundRef.current;
 
+      const targetFov = THREE.MathUtils.clamp(settings.video.fieldOfView, 70, 120);
+      if (Math.abs(lastFov - targetFov) > 0.01) {
+        camera.fov = targetFov;
+        camera.updateProjectionMatrix();
+        lastFov = targetFov;
+      }
+
+      if (lastParticleBudget !== profile.particles) {
+        particleGeometry.setDrawRange(0, profile.particles);
+        lastParticleBudget = profile.particles;
+      }
+      particleMaterial.size = profile.size;
+      particleMaterial.opacity = 0.5 + motionBlurStrength * 0.28;
+
       // Ambient background motion: volumetric drift with parallax depth.
-      for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+      for (let i = 0; i < profile.particles; i += 1) {
         const index3 = i * 3;
         const bx = particleBasePositions[index3] ?? 0;
         const by = particleBasePositions[index3 + 1] ?? 0;
         const bz = particleBasePositions[index3 + 2] ?? 0;
         const phase = particlePhase[i] ?? 0;
-        const t = elapsed * 0.33 + phase;
+        const t = elapsed * 0.33 * motionScale + phase;
 
         const x =
           bx +
-          Math.sin(t * 1.8 + bz * 0.05) * 0.95 +
-          Math.cos(t * 0.7 + by * 0.18) * 0.34;
+          Math.sin(t * 1.8 + bz * 0.05) * (0.95 * motionScale) +
+          Math.cos(t * 0.7 + by * 0.18) * (0.34 * motionScale);
         const y =
           by +
-          Math.cos(t * 1.2 + bx * 0.04) * 0.62 +
-          Math.sin(t * 0.9 + bz * 0.03) * 0.22;
-        const z = bz + Math.sin(t * 0.58 + bx * 0.03 + by * 0.05) * 0.82;
+          Math.cos(t * 1.2 + bx * 0.04) * (0.62 * motionScale) +
+          Math.sin(t * 0.9 + bz * 0.03) * (0.22 * motionScale);
+        const z = bz + Math.sin(t * 0.58 + bx * 0.03 + by * 0.05) * (0.82 * motionScale);
 
         particlePositions[index3] = x;
         particlePositions[index3 + 1] = y;
         particlePositions[index3 + 2] = z;
       }
       particlePositionAttribute.needsUpdate = true;
-      particleField.rotation.y = Math.sin(elapsed * 0.08) * 0.038;
+      particleField.rotation.y = Math.sin(elapsed * 0.08 * motionScale) * 0.038;
       backdropUniforms.uTime.value = elapsed;
 
       const stats = statsRef.current;
@@ -1099,8 +1176,27 @@ export function MainMenuScene3D({
         if (menuMixer) {
           menuMixer.update(delta);
         }
-        vrm.scene.position.y = layoutRef.current.avatarY + Math.sin(elapsed * 1.2) * 0.025;
+        vrm.scene.position.y = layoutRef.current.avatarY + Math.sin(elapsed * 1.2 * motionScale) * 0.025;
         vrm.update(delta);
+      }
+
+      const shake =
+        shakeScale > 0.01 && !settings.accessibility.reducedMotion
+          ? Math.sin(elapsed * 2.4) * 0.006 * shakeScale
+          : 0;
+      camera.position.set(cameraBase.x + shake, cameraBase.y, cameraBase.z);
+
+      fpsFrames += 1;
+      const now = performance.now();
+      if (now - lastFpsReadAt >= 500) {
+        if (settings.video.showFps) {
+          const fps = Math.round((fpsFrames * 1000) / Math.max(now - lastFpsReadAt, 1));
+          setFpsText(`${fps} FPS`);
+        } else {
+          setFpsText('');
+        }
+        fpsFrames = 0;
+        lastFpsReadAt = now;
       }
 
       renderer.render(scene, camera);
@@ -1190,11 +1286,7 @@ export function MainMenuScene3D({
       setChatDraft('');
       menuAudio.playConfirm();
       const state = await getSocialState(socialClientId);
-      const chats: Record<string, SocialMessage[]> = {};
-      for (const [key, messages] of Object.entries(state.chats)) {
-        chats[key] = messages.map((message) => toUiMessage(message, socialClientId));
-      }
-      setChatByFriend(chats);
+      setChatByFriend(mapSocialChats(state.chats, socialClientId));
     } catch (error) {
       console.error('Send social message failed:', error);
     }
@@ -1211,12 +1303,7 @@ export function MainMenuScene3D({
       setAddFriendDraft('');
       menuAudio.playConfirm();
       const state = await getSocialState(socialClientId);
-      const nextFriends: SocialFriend[] = state.friends.map((friend: SocialFriendRecord) => ({
-        id: friend.id,
-        name: friend.name,
-        status: friend.status,
-        online: friend.online,
-      }));
+      const nextFriends = mapSocialFriends(state.friends);
       setFriends(nextFriends);
       if (nextFriends.some((friend) => friend.id === friendId)) {
         setSelectedFriendId(friendId);
@@ -1230,6 +1317,9 @@ export function MainMenuScene3D({
     'div',
     { className: 'nxe-menu-viewport' },
     h('div', { className: 'nxe-stage-canvas', ref: containerRef }),
+    showForeground && fpsText
+      ? h('div', { className: 'nxe-menu-fps', 'aria-live': 'polite' }, fpsText)
+      : null,
     showForeground && settingsOpen
       ? h(
           'div',
@@ -1237,33 +1327,18 @@ export function MainMenuScene3D({
             className: 'nxe-settings-modal-backdrop',
             onClick: () => setSettingsOpen(false),
           },
-          h(
-            'section',
-            {
-              className: 'nxe-settings-modal',
-              onClick: (event: React.MouseEvent) => event.stopPropagation(),
+          h(ConsoleSettingsCard, {
+            gameId,
+            gameName,
+            startScene,
+            settings: globalSettings,
+            onChange: setGlobalSettings,
+            onReset: () => {
+              setGlobalSettings(resetGlobalSettings());
+              menuAudio.playConfirm();
             },
-            h(
-              'header',
-              { className: 'nxe-settings-modal-header' },
-              h(
-                'div',
-                null,
-                h('h3', null, 'Wallet + Avatar'),
-                h('p', null, `${gameName} • ${startScene}`),
-              ),
-              h(
-                'button',
-                {
-                  className: 'nxe-settings-modal-close',
-                  onClick: () => setSettingsOpen(false),
-                  'aria-label': 'Close settings',
-                },
-                'Close',
-              ),
-            ),
-            h(PlayerProfileCard, { gameId, scene: startScene, gameName }),
-          ),
+            onClose: () => setSettingsOpen(false),
+          }),
         )
       : null,
     showForeground && socialOpen

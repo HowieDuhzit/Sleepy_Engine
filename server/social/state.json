@@ -1,0 +1,65 @@
+{
+  "profiles": {
+    "bae48bdc-29a7-40ac-ac8e-0dee9650899b": {
+      "id": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "displayName": "Player 899B",
+      "status": "Online",
+      "bio": "",
+      "updatedAt": "2026-02-19T20:56:51.987Z",
+      "lastSeenAt": "2026-02-20T20:51:21.373Z"
+    },
+    "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f": {
+      "id": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "displayName": "Player A53F",
+      "status": "Online",
+      "bio": "",
+      "updatedAt": "2026-02-19T20:56:57.160Z",
+      "lastSeenAt": "2026-02-19T21:53:19.594Z"
+    }
+  },
+  "messages": [
+    {
+      "id": "51e2ac07-c542-42fb-a9a7-7e39580844b2",
+      "from": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "to": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "text": "yo",
+      "createdAt": "2026-02-19T20:57:08.886Z"
+    },
+    {
+      "id": "258dfeb3-39e7-4765-97e0-3ef813b29d8d",
+      "from": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "to": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "text": "yoo",
+      "createdAt": "2026-02-19T20:57:35.154Z"
+    },
+    {
+      "id": "7f7c7de8-6284-4260-81d8-f20a9cb4b6af",
+      "from": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "to": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "text": "whats up",
+      "createdAt": "2026-02-19T20:57:39.771Z"
+    },
+    {
+      "id": "c31d1f67-48ba-469d-992d-45a27613c7f8",
+      "from": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "to": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "text": "yo",
+      "createdAt": "2026-02-19T21:53:08.149Z"
+    },
+    {
+      "id": "aa018bbc-af3f-4b0e-a3ce-b1b8ec84515e",
+      "from": "bae48bdc-29a7-40ac-ac8e-0dee9650899b",
+      "to": "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f",
+      "text": "yoo",
+      "createdAt": "2026-02-20T14:13:46.516Z"
+    }
+  ],
+  "friends": {
+    "bae48bdc-29a7-40ac-ac8e-0dee9650899b": [
+      "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f"
+    ],
+    "c8eb0b33-f6f1-48bc-82e9-abc027b4a53f": [
+      "bae48bdc-29a7-40ac-ac8e-0dee9650899b"
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-// PS1-style unlit fragment shader (for UI, effects, etc.)
+// Retro-style unlit fragment shader (for UI, effects, etc.)
 precision mediump float;
 
 uniform sampler2D map;

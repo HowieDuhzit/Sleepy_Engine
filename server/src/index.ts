@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { RiotRoom } from './rooms/RiotRoom.js';
+import { EngineRoom } from './rooms/EngineRoom.js';
 import { closeDb, dbEnabled, dbHealth } from './db.js';
 import { cacheDel, cacheGet, cacheSet, closeRedis, redisEnabled, redisHealth } from './redis.js';
 import { RedisPresence } from '@colyseus/redis-presence';
@@ -26,7 +26,7 @@ const gameServer = redisUrl
   : new Server();
 
 gameServer
-  .define('riot_room', RiotRoom)
+  .define('engine_room', EngineRoom)
   .filterBy(['gameId', 'sceneName'])
   .enableRealtimeListing();
 
@@ -74,6 +74,10 @@ const gameCreateSchema = z.object({
 
 const animationPayloadSchema = z.record(z.unknown());
 const playerPayloadSchema = z.record(z.unknown());
+const modelAssetPayloadSchema = z.object({
+  modelId: z.string().trim().min(1).max(128),
+  record: z.record(z.unknown()),
+});
 const sceneObstacleSchema = z
   .object({
     id: z.string().optional(),
@@ -94,6 +98,43 @@ const sceneGroundSchema = z
     depth: z.number().optional(),
     y: z.number().optional(),
     textureRepeat: z.number().optional(),
+    texturePreset: z.enum(['concrete', 'grass', 'sand', 'rock', 'snow', 'lava']).optional(),
+    water: z
+      .object({
+        enabled: z.boolean().optional(),
+        level: z.number().optional(),
+        opacity: z.number().optional(),
+        waveAmplitude: z.number().optional(),
+        waveFrequency: z.number().optional(),
+        waveSpeed: z.number().optional(),
+        colorShallow: z.string().optional(),
+        colorDeep: z.string().optional(),
+        specularStrength: z.number().optional(),
+      })
+      .optional(),
+    terrain: z
+      .object({
+        enabled: z.boolean().optional(),
+        preset: z.enum(['cinematic', 'alpine', 'dunes', 'islands']).optional(),
+        size: z.number().optional(),
+        resolution: z.number().optional(),
+        maxHeight: z.number().optional(),
+        roughness: z.number().optional(),
+        seed: z.number().optional(),
+        sculptStamps: z
+          .array(
+            z.object({
+              x: z.number().optional(),
+              z: z.number().optional(),
+              radius: z.number().optional(),
+              strength: z.number().optional(),
+              mode: z.enum(['raise', 'lower', 'smooth', 'flatten']).optional(),
+              targetHeight: z.number().optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
   })
   .passthrough();
 const scenePlayerSchema = z
@@ -107,12 +148,70 @@ const sceneCrowdSchema = z
     avatar: z.string().trim().min(1).optional(),
   })
   .passthrough();
+const sceneZoneSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().optional(),
+    tag: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    z: z.number().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    depth: z.number().optional(),
+    type: z.enum(['trigger', 'spawn', 'damage', 'safe']).optional(),
+  })
+  .passthrough();
+const sceneRoadSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().optional(),
+    width: z.number().optional(),
+    yOffset: z.number().optional(),
+    material: z.enum(['asphalt', 'dirt', 'neon']).optional(),
+    points: z
+      .array(
+        z.object({
+          x: z.number().optional(),
+          y: z.number().optional(),
+          z: z.number().optional(),
+        }),
+      )
+      .optional(),
+  })
+  .passthrough();
+const sceneEnvironmentSchema = z
+  .object({
+    preset: z.enum(['clear_day', 'sunset', 'night', 'foggy', 'overcast']).optional(),
+    fogNear: z.number().optional(),
+    fogFar: z.number().optional(),
+    skybox: z
+      .object({
+        enabled: z.boolean().optional(),
+        preset: z.enum(['clear_day', 'sunset_clouds', 'midnight_stars', 'nebula']).optional(),
+        intensity: z.number().optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+const sceneLogicSchema = z
+  .object({
+    nodes: z.array(z.record(z.unknown())).optional(),
+    links: z.array(z.record(z.unknown())).optional(),
+  })
+  .passthrough();
+const sceneComponentsSchema = z.record(z.record(z.unknown()));
 const scenesPayloadSchema = z.object({
   scenes: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(64),
         obstacles: z.array(sceneObstacleSchema).optional(),
+        zones: z.array(sceneZoneSchema).optional(),
+        roads: z.array(sceneRoadSchema).optional(),
+        environment: sceneEnvironmentSchema.optional(),
+        components: sceneComponentsSchema.optional(),
+        logic: sceneLogicSchema.optional(),
         ground: sceneGroundSchema.optional(),
         player: scenePlayerSchema.optional(),
         crowd: sceneCrowdSchema.optional(),
@@ -188,6 +287,23 @@ const safeAssetName = (name: string) => {
   return base.replace(/[^a-z0-9._-]/gi, '_');
 };
 
+const safeModelId = (id: string) => {
+  const base = path.basename(id);
+  return base.replace(/[^a-z0-9._-]/gi, '_');
+};
+
+const contentTypeForAsset = (filename: string) => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.fbx')) return 'model/fbx';
+  if (lower.endsWith('.glb')) return 'model/gltf-binary';
+  if (lower.endsWith('.gltf')) return 'model/gltf+json';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.ktx2')) return 'image/ktx2';
+  return 'application/octet-stream';
+};
+
 // ============================================================================
 // GAME MANAGEMENT API
 // All assets are managed per-game via /api/games/:gameId/*
@@ -199,6 +315,7 @@ const ensureGameDir = async (gameId: string) => {
   await fs.mkdir(path.join(gamesDir, gameId, 'scenes'), { recursive: true });
   await fs.mkdir(path.join(gamesDir, gameId, 'avatars'), { recursive: true });
   await fs.mkdir(path.join(gamesDir, gameId, 'assets'), { recursive: true });
+  await fs.mkdir(path.join(gamesDir, gameId, 'assets', 'models'), { recursive: true });
   await fs.mkdir(path.join(gamesDir, gameId, 'logic'), { recursive: true });
 };
 
@@ -723,6 +840,179 @@ app.post('/api/games/:gameId/scenes', requireAdmin, async (req: Request, res: Re
     res.status(500).json({ error: 'failed_to_save', detail: String(err) });
   }
 });
+
+// List game model assets
+app.get('/api/games/:gameId/assets/models', async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
+      return;
+    }
+
+    await ensureGameDir(gameId);
+    const modelsDir = path.join(gamesDir, gameId, 'assets', 'models');
+    const entries = await fs.readdir(modelsDir, { withFileTypes: true });
+    const models: Array<Record<string, unknown>> = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const modelFilePath = path.join(modelsDir, entry.name, 'model.json');
+      try {
+        const raw = await fs.readFile(modelFilePath, 'utf8');
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        models.push({
+          id:
+            typeof parsed.id === 'string' && parsed.id.trim().length > 0
+              ? parsed.id
+              : entry.name,
+          ...parsed,
+        });
+      } catch {
+        // Ignore directories without model.json
+      }
+    }
+
+    models.sort((a, b) => String(a.name ?? a.id ?? '').localeCompare(String(b.name ?? b.id ?? '')));
+    res.json({ items: models });
+  } catch (err) {
+    res.status(500).json({ error: 'failed_to_list', detail: String(err) });
+  }
+});
+
+// Get game model asset record
+app.get('/api/games/:gameId/assets/models/:modelId', async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    const modelId = safeModelId(req.params.modelId ?? '');
+    if (!gameId || !modelId) {
+      res.status(400).json({ error: 'missing_params' });
+      return;
+    }
+
+    const modelFilePath = path.join(gamesDir, gameId, 'assets', 'models', modelId, 'model.json');
+    const raw = await fs.readFile(modelFilePath, 'utf8');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(raw);
+  } catch (err) {
+    res.status(404).json({ error: 'not_found', detail: String(err) });
+  }
+});
+
+app.post(
+  '/api/games/:gameId/assets/models/:modelId/files/:name',
+  requireAdmin,
+  express.raw({ type: 'application/octet-stream', limit: '500mb' }),
+  async (req: Request, res: Response) => {
+    try {
+      const gameId = safeGameId(req.params.gameId ?? '');
+      const modelId = safeModelId(req.params.modelId ?? '');
+      const rawName = req.params.name ?? '';
+      if (!gameId || !modelId || !rawName) {
+        res.status(400).json({ error: 'missing_params' });
+        return;
+      }
+      const filename = safeAssetName(rawName);
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      await ensureGameDir(gameId);
+      const modelDir = path.join(gamesDir, gameId, 'assets', 'models', modelId);
+      await fs.mkdir(modelDir, { recursive: true });
+      const filePath = path.join(modelDir, filename);
+      await fs.writeFile(filePath, body);
+      res.json({ ok: true, file: filename });
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_save', detail: String(err) });
+    }
+  },
+);
+
+app.get('/api/games/:gameId/assets/models/:modelId/files/:name', async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    const modelId = safeModelId(req.params.modelId ?? '');
+    const rawName = req.params.name ?? '';
+    if (!gameId || !modelId || !rawName) {
+      res.status(400).json({ error: 'missing_params' });
+      return;
+    }
+    const filename = safeAssetName(rawName);
+    const filePath = path.join(gamesDir, gameId, 'assets', 'models', modelId, filename);
+    const buffer = await fs.readFile(filePath);
+    res.setHeader('Content-Type', contentTypeForAsset(filename));
+    res.send(buffer);
+  } catch (err) {
+    res.status(404).json({ error: 'not_found', detail: String(err) });
+  }
+});
+
+// Create/update game model asset record
+app.post('/api/games/:gameId/assets/models', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const gameId = safeGameId(req.params.gameId ?? '');
+    if (!gameId) {
+      res.status(400).json({ error: 'missing_game_id' });
+      return;
+    }
+
+    const parsed = modelAssetPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_payload', detail: parsed.error.flatten() });
+      return;
+    }
+
+    const modelId = safeModelId(parsed.data.modelId);
+    if (!modelId) {
+      res.status(400).json({ error: 'invalid_model_id' });
+      return;
+    }
+
+    await ensureGameDir(gameId);
+    const modelDir = path.join(gamesDir, gameId, 'assets', 'models', modelId);
+    await fs.mkdir(modelDir, { recursive: true });
+    await fs.writeFile(path.join(modelDir, 'model.json'), JSON.stringify(parsed.data.record, null, 2));
+
+    res.json({ ok: true, modelId });
+  } catch (err) {
+    res.status(500).json({ error: 'failed_to_save', detail: String(err) });
+  }
+});
+
+// Delete game model asset record
+app.delete(
+  '/api/games/:gameId/assets/models/:modelId',
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      const gameId = safeGameId(req.params.gameId ?? '');
+      const modelId = safeModelId(req.params.modelId ?? '');
+      if (!gameId || !modelId) {
+        res.status(400).json({ error: 'missing_params' });
+        return;
+      }
+
+      const modelDir = path.join(gamesDir, gameId, 'assets', 'models', modelId);
+      let stat;
+      try {
+        stat = await fs.stat(modelDir);
+      } catch {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (!stat.isDirectory()) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+
+      await fs.rm(modelDir, { recursive: true, force: true });
+      res.json({ ok: true, modelId });
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_delete', detail: String(err) });
+    }
+  },
+);
 
 // SOCIAL API
 app.get('/api/social/state', async (req: Request, res: Response) => {

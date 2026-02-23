@@ -36,7 +36,7 @@ export class BlurPass extends Pass {
         uniform vec2 resolution;
         varying vec2 vUv;
 
-        // Simple box blur (simulates N64's 3-point bilinear filtering)
+        // Simple box blur for soft retro filtering
         void main() {
           vec2 texelSize = 1.0 / resolution;
           vec4 color = vec4(0.0);

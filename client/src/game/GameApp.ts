@@ -6,6 +6,7 @@ import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { InputState } from '../input/InputState';
 import { RoomClient } from '../net/RoomClient';
 import {
+  getGameModelFileUrl,
   getGameAnimation,
   getGameAvatarUrl,
   getGamePlayer,
@@ -14,10 +15,10 @@ import {
   type SceneObstacleRecord,
   type SceneRecord,
 } from '../services/game-api';
-import { PSXRenderer } from '../rendering/PSXRenderer';
-import { PSXPostProcessor } from '../postprocessing/PSXPostProcessor';
-import { PSXMaterial } from '../materials/PSXMaterial';
-import { psxSettings } from '../settings/PSXSettings';
+import { RetroRenderer } from '../rendering/RetroRenderer';
+import { RetroPostProcessor } from '../postprocessing/RetroPostProcessor';
+import { RetroShaderMaterial } from '../materials/RetroShaderMaterial';
+import { retroRenderSettings } from '../settings/RetroRenderSettings';
 import {
   buildAnimationClipFromData,
   isClipData,
@@ -45,10 +46,42 @@ import {
   resolveCircleAabb,
   resolveCircleCircle,
   type CrowdSnapshot,
+  type ObstacleDynamicsSnapshot,
   type Vec3,
 } from '@sleepy/shared';
+import {
+  createDefaultControllerModeConfigs,
+  normalizeControllerModeConfigs,
+  resolveRuntimeControllerMode,
+  type ControllerMode,
+  type ControllerModeConfigs,
+  type ControllerTuning,
+  type RuntimeControllerMode,
+} from './controllers/mode-config';
+import {
+  RAGDOLL_BONE_DEFS,
+  RAGDOLL_JOINT_PROFILE,
+  RAGDOLL_SEGMENT_PROFILE,
+  getRagdollDriveForBone,
+  getRagdollJointForChild,
+} from './controllers/ragdoll-profile';
+import {
+  RAGDOLL_ALL_BODY_GROUPS,
+  RAGDOLL_COLLISION_GROUP_ENV,
+  computeRagdollSegmentFrame,
+  getRagdollBodyGroup,
+  resolveRagdollSegmentChildBone,
+} from './controllers/ragdoll-core';
+import {
+  applyModelOriginOffset,
+  loadFbxObject,
+  loadTexture,
+  normalizeModelRootPivot,
+} from './model/model-utils';
+import type * as RAPIER from '@dimforge/rapier3d-compat';
 
 type TerrainPreset = 'cinematic' | 'alpine' | 'dunes' | 'islands';
+type GroundTexturePreset = 'concrete' | 'grass' | 'sand' | 'rock' | 'snow' | 'lava';
 type SceneGroundTerrainConfig = {
   enabled: boolean;
   preset: TerrainPreset;
@@ -58,13 +91,158 @@ type SceneGroundTerrainConfig = {
   roughness: number;
   seed: number;
 };
+type SceneWaterConfig = {
+  enabled: boolean;
+  level: number;
+  opacity: number;
+  waveAmplitude: number;
+  waveFrequency: number;
+  waveSpeed: number;
+  colorShallow: string;
+  colorDeep: string;
+  specularStrength: number;
+};
 type SceneGroundConfig = {
   type: 'concrete';
   width: number;
   depth: number;
   y: number;
   textureRepeat: number;
+  texturePreset: GroundTexturePreset;
+  water?: SceneWaterConfig;
   terrain?: SceneGroundTerrainConfig;
+};
+type SceneEnvironmentConfig = {
+  preset: 'clear_day' | 'sunset' | 'night' | 'foggy' | 'overcast';
+  fogNear: number;
+  fogFar: number;
+  skybox: {
+    enabled: boolean;
+    preset: 'clear_day' | 'sunset_clouds' | 'midnight_stars' | 'nebula';
+    intensity: number;
+  };
+};
+
+type RuntimeSceneModelComponent = {
+  type: 'model_instance';
+  name?: string;
+  modelId?: string;
+  sourceFile?: string;
+  sourcePath?: string;
+  files?: string[];
+  originOffset?: { x?: number; y?: number; z?: number };
+  collider?: {
+    shape?: 'box' | 'sphere' | 'capsule' | 'mesh';
+    size?: { x?: number; y?: number; z?: number };
+    radius?: number;
+    height?: number;
+    offset?: { x?: number; y?: number; z?: number };
+    isTrigger?: boolean;
+  };
+  physics?: {
+    enabled?: boolean;
+    bodyType?: 'static' | 'dynamic' | 'kinematic';
+    mass?: number;
+    friction?: number;
+    restitution?: number;
+    linearDamping?: number;
+    angularDamping?: number;
+    gravityScale?: number;
+    spawnHeightOffset?: number;
+    initialVelocity?: { x?: number; y?: number; z?: number };
+  };
+  textures?: {
+    baseColor?: string;
+    normal?: string;
+    roughness?: string;
+    metalness?: string;
+    emissive?: string;
+  };
+};
+
+type RuntimeObstacleColliderConfig = {
+  shape: 'box' | 'sphere' | 'capsule' | 'mesh';
+  isTrigger: boolean;
+  bodyType: 'static' | 'dynamic' | 'kinematic';
+  offset: { x: number; y: number; z: number };
+  physicsEnabled: boolean;
+  friction: number;
+  restitution: number;
+  linearDamping: number;
+  gravityScale: number;
+  spawnHeightOffset: number;
+  initialVelocity: { x: number; y: number; z: number };
+  proxy: Obstacle;
+};
+type RuntimePlayerConfig = {
+  avatar: string;
+  ikOffset: number;
+  capsuleRadiusScale: number;
+  capsuleHeightScale: number;
+  capsuleYOffset: number;
+  moveSpeed: number;
+  sprintMultiplier: number;
+  crouchMultiplier: number;
+  slideAccel: number;
+  slideFriction: number;
+  gravity: number;
+  jumpSpeed: number;
+  walkThreshold: number;
+  runThreshold: number;
+  cameraDistance: number;
+  cameraHeight: number;
+  cameraShoulder: number;
+  cameraShoulderHeight: number;
+  cameraSensitivity: number;
+  cameraSmoothing: number;
+  cameraMinPitch: number;
+  cameraMaxPitch: number;
+  targetSmoothSpeed: number;
+  profile?: { controller?: ControllerMode };
+  controllerModes?: ControllerModeConfigs;
+};
+const JUMP_COYOTE_SECONDS = 0.14;
+const DYNAMIC_PHYSICS_ITERATIONS = 3;
+const PLAYER_PUSH_HEIGHT = 1.8;
+const PLAYER_PUSH_IMPULSE = 0.85;
+const PLAYER_PUSH_TANGENT = 0.35;
+const PLAYER_PUSH_MAX_SPEED = 18;
+const RUNTIME_RAGDOLL_DRIVE_STIFFNESS_SCALE = 0.42;
+const RUNTIME_RAGDOLL_DRIVE_DAMPING_SCALE = 0.55;
+const RUNTIME_RAGDOLL_DRIVE_FORCE_SCALE = 0.38;
+const RUNTIME_RAGDOLL_MAX_LINEAR_VELOCITY = 12;
+const RUNTIME_RAGDOLL_MAX_ANGULAR_VELOCITY = 10;
+const RUNTIME_RAGDOLL_LINEAR_BLEED = 0.985;
+const RUNTIME_RAGDOLL_ANGULAR_BLEED = 0.9;
+
+type DynamicObstacleBody = {
+  id: string;
+  obstacle: Obstacle;
+  config: RuntimeObstacleColliderConfig;
+  velocity: THREE.Vector3;
+};
+
+type HumanBoneName = Parameters<VRM['humanoid']['getRawBoneNode']>[0];
+
+type RuntimeRagdollMode = 'off' | 'reactive' | 'ragdoll';
+
+type RuntimeRagdollBone = {
+  name: string;
+  driveGroup?: 'core' | 'neck' | 'arm' | 'leg';
+  bone: THREE.Object3D;
+  child: THREE.Object3D | null;
+  body: RAPIER.RigidBody;
+  bodyToBone?: THREE.Quaternion;
+  targetLocalQuat?: THREE.Quaternion;
+  muscleScale?: number;
+  hingeAxisLocal?: THREE.Vector3;
+  hingeMin?: number;
+  hingeMax?: number;
+  twistAxisLocal?: THREE.Vector3;
+  swingLimitRad?: number;
+  twistLimitRad?: number;
+  parent?: RuntimeRagdollBone;
+  radius?: number;
 };
 
 export class GameApp {
@@ -72,9 +250,22 @@ export class GameApp {
   private gameId: string;
   private obstacles: Obstacle[] = [];
   private obstacleGroup: THREE.Group | null = null;
+  private obstaclePlaceholderMeshes = new Map<string, THREE.Mesh>();
+  private obstacleModelRoots = new Map<string, THREE.Object3D>();
+  private obstacleColliderConfig = new Map<string, RuntimeObstacleColliderConfig>();
+  private obstaclePhysicsVelocity = new Map<string, THREE.Vector3>();
+  private sceneComponents: Record<string, Record<string, unknown>> = {};
   private groundMesh: THREE.Mesh | null = null;
+  private waterMesh: THREE.Mesh | null = null;
+  private waterMaterial: THREE.ShaderMaterial | null = null;
   private groundConfig: SceneGroundConfig | null = null;
-  private playerConfig = {
+  private groundTextureCache = new Map<GroundTexturePreset, THREE.CanvasTexture>();
+  private skyTextureCache = new Map<string, THREE.Texture>();
+  private skyEnvironmentCache = new Map<string, THREE.Texture>();
+  private skyDomeMesh: THREE.Mesh | null = null;
+  private sceneAmbientLight: THREE.AmbientLight | null = null;
+  private sceneDirectionalLight: THREE.DirectionalLight | null = null;
+  private playerConfig: RuntimePlayerConfig = {
     avatar: '',
     ikOffset: 0.02,
     capsuleRadiusScale: 1,
@@ -98,11 +289,17 @@ export class GameApp {
     cameraMinPitch: 0.2,
     cameraMaxPitch: Math.PI - 0.2,
     targetSmoothSpeed: 15,
+    profile: {
+      controller: 'third_person' as ControllerMode,
+    },
+    controllerModes: createDefaultControllerModeConfigs(),
   };
+  private activeControllerMode: RuntimeControllerMode = 'third_person';
+  private sceneControllerModeOverride: ControllerMode | null = null;
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
-  private psxRenderer: PSXRenderer | null = null;
-  private psxPostProcessor: PSXPostProcessor | null = null;
+  private retroRenderer: RetroRenderer | null = null;
+  private retroPostProcessor: RetroPostProcessor | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private orbitYaw = 0;
@@ -151,6 +348,13 @@ export class GameApp {
   private pointerLocked = false;
   private gltfLoader = new GLTFLoader();
   private fbxLoader = new FBXLoader();
+  private modelLoadCache = new Map<string, Promise<THREE.Object3D>>();
+  private meshCollisionRaycaster = new THREE.Raycaster();
+  private meshCollisionRayOrigin = new THREE.Vector3();
+  private meshCollisionRayDir = new THREE.Vector3();
+  private meshCollisionMove = new THREE.Vector3();
+  private meshCollisionNormal = new THREE.Vector3();
+  private meshCollisionNormalMatrix = new THREE.Matrix3();
   private vrms: VRM[] = [];
   private localAvatarName = 'default.vrm';
   private mixamoClips: Record<string, { clip: THREE.AnimationClip; rig: THREE.Object3D }> = {};
@@ -218,9 +422,20 @@ export class GameApp {
   private crowdEnabled = false;
   private crowdLoaded = false;
   private localPlayer: THREE.Object3D;
+  private rapier: typeof import('@dimforge/rapier3d-compat') | null = null;
+  private rapierReady: Promise<void> | null = null;
+  private runtimeRagdollWorld: RAPIER.World | null = null;
+  private runtimeRagdollBones: Map<string, RuntimeRagdollBone> = new Map();
+  private runtimeRagdollMode: RuntimeRagdollMode = 'off';
+  private runtimeRagdollActivationTime = 0;
+  private runtimeRagdollBuildInFlight = false;
+  private runtimeRagdollControlKeys = new Set<string>();
+  private runtimeRagdollHipsOffset = new THREE.Vector3();
+  private localFirstPersonVisualHidden = false;
   private localAvatarLoaded = false;
   private playerAvatarEnabled = false;
   private localVelocityY = 0;
+  private localJumpCoyoteTimer = 0;
   private localVelocityX = 0;
   private localVelocityZ = 0;
   private localVisualOffset = new THREE.Vector3(); // Visual smoothing for network corrections
@@ -260,7 +475,10 @@ export class GameApp {
   >(); // Track by ID with timestamp
   private readonly CROWD_TIMEOUT = 2; // Remove crowd agents not updated for 2 seconds
   private remoteLatest = new Map<string, { x: number; y: number; z: number }>();
+  private remoteRagdoll = new Map<string, boolean>();
   private remoteLatestVel = new Map<string, Vec3>();
+  private receivedObstacleDynamics = false;
+  private lastObstacleDynamicsAt = 0;
   private readonly disableProcedural = true;
   private statusLines = {
     connection: 'connecting...',
@@ -308,8 +526,32 @@ export class GameApp {
     }
     if (event.code === 'KeyV') {
       this.firstPersonMode = !this.firstPersonMode;
+      this.syncLocalFirstPersonVisuals();
       this.emitCameraSettingsChange();
     }
+  };
+  private handleRagdollControlKeyDown = (event: KeyboardEvent) => {
+    if (this.activeControllerMode !== 'ragdoll' || this.runtimeRagdollMode !== 'ragdoll') return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT')
+    ) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (!['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key))
+      return;
+    this.runtimeRagdollControlKeys.add(key);
+    event.preventDefault();
+  };
+  private handleRagdollControlKeyUp = (event: KeyboardEvent) => {
+    const key = event.key.toLowerCase();
+    if (!this.runtimeRagdollControlKeys.has(key)) return;
+    this.runtimeRagdollControlKeys.delete(key);
   };
   private parseSceneGround(input: unknown): SceneGroundConfig | null {
     if (!input || typeof input !== 'object') return null;
@@ -319,6 +561,18 @@ export class GameApp {
       depth?: number;
       y?: number;
       textureRepeat?: number;
+      texturePreset?: string;
+      water?: {
+        enabled?: boolean;
+        level?: number;
+        opacity?: number;
+        waveAmplitude?: number;
+        waveFrequency?: number;
+        waveSpeed?: number;
+        colorShallow?: string;
+        colorDeep?: string;
+        specularStrength?: number;
+      };
       terrain?: {
         enabled?: boolean;
         preset?: string;
@@ -346,8 +600,255 @@ export class GameApp {
       depth: Math.max(1, Number(ground.depth ?? 120)),
       y: Number(ground.y ?? 0),
       textureRepeat: Math.max(1, Number(ground.textureRepeat ?? 12)),
+      texturePreset: this.parseGroundTexturePreset(ground.texturePreset),
+      water: this.parseSceneWater(ground.water),
       terrain,
     };
+  }
+
+  private parseSceneEnvironment(input: SceneRecord['environment'] | undefined): SceneEnvironmentConfig {
+    const presetRaw = String(input?.preset ?? 'clear_day').toLowerCase();
+    const preset: SceneEnvironmentConfig['preset'] =
+      presetRaw === 'sunset' ||
+      presetRaw === 'night' ||
+      presetRaw === 'foggy' ||
+      presetRaw === 'overcast' ||
+      presetRaw === 'clear_day'
+        ? presetRaw
+        : 'clear_day';
+    const skyboxPresetRaw = String(input?.skybox?.preset ?? 'clear_day').toLowerCase();
+    const skyboxPreset: SceneEnvironmentConfig['skybox']['preset'] =
+      skyboxPresetRaw === 'sunset_clouds' ||
+      skyboxPresetRaw === 'midnight_stars' ||
+      skyboxPresetRaw === 'nebula' ||
+      skyboxPresetRaw === 'clear_day'
+        ? skyboxPresetRaw
+        : 'clear_day';
+    return {
+      preset,
+      fogNear: Math.max(2, Number(input?.fogNear ?? 20)),
+      fogFar: Math.max(8, Number(input?.fogFar ?? 120)),
+      skybox: {
+        enabled: input?.skybox?.enabled === true,
+        preset: skyboxPreset,
+        intensity: THREE.MathUtils.clamp(Number(input?.skybox?.intensity ?? 1), 0.2, 2),
+      },
+    };
+  }
+
+  private applySceneEnvironment(config: SceneEnvironmentConfig) {
+    const fogPalette =
+      config.preset === 'sunset'
+        ? { background: 0x2a1f36, fog: 0x3d2a3f, ambient: 0.52, directional: 0.68 }
+        : config.preset === 'night'
+          ? { background: 0x070b14, fog: 0x0d1420, ambient: 0.35, directional: 0.45 }
+          : config.preset === 'foggy'
+            ? { background: 0x5b6977, fog: 0x7a8795, ambient: 0.7, directional: 0.5 }
+            : config.preset === 'overcast'
+              ? { background: 0x505865, fog: 0x656f7d, ambient: 0.62, directional: 0.56 }
+              : { background: 0x0b0c12, fog: 0x19212d, ambient: 0.6, directional: 0.8 };
+    if (config.skybox.enabled) {
+      const key = `${config.skybox.preset}:${config.skybox.intensity.toFixed(2)}`;
+      const skyTexture = this.getSkyTexture(config.skybox.preset, config.skybox.intensity);
+      const skyEnv = this.getSkyEnvironment(key, skyTexture);
+      this.ensureSkyDome();
+      const material = this.skyDomeMesh?.material;
+      if (material instanceof THREE.MeshBasicMaterial) {
+        material.map = skyTexture;
+        material.needsUpdate = true;
+      }
+      if (this.skyDomeMesh) {
+        this.skyDomeMesh.visible = true;
+        this.skyDomeMesh.position.copy(this.camera.position);
+      }
+      this.scene.background = null;
+      this.scene.environment = skyEnv;
+    } else {
+      if (this.skyDomeMesh) this.skyDomeMesh.visible = false;
+      this.scene.background = new THREE.Color(fogPalette.background);
+      this.scene.environment = null;
+    }
+    this.scene.fog = new THREE.Fog(fogPalette.fog, config.fogNear, config.fogFar);
+    if (this.sceneAmbientLight) this.sceneAmbientLight.intensity = fogPalette.ambient;
+    if (this.sceneDirectionalLight) this.sceneDirectionalLight.intensity = fogPalette.directional;
+  }
+
+  private ensureSkyDome() {
+    if (this.skyDomeMesh) return;
+    const radius = Math.max(60, this.camera.far * 0.9);
+    const geometry = new THREE.SphereGeometry(radius, 48, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+    });
+    this.skyDomeMesh = new THREE.Mesh(geometry, material);
+    this.skyDomeMesh.renderOrder = -1000;
+    this.scene.add(this.skyDomeMesh);
+  }
+
+  private getSkyTexture(
+    preset: SceneEnvironmentConfig['skybox']['preset'],
+    intensity: number,
+  ) {
+    const key = `${preset}:${intensity.toFixed(2)}`;
+    const cached = this.skyTextureCache.get(key);
+    if (cached) return cached;
+    const sky = this.createProceduralSkyTexture(preset, intensity);
+    this.skyTextureCache.set(key, sky);
+    return sky;
+  }
+
+  private getSkyEnvironment(key: string, skyTexture: THREE.Texture) {
+    const cached = this.skyEnvironmentCache.get(key);
+    if (cached) return cached;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    pmrem.compileEquirectangularShader();
+    const rt = pmrem.fromEquirectangular(skyTexture);
+    const env = rt.texture;
+    this.skyEnvironmentCache.set(key, env);
+    rt.dispose();
+    pmrem.dispose();
+    return env;
+  }
+
+  private createProceduralSkyTexture(
+    preset: SceneEnvironmentConfig['skybox']['preset'],
+    intensity: number,
+  ) {
+    const width = 2048;
+    const height = 1024;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.colorSpace = THREE.SRGBColorSpace;
+      return fallback;
+    }
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    const tint = THREE.MathUtils.clamp(intensity, 0.2, 2);
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    if (preset === 'sunset_clouds') {
+      grad.addColorStop(0, '#ffb45e');
+      grad.addColorStop(0.45, '#ff7f6f');
+      grad.addColorStop(1, '#613a7a');
+    } else if (preset === 'midnight_stars') {
+      grad.addColorStop(0, '#040814');
+      grad.addColorStop(0.5, '#0b1430');
+      grad.addColorStop(1, '#121838');
+    } else if (preset === 'nebula') {
+      grad.addColorStop(0, '#051326');
+      grad.addColorStop(0.45, '#102a56');
+      grad.addColorStop(1, '#1d1745');
+    } else {
+      grad.addColorStop(0, '#6fc0ff');
+      grad.addColorStop(0.55, '#8dd2ff');
+      grad.addColorStop(1, '#dff3ff');
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+
+    if (preset === 'sunset_clouds' || preset === 'clear_day') {
+      for (let i = 0; i < 280; i += 1) {
+        const x = Math.random() * width;
+        const y = Math.random() * height * 0.8;
+        const r = 36 + Math.random() * 120;
+        const a = preset === 'sunset_clouds' ? 0.03 + Math.random() * 0.06 : 0.02 + Math.random() * 0.04;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(255,255,255,${a})`);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+    }
+    if (preset === 'midnight_stars' || preset === 'nebula') {
+      for (let i = 0; i < 1200; i += 1) {
+        const x = Math.random() * width;
+        const y = Math.random() * height;
+        const bright = clamp01(0.55 + Math.random() * 0.45);
+        ctx.fillStyle = `rgba(210,230,255,${bright * 0.9})`;
+        ctx.fillRect(x, y, 1 + Math.floor(Math.random() * 2), 1 + Math.floor(Math.random() * 2));
+      }
+    }
+    if (preset === 'nebula') {
+      for (let i = 0; i < 80; i += 1) {
+        const x = Math.random() * width;
+        const y = Math.random() * height;
+        const r = 80 + Math.random() * 220;
+        const color = i % 2 === 0 ? '110,140,255' : '180,90,220';
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(${color},0.12)`);
+        g.addColorStop(1, `rgba(${color},0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+    }
+
+    const image = ctx.getImageData(0, 0, width, height);
+    const data = image.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      data[i] = Math.min(255, r * tint);
+      data[i + 1] = Math.min(255, g * tint);
+      data[i + 2] = Math.min(255, b * tint);
+    }
+    ctx.putImageData(image, 0, 0);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private parseSceneWater(input: unknown): SceneWaterConfig {
+    const value = (input ?? {}) as {
+      enabled?: boolean;
+      level?: number;
+      opacity?: number;
+      waveAmplitude?: number;
+      waveFrequency?: number;
+      waveSpeed?: number;
+      colorShallow?: string;
+      colorDeep?: string;
+      specularStrength?: number;
+    };
+    const parseColor = (raw: unknown, fallback: string) => {
+      const text = String(raw ?? fallback).trim();
+      return /^#([0-9a-f]{6})$/i.test(text) ? text : fallback;
+    };
+    return {
+      enabled: value.enabled === true,
+      level: Number(value.level ?? 0.08),
+      opacity: THREE.MathUtils.clamp(Number(value.opacity ?? 0.78), 0.1, 1),
+      waveAmplitude: THREE.MathUtils.clamp(Number(value.waveAmplitude ?? 0.22), 0, 3),
+      waveFrequency: THREE.MathUtils.clamp(Number(value.waveFrequency ?? 0.16), 0.01, 2),
+      waveSpeed: THREE.MathUtils.clamp(Number(value.waveSpeed ?? 1.1), 0, 8),
+      colorShallow: parseColor(value.colorShallow, '#2f97d0'),
+      colorDeep: parseColor(value.colorDeep, '#081c47'),
+      specularStrength: THREE.MathUtils.clamp(Number(value.specularStrength ?? 1.35), 0, 4),
+    };
+  }
+
+  private parseGroundTexturePreset(value: unknown): GroundTexturePreset {
+    const preset = String(value ?? 'concrete').toLowerCase();
+    if (
+      preset === 'grass' ||
+      preset === 'sand' ||
+      preset === 'rock' ||
+      preset === 'snow' ||
+      preset === 'lava' ||
+      preset === 'concrete'
+    ) {
+      return preset;
+    }
+    return 'concrete';
   }
 
   private parseSceneObstacles(obstacles: SceneRecord['obstacles']): Obstacle[] {
@@ -358,7 +859,7 @@ export class GameApp {
   private parseSceneObstacle(obstacle: SceneObstacleRecord, index: number): Obstacle {
     if ('position' in obstacle && 'size' in obstacle) {
       return {
-        id: obstacle.id,
+        id: obstacle.id ?? `obstacle_${index}`,
         position: {
           x: Number(obstacle.position.x ?? 0),
           y: Number(obstacle.position.y ?? 0),
@@ -417,34 +918,34 @@ export class GameApp {
     this.camera.position.set(0, 4, 6);
     this.camera.lookAt(0, 0, 0);
 
-    // Initialize PSX rendering system
-    const psxRes = psxSettings.getResolution();
-    this.psxRenderer = new PSXRenderer(this.renderer, {
-      baseWidth: psxRes.width,
-      baseHeight: psxRes.height,
-      enabled: psxSettings.config.enabled,
-      pixelated: psxSettings.config.pixelated,
+    // Initialize retro rendering system
+    const retroRes = retroRenderSettings.getResolution();
+    this.retroRenderer = new RetroRenderer(this.renderer, {
+      baseWidth: retroRes.width,
+      baseHeight: retroRes.height,
+      enabled: retroRenderSettings.config.enabled,
+      pixelated: retroRenderSettings.config.pixelated,
     });
 
-    this.psxPostProcessor = new PSXPostProcessor(this.renderer, this.scene, this.camera, {
-      enabled: psxSettings.config.enabled,
-      blur: psxSettings.config.blur,
-      blurStrength: psxSettings.config.blurStrength,
-      colorQuantization: psxSettings.config.colorQuantization,
-      colorBits: psxSettings.config.colorBits,
-      dithering: psxSettings.config.dithering,
-      ditherStrength: psxSettings.config.ditherStrength,
-      crtEffects: psxSettings.config.crtEffects,
-      scanlineIntensity: psxSettings.config.scanlineIntensity,
-      curvature: psxSettings.config.curvature,
-      vignette: psxSettings.config.vignette,
-      brightness: psxSettings.config.brightness,
-      chromaticAberration: psxSettings.config.chromaticAberration,
-      chromaticOffset: psxSettings.config.chromaticOffset,
-      contrast: psxSettings.config.contrast,
-      saturation: psxSettings.config.saturation,
-      gamma: psxSettings.config.gamma,
-      exposure: psxSettings.config.exposure,
+    this.retroPostProcessor = new RetroPostProcessor(this.renderer, this.scene, this.camera, {
+      enabled: retroRenderSettings.config.enabled,
+      blur: retroRenderSettings.config.blur,
+      blurStrength: retroRenderSettings.config.blurStrength,
+      colorQuantization: retroRenderSettings.config.colorQuantization,
+      colorBits: retroRenderSettings.config.colorBits,
+      dithering: retroRenderSettings.config.dithering,
+      ditherStrength: retroRenderSettings.config.ditherStrength,
+      crtEffects: retroRenderSettings.config.crtEffects,
+      scanlineIntensity: retroRenderSettings.config.scanlineIntensity,
+      curvature: retroRenderSettings.config.curvature,
+      vignette: retroRenderSettings.config.vignette,
+      brightness: retroRenderSettings.config.brightness,
+      chromaticAberration: retroRenderSettings.config.chromaticAberration,
+      chromaticOffset: retroRenderSettings.config.chromaticOffset,
+      contrast: retroRenderSettings.config.contrast,
+      saturation: retroRenderSettings.config.saturation,
+      gamma: retroRenderSettings.config.gamma,
+      exposure: retroRenderSettings.config.exposure,
     });
 
     this.orbitRadius = this.playerConfig.cameraDistance ?? this.orbitRadius;
@@ -455,6 +956,7 @@ export class GameApp {
     this.orbitYaw = this.orbitSpherical.theta;
     this.orbitPitch = this.orbitSpherical.phi;
     this.orbitRadius = this.orbitSpherical.radius;
+    this.applyControllerModeFromConfig();
 
     this.clock = new THREE.Clock();
     this.hud = this.createHud();
@@ -514,6 +1016,8 @@ export class GameApp {
     if (this.touchControls) this.container.appendChild(this.touchControls);
     this.container.focus();
     window.addEventListener('keydown', this.handleDebugKeyDown);
+    window.addEventListener('keydown', this.handleRagdollControlKeyDown);
+    window.addEventListener('keyup', this.handleRagdollControlKeyUp);
     this.obstacleGroup = this.createObstacles();
     this.scene.add(this.createLights(), this.obstacleGroup, this.localPlayer, this.crowd);
 
@@ -526,40 +1030,40 @@ export class GameApp {
 
     window.addEventListener('resize', this.handleResize);
 
-    // Listen for global PSX settings changes
-    window.addEventListener('psx-settings-changed', this.handlePSXSettingsChange);
+    // Listen for global retro settings changes
+    window.addEventListener('retro-settings-changed', this.handleRetroRenderSettingsChange);
   }
 
-  private handlePSXSettingsChange = () => {
-    // Update PSX renderers when settings change globally
-    if (this.psxRenderer) {
-      const res = psxSettings.getResolution();
-      this.psxRenderer.setEnabled(psxSettings.config.enabled);
-      this.psxRenderer.setResolution(res.width, res.height);
-      this.psxRenderer.setPixelated(psxSettings.config.pixelated);
+  private handleRetroRenderSettingsChange = () => {
+    // Update retro renderers when settings change globally
+    if (this.retroRenderer) {
+      const res = retroRenderSettings.getResolution();
+      this.retroRenderer.setEnabled(retroRenderSettings.config.enabled);
+      this.retroRenderer.setResolution(res.width, res.height);
+      this.retroRenderer.setPixelated(retroRenderSettings.config.pixelated);
     }
 
-    if (this.psxPostProcessor) {
-      this.psxPostProcessor.setEnabled(psxSettings.config.enabled);
-      this.psxPostProcessor.setBlur(psxSettings.config.blur, psxSettings.config.blurStrength);
-      this.psxPostProcessor.setColorQuantization(
-        psxSettings.config.colorQuantization,
-        psxSettings.config.colorBits,
+    if (this.retroPostProcessor) {
+      this.retroPostProcessor.setEnabled(retroRenderSettings.config.enabled);
+      this.retroPostProcessor.setBlur(retroRenderSettings.config.blur, retroRenderSettings.config.blurStrength);
+      this.retroPostProcessor.setColorQuantization(
+        retroRenderSettings.config.colorQuantization,
+        retroRenderSettings.config.colorBits,
       );
-      this.psxPostProcessor.setDithering(
-        psxSettings.config.dithering,
-        psxSettings.config.ditherStrength,
+      this.retroPostProcessor.setDithering(
+        retroRenderSettings.config.dithering,
+        retroRenderSettings.config.ditherStrength,
       );
-      this.psxPostProcessor.setCRTEffects(psxSettings.config.crtEffects);
-      this.psxPostProcessor.setChromaticAberration(
-        psxSettings.config.chromaticAberration,
-        psxSettings.config.chromaticOffset,
+      this.retroPostProcessor.setCRTEffects(retroRenderSettings.config.crtEffects);
+      this.retroPostProcessor.setChromaticAberration(
+        retroRenderSettings.config.chromaticAberration,
+        retroRenderSettings.config.chromaticOffset,
       );
-      this.psxPostProcessor.setBrightness(psxSettings.config.brightness);
-      this.psxPostProcessor.setContrast(psxSettings.config.contrast);
-      this.psxPostProcessor.setSaturation(psxSettings.config.saturation);
-      this.psxPostProcessor.setGamma(psxSettings.config.gamma);
-      this.psxPostProcessor.setExposure(psxSettings.config.exposure);
+      this.retroPostProcessor.setBrightness(retroRenderSettings.config.brightness);
+      this.retroPostProcessor.setContrast(retroRenderSettings.config.contrast);
+      this.retroPostProcessor.setSaturation(retroRenderSettings.config.saturation);
+      this.retroPostProcessor.setGamma(retroRenderSettings.config.gamma);
+      this.retroPostProcessor.setExposure(retroRenderSettings.config.exposure);
     }
   };
 
@@ -578,6 +1082,8 @@ export class GameApp {
     }
     this.container.removeEventListener('click', this.handleContainerClick);
     window.removeEventListener('keydown', this.handleDebugKeyDown);
+    window.removeEventListener('keydown', this.handleRagdollControlKeyDown);
+    window.removeEventListener('keyup', this.handleRagdollControlKeyUp);
     this.renderer.domElement.removeEventListener('mousedown', this.handleMouseDown);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
@@ -585,12 +1091,34 @@ export class GameApp {
     this.renderer.domElement.removeEventListener('click', this.requestPointerLock);
     document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     window.removeEventListener('resize', this.handleResize);
-    window.removeEventListener('psx-settings-changed', this.handlePSXSettingsChange);
+    window.removeEventListener('retro-settings-changed', this.handleRetroRenderSettingsChange);
     this.pointerLocked = false;
+    this.disableRuntimeRagdoll();
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock();
     }
     this.input.dispose();
+    if (this.waterMesh) {
+      this.scene.remove(this.waterMesh);
+      this.waterMesh.geometry.dispose();
+      this.waterMesh = null;
+    }
+    if (this.waterMaterial) {
+      this.waterMaterial.dispose();
+      this.waterMaterial = null;
+    }
+    for (const texture of this.groundTextureCache.values()) texture.dispose();
+    this.groundTextureCache.clear();
+    if (this.skyDomeMesh) {
+      this.scene.remove(this.skyDomeMesh);
+      this.skyDomeMesh.geometry.dispose();
+      if (this.skyDomeMesh.material instanceof THREE.Material) this.skyDomeMesh.material.dispose();
+      this.skyDomeMesh = null;
+    }
+    for (const texture of this.skyTextureCache.values()) texture.dispose();
+    this.skyTextureCache.clear();
+    for (const env of this.skyEnvironmentCache.values()) env.dispose();
+    this.skyEnvironmentCache.clear();
     void this.roomClient.disconnect();
   }
 
@@ -630,7 +1158,59 @@ export class GameApp {
     if (typeof patch.firstPersonMode === 'boolean') {
       this.firstPersonMode = patch.firstPersonMode;
     }
+    this.syncLocalFirstPersonVisuals();
     this.emitCameraSettingsChange();
+  }
+
+  private getActiveControllerTuning(): ControllerTuning {
+    const mode = this.activeControllerMode;
+    const normalized = normalizeControllerModeConfigs(this.playerConfig.controllerModes);
+    this.playerConfig.controllerModes = normalized;
+    return normalized[mode];
+  }
+
+  private applyControllerModeFromConfig() {
+    this.playerConfig.controllerModes = normalizeControllerModeConfigs(this.playerConfig.controllerModes);
+    const profileController = this.playerConfig.profile?.controller;
+    const preferred = this.sceneControllerModeOverride ?? profileController ?? 'third_person';
+    const mode = resolveRuntimeControllerMode(preferred);
+    this.activeControllerMode = mode;
+    if (mode === 'first_person') {
+      this.firstPersonMode = true;
+    } else if (mode === 'third_person' || mode === 'ragdoll') {
+      this.firstPersonMode = false;
+    }
+    const tuning = this.getActiveControllerTuning();
+    const modeCameraDistance =
+      tuning.cameraDistance ?? this.playerConfig.cameraDistance ?? this.orbitRadius;
+    this.orbitRadius = Math.min(40, Math.max(0.02, modeCameraDistance));
+    if (mode === 'ragdoll') {
+      void this.ensureRuntimeRagdollReady();
+    } else {
+      this.disableRuntimeRagdoll();
+    }
+    this.syncLocalFirstPersonVisuals();
+    this.emitCameraSettingsChange();
+  }
+
+  private tickController(delta: number) {
+    const tuning = this.getActiveControllerTuning();
+    if (this.isFirstPersonControllerActive()) {
+      this.firstPersonMode = true;
+      this.animateLocalFirstPerson(delta, tuning);
+      return;
+    }
+    if (this.activeControllerMode === 'ragdoll') {
+      this.firstPersonMode = false;
+      if (this.runtimeRagdollMode === 'ragdoll' && this.runtimeRagdollWorld) {
+        this.stepRuntimeRagdoll(delta);
+        return;
+      }
+      this.animateLocalPlayer(delta, true, tuning);
+      return;
+    }
+    this.firstPersonMode = false;
+    this.animateLocalPlayer(delta, false, tuning);
   }
 
   public onUiCameraSettingsChange(
@@ -653,16 +1233,22 @@ export class GameApp {
     const delta = Math.max(0, Math.min(0.1, (now - this.lastTime) / 1000));
     this.lastTime = now;
     const elapsed = this.clock.getElapsedTime();
+    this.simulateObstaclePhysics(delta);
     this.animateCrowd(elapsed, delta);
     this.input.updateGamepad();
 
     // Check for Select button press to toggle first person mode
-    if (this.input.wasSelectJustPressed()) {
+    if (this.input.wasSelectJustPressed() && this.activeControllerMode !== 'ragdoll') {
       this.firstPersonMode = !this.firstPersonMode;
+      this.syncLocalFirstPersonVisuals();
       this.emitCameraSettingsChange();
     }
+    if (this.activeControllerMode === 'ragdoll' && this.runtimeRagdollMode !== 'ragdoll') {
+      void this.ensureRuntimeRagdollReady();
+    }
 
-    this.animateLocalPlayer(delta);
+    this.tickController(delta);
+    this.syncLocalFirstPersonVisuals();
 
     // Smooth out visual offset from network corrections (30x per second = fast and imperceptible)
     const offsetSmoothSpeed = Math.min(1, delta * 30);
@@ -682,23 +1268,30 @@ export class GameApp {
     this.updateAnimHud();
     this.tickNetwork(delta);
     this.updateRemoteInterpolation(now / 1000);
+    if (this.skyDomeMesh?.visible) {
+      this.skyDomeMesh.position.copy(this.camera.position);
+    }
+    if (this.waterMaterial) {
+      const uTime = this.waterMaterial.uniforms.uTime;
+      if (uTime) uTime.value += delta;
+    }
 
     // Apply visual offset for rendering (hides network corrections)
     this.localPlayer.position.add(this.localVisualOffset);
 
-    // Update PSX material resolutions before rendering
-    if (psxSettings.config.enabled && this.psxRenderer) {
-      const res = this.psxRenderer.getResolution();
+    // Update retro material resolutions before rendering
+    if (retroRenderSettings.config.enabled && this.retroRenderer) {
+      const res = this.retroRenderer.getResolution();
       this.scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh && obj.material instanceof PSXMaterial) {
+        if (obj instanceof THREE.Mesh && obj.material instanceof RetroShaderMaterial) {
           obj.material.updateResolution(res.width, res.height);
         }
       });
     }
 
-    // Render with PSX effects or standard
-    if (psxSettings.config.enabled && this.psxPostProcessor) {
-      this.psxPostProcessor.render();
+    // Render with retro effects or standard
+    if (retroRenderSettings.config.enabled && this.retroPostProcessor) {
+      this.retroPostProcessor.render();
     } else {
       this.renderer.render(this.scene, this.camera);
     }
@@ -716,14 +1309,14 @@ export class GameApp {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
 
-    // Update PSX resolution
-    if (this.psxRenderer) {
-      const psxRes = psxSettings.getResolution();
-      this.psxRenderer.setResolution(psxRes.width, psxRes.height);
+    // Update retro resolution
+    if (this.retroRenderer) {
+      const retroRes = retroRenderSettings.getResolution();
+      this.retroRenderer.setResolution(retroRes.width, retroRes.height);
     }
 
-    if (this.psxPostProcessor) {
-      this.psxPostProcessor.setSize(innerWidth, innerHeight);
+    if (this.retroPostProcessor) {
+      this.retroPostProcessor.setSize(innerWidth, innerHeight);
     }
   };
 
@@ -735,6 +1328,8 @@ export class GameApp {
     const rim = new THREE.DirectionalLight(0xff5566, 0.5);
     rim.position.set(-20, 15, -10);
     group.add(ambient, key, rim);
+    this.sceneAmbientLight = ambient;
+    this.sceneDirectionalLight = key;
     return group;
   }
 
@@ -835,7 +1430,7 @@ export class GameApp {
       position.needsUpdate = true;
       geometry.computeVertexNormals();
     }
-    const texture = this.createConcreteTexture();
+    const texture = this.getGroundTexture(config.texturePreset);
     texture.repeat.set(config.textureRepeat, config.textureRepeat);
     const material = new THREE.MeshStandardMaterial({
       map: texture,
@@ -849,7 +1444,92 @@ export class GameApp {
     return mesh;
   }
 
-  private createConcreteTexture() {
+  private createWaterMesh(config: SceneGroundConfig) {
+    const water = config.water;
+    if (!water?.enabled) return null;
+    const terrain = config.terrain?.enabled ? config.terrain : null;
+    const width = terrain ? Math.max(16, Number(terrain.size ?? config.width)) : config.width;
+    const depth = terrain ? Math.max(16, Number(terrain.size ?? config.depth)) : config.depth;
+    const segments = terrain
+      ? Math.max(48, Math.min(240, Math.floor(Number(terrain.resolution ?? 64) * 2)))
+      : 80;
+    const geometry = new THREE.PlaneGeometry(width, depth, segments, segments);
+    geometry.rotateX(-Math.PI / 2);
+    const colorShallow = new THREE.Color(water.colorShallow);
+    const colorDeep = new THREE.Color(water.colorDeep);
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uOpacity: { value: water.opacity },
+        uWaveAmplitude: { value: water.waveAmplitude },
+        uWaveFrequency: { value: water.waveFrequency },
+        uWaveSpeed: { value: water.waveSpeed },
+        uColorShallow: { value: colorShallow },
+        uColorDeep: { value: colorDeep },
+        uSpecularStrength: { value: water.specularStrength },
+      },
+      vertexShader: `
+        uniform float uTime;
+        uniform float uWaveAmplitude;
+        uniform float uWaveFrequency;
+        uniform float uWaveSpeed;
+        varying vec3 vWorldPos;
+        varying vec3 vViewDir;
+        varying float vWave;
+        void main() {
+          vec3 p = position;
+          float t = uTime * uWaveSpeed;
+          float waveA = sin((p.x * uWaveFrequency * 1.3) + t * 1.7);
+          float waveB = cos((p.z * uWaveFrequency * 1.1) - t * 1.25);
+          float waveC = sin((p.x + p.z) * uWaveFrequency * 0.72 + t * 0.95);
+          float wave = (waveA * 0.55 + waveB * 0.3 + waveC * 0.15) * uWaveAmplitude;
+          p.y += wave;
+          vec4 world = modelMatrix * vec4(p, 1.0);
+          vWorldPos = world.xyz;
+          vViewDir = normalize(cameraPosition - world.xyz);
+          vWave = wave;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: `
+        uniform float uOpacity;
+        uniform vec3 uColorShallow;
+        uniform vec3 uColorDeep;
+        uniform float uSpecularStrength;
+        varying vec3 vWorldPos;
+        varying vec3 vViewDir;
+        varying float vWave;
+        void main() {
+          float depthMix = clamp((vWorldPos.y + 1.0) * 0.4, 0.0, 1.0);
+          vec3 base = mix(uColorDeep, uColorShallow, depthMix);
+          float fresnel = pow(1.0 - max(dot(normalize(vViewDir), vec3(0.0, 1.0, 0.0)), 0.0), 2.8);
+          float crest = smoothstep(0.45, 1.0, abs(vWave));
+          float sparkle = pow(max(dot(normalize(vViewDir), normalize(vec3(0.3, 1.0, 0.2))), 0.0), 26.0);
+          vec3 color = base + fresnel * vec3(0.28, 0.42, 0.55) + crest * vec3(0.09, 0.14, 0.18);
+          color += sparkle * uSpecularStrength * vec3(0.9, 0.98, 1.0);
+          gl_FragColor = vec4(color, clamp(uOpacity + fresnel * 0.12, 0.0, 1.0));
+        }
+      `,
+    });
+    this.waterMaterial = material;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = config.y + water.level + 0.02;
+    mesh.renderOrder = 20;
+    return mesh;
+  }
+
+  private getGroundTexture(preset: GroundTexturePreset) {
+    const cached = this.groundTextureCache.get(preset);
+    if (cached) return cached;
+    const texture = this.createGroundTexture(preset);
+    this.groundTextureCache.set(preset, texture);
+    return texture;
+  }
+
+  private createGroundTexture(preset: GroundTexturePreset) {
     const size = 256;
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -862,12 +1542,39 @@ export class GameApp {
       fallback.repeat.set(12, 12);
       return fallback;
     }
-    ctx.fillStyle = '#4a4f57';
+    const palette =
+      preset === 'grass'
+        ? { base: '#36503a', grid: '#2b3f2f', jitter: 0.08 }
+        : preset === 'sand'
+          ? { base: '#9f8f6e', grid: '#857657', jitter: 0.1 }
+          : preset === 'rock'
+            ? { base: '#5a5e67', grid: '#454a52', jitter: 0.12 }
+            : preset === 'snow'
+              ? { base: '#d9e2ea', grid: '#c0ccd8', jitter: 0.06 }
+              : preset === 'lava'
+                ? { base: '#3d2522', grid: '#5b2f2a', jitter: 0.14 }
+                : { base: '#4a4f57', grid: '#2f343b', jitter: 0.1 };
+    const presetSeed =
+      preset === 'grass'
+        ? 1117
+        : preset === 'sand'
+          ? 2237
+          : preset === 'rock'
+            ? 3319
+            : preset === 'snow'
+              ? 4451
+              : preset === 'lava'
+                ? 5563
+                : 6673;
+    ctx.fillStyle = palette.base;
     ctx.fillRect(0, 0, size, size);
     const imageData = ctx.getImageData(0, 0, size, size);
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
-      const n = (Math.random() * 0.2 - 0.1) * 255;
+      const pixel = i / 4;
+      const x = pixel % size;
+      const y = Math.floor(pixel / size);
+      const n = (this.terrainHash2d(x * 0.17, y * 0.17, presetSeed) * 2 - 1) * 255 * palette.jitter;
       const r = data[i] ?? 0;
       const g = data[i + 1] ?? 0;
       const b = data[i + 2] ?? 0;
@@ -877,7 +1584,7 @@ export class GameApp {
     }
     ctx.putImageData(imageData, 0, 0);
     ctx.globalAlpha = 0.1;
-    ctx.strokeStyle = '#2f343b';
+    ctx.strokeStyle = palette.grid;
     for (let i = 0; i < size; i += 32) {
       ctx.beginPath();
       ctx.moveTo(i, 0);
@@ -916,18 +1623,374 @@ export class GameApp {
 
   private createObstacles() {
     const group = new THREE.Group();
+    this.obstaclePlaceholderMeshes.clear();
+    this.obstacleColliderConfig.clear();
+    const activeIds = new Set<string>();
     const material = new THREE.MeshStandardMaterial({
       color: 0x2a2f3c,
       roughness: 0.85,
       metalness: 0.1,
     });
     for (const obstacle of this.obstacles) {
-      const geometry = new THREE.BoxGeometry(obstacle.size.x, obstacle.size.y, obstacle.size.z);
+      const obstacleId = String(obstacle.id ?? '').trim();
+      const componentRaw = this.sceneComponents[`obstacle:${obstacleId}`];
+      const colliderShapeRaw =
+        componentRaw && typeof componentRaw === 'object'
+          ? String(
+              ((componentRaw as RuntimeSceneModelComponent).collider as
+                | RuntimeSceneModelComponent['collider']
+                | undefined)?.shape ?? 'box',
+            ).toLowerCase()
+          : 'box';
+      const colliderShape: 'box' | 'sphere' | 'capsule' | 'mesh' =
+        colliderShapeRaw === 'sphere' ||
+        colliderShapeRaw === 'capsule' ||
+        colliderShapeRaw === 'mesh'
+          ? colliderShapeRaw
+          : 'box';
+      const component = (componentRaw as RuntimeSceneModelComponent | undefined) ?? undefined;
+      const collider = component?.collider;
+      const physics = component?.physics;
+      const colliderOffset = {
+        x: Number(collider?.offset?.x ?? 0),
+        y: Number(collider?.offset?.y ?? 0),
+        z: Number(collider?.offset?.z ?? 0),
+      };
+      const radius = Math.max(0.05, Number(collider?.radius ?? obstacle.size.x * 0.5));
+      const height = Math.max(0.1, Number(collider?.height ?? obstacle.size.y));
+      const size =
+        colliderShape === 'sphere'
+          ? { x: radius * 2, y: radius * 2, z: radius * 2 }
+          : colliderShape === 'capsule'
+            ? { x: radius * 2, y: height, z: radius * 2 }
+            : {
+                x: Math.max(0.05, Number(collider?.size?.x ?? obstacle.size.x)),
+                y: Math.max(0.05, Number(collider?.size?.y ?? obstacle.size.y)),
+                z: Math.max(0.05, Number(collider?.size?.z ?? obstacle.size.z)),
+              };
+      const proxy: Obstacle = {
+        id: obstacle.id,
+        position: {
+          x: obstacle.position.x + colliderOffset.x,
+          y: obstacle.position.y + colliderOffset.y,
+          z: obstacle.position.z + colliderOffset.z,
+        },
+        size,
+      };
+      const bodyTypeRaw = String(physics?.bodyType ?? 'static').toLowerCase();
+      const bodyType: 'static' | 'dynamic' | 'kinematic' =
+        bodyTypeRaw === 'dynamic' || bodyTypeRaw === 'kinematic' ? bodyTypeRaw : 'static';
+      const spawnHeightOffset = THREE.MathUtils.clamp(Number(physics?.spawnHeightOffset ?? 0), -10, 50);
+      const initialVelocity = {
+        x: THREE.MathUtils.clamp(Number(physics?.initialVelocity?.x ?? 0), -30, 30),
+        y: THREE.MathUtils.clamp(Number(physics?.initialVelocity?.y ?? 0), -30, 30),
+        z: THREE.MathUtils.clamp(Number(physics?.initialVelocity?.z ?? 0), -30, 30),
+      };
+      const shouldInitializePhysicsState =
+        obstacleId.length > 0 &&
+        physics?.enabled === true &&
+        bodyType === 'dynamic' &&
+        collider?.isTrigger !== true &&
+        !this.obstaclePhysicsVelocity.has(obstacleId);
+      if (shouldInitializePhysicsState && Math.abs(spawnHeightOffset) > 0.0001) {
+        proxy.position.y += spawnHeightOffset;
+        obstacle.position.y = proxy.position.y - colliderOffset.y;
+      }
+      if (obstacleId) {
+        activeIds.add(obstacleId);
+        this.obstacleColliderConfig.set(obstacleId, {
+          shape: colliderShape,
+          isTrigger: collider?.isTrigger === true,
+          bodyType,
+          offset: colliderOffset,
+          physicsEnabled: physics?.enabled === true,
+          friction: Math.max(0, Number(physics?.friction ?? 0.7)),
+          restitution: THREE.MathUtils.clamp(Number(physics?.restitution ?? 0.05), 0, 1),
+          linearDamping: Math.max(0, Number(physics?.linearDamping ?? 0)),
+          gravityScale: Number(physics?.gravityScale ?? 1),
+          spawnHeightOffset,
+          initialVelocity,
+          proxy,
+        });
+        if (shouldInitializePhysicsState) {
+          this.obstaclePhysicsVelocity.set(
+            obstacleId,
+            new THREE.Vector3(initialVelocity.x, initialVelocity.y, initialVelocity.z),
+          );
+        }
+      }
+      const geometry = new THREE.BoxGeometry(proxy.size.x, proxy.size.y, proxy.size.z);
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(obstacle.position.x, obstacle.size.y / 2, obstacle.position.z);
+      mesh.position.set(proxy.position.x, proxy.position.y + proxy.size.y / 2, proxy.position.z);
       group.add(mesh);
+      this.obstaclePlaceholderMeshes.set(obstacleId, mesh);
+    }
+    for (const id of Array.from(this.obstaclePhysicsVelocity.keys())) {
+      if (!activeIds.has(id)) this.obstaclePhysicsVelocity.delete(id);
     }
     return group;
+  }
+
+  private isMeshColliderObstacle(obstacleId: string) {
+    return this.obstacleColliderConfig.get(obstacleId)?.shape === 'mesh';
+  }
+
+  private getObstacleColliderProxy(obstacle: Obstacle) {
+    const obstacleId = String(obstacle.id ?? '').trim();
+    const config = this.obstacleColliderConfig.get(obstacleId);
+    if (!config) return obstacle;
+    if (config.isTrigger) return null;
+    // Static mesh colliders use triangle tests; dynamic mesh colliders must use proxy collision.
+    if (
+      config.shape === 'mesh' &&
+      this.obstacleModelRoots.has(obstacleId) &&
+      config.bodyType !== 'dynamic'
+    ) {
+      return null;
+    }
+    return config.proxy;
+  }
+
+  private getMeshColliderRoots(ignoreObstacleId: string | null = null) {
+    const roots: THREE.Object3D[] = [];
+    for (const [id, root] of this.obstacleModelRoots) {
+      if (ignoreObstacleId && id === ignoreObstacleId) continue;
+      const config = this.obstacleColliderConfig.get(id);
+      if (!config || config.shape !== 'mesh' || config.isTrigger) continue;
+      roots.push(root);
+    }
+    return roots;
+  }
+
+  private sampleMeshColliderHeight(x: number, z: number, ignoreObstacleId: string | null = null) {
+    const roots = this.getMeshColliderRoots(ignoreObstacleId);
+    if (roots.length === 0) return Number.NEGATIVE_INFINITY;
+    let best = Number.NEGATIVE_INFINITY;
+    this.meshCollisionRayOrigin.set(x, 400, z);
+    this.meshCollisionRayDir.set(0, -1, 0);
+    this.meshCollisionRaycaster.set(this.meshCollisionRayOrigin, this.meshCollisionRayDir);
+    this.meshCollisionRaycaster.far = 800;
+    for (const root of roots) {
+      const hits = this.meshCollisionRaycaster.intersectObject(root, true);
+      if (hits.length === 0) continue;
+      for (const hit of hits) {
+        if (hit.point.y > best) best = hit.point.y;
+      }
+    }
+    return best;
+  }
+
+  private sampleGroundHeightWithoutObstacle(x: number, z: number, ignoreObstacleId: string) {
+    const terrain = this.groundConfig?.terrain?.enabled ? this.groundConfig.terrain : null;
+    const baseHeight = this.groundConfig?.y ?? GROUND_Y;
+    let height = baseHeight;
+    if (terrain) {
+      const terrainHalf = Math.max(16, terrain.size) * 0.5;
+      if (Math.abs(x) <= terrainHalf && Math.abs(z) <= terrainHalf) {
+        height = baseHeight + this.sampleTerrainHeight({ ...terrain, x, z });
+      }
+    }
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId || obstacleId === ignoreObstacleId) continue;
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      const halfX = proxy.size.x / 2;
+      const halfZ = proxy.size.z / 2;
+      if (Math.abs(x - proxy.position.x) <= halfX && Math.abs(z - proxy.position.z) <= halfZ) {
+        height = Math.max(height, proxy.size.y + proxy.position.y);
+      }
+    }
+    const meshHeight = this.sampleMeshColliderHeight(x, z, ignoreObstacleId);
+    if (Number.isFinite(meshHeight)) height = Math.max(height, meshHeight);
+    return height;
+  }
+
+  private resolveCircleMeshCollisions(
+    current: { x: number; y: number; z: number },
+    next: { x: number; y: number; z: number },
+    radius: number,
+  ) {
+    const roots = this.getMeshColliderRoots();
+    if (roots.length === 0) return next;
+    this.meshCollisionMove.set(next.x - current.x, 0, next.z - current.z);
+    const moveLength = this.meshCollisionMove.length();
+    if (moveLength < 1e-5) return next;
+    const dir = this.meshCollisionMove.clone().normalize();
+    this.meshCollisionRayOrigin.set(current.x, next.y + 0.9, current.z);
+    this.meshCollisionRaycaster.set(this.meshCollisionRayOrigin, dir);
+    this.meshCollisionRaycaster.far = moveLength + radius + 0.2;
+    let nearestHit: THREE.Intersection | null = null;
+    for (const root of roots) {
+      const hits = this.meshCollisionRaycaster.intersectObject(root, true);
+      if (hits.length === 0) continue;
+      const hit = hits[0];
+      if (!hit) continue;
+      if (!nearestHit || hit.distance < nearestHit.distance) nearestHit = hit;
+    }
+    if (!nearestHit || !nearestHit.face) return next;
+    const allowed = Math.max(0, nearestHit.distance - radius - 0.03);
+    if (allowed >= moveLength) return next;
+    const clipped = this.meshCollisionMove.clone().setLength(Math.min(moveLength, allowed));
+    const remaining = this.meshCollisionMove.clone().sub(clipped);
+    this.meshCollisionNormalMatrix.getNormalMatrix(nearestHit.object.matrixWorld);
+    this.meshCollisionNormal
+      .copy(nearestHit.face.normal)
+      .applyMatrix3(this.meshCollisionNormalMatrix)
+      .normalize();
+    if (Math.abs(this.meshCollisionNormal.y) > 0.5) return next;
+    this.meshCollisionNormal.y = 0;
+    if (this.meshCollisionNormal.lengthSq() < 1e-6) {
+      return {
+        x: current.x + clipped.x,
+        y: next.y,
+        z: current.z + clipped.z,
+      };
+    }
+    this.meshCollisionNormal.normalize();
+    const slide = remaining.sub(
+      this.meshCollisionNormal.clone().multiplyScalar(remaining.dot(this.meshCollisionNormal)),
+    );
+    const adjusted = clipped.add(slide.multiplyScalar(0.9));
+    return {
+      x: current.x + adjusted.x,
+      y: next.y,
+      z: current.z + adjusted.z,
+    };
+  }
+
+  private getMeshObstacleStepHeightAhead(dir: THREE.Vector3, forward: number) {
+    const pos = this.localPlayer.position;
+    const probeX = pos.x + dir.x * forward;
+    const probeZ = pos.z + dir.z * forward;
+    const meshHeight = this.sampleMeshColliderHeight(probeX, probeZ);
+    if (!Number.isFinite(meshHeight)) return 0;
+    return Math.max(0, meshHeight - pos.y);
+  }
+
+  private getModelFileUrl(modelId: string, file: string) {
+    if (/^(https?:)?\/\//i.test(file) || file.startsWith('/')) return file;
+    return getGameModelFileUrl(this.gameId, modelId, file);
+  }
+
+  private loadFbxObject(url: string) {
+    return loadFbxObject(this.fbxLoader, url);
+  }
+
+  private loadTexture(url: string, colorSpace: THREE.ColorSpace) {
+    return loadTexture(url, colorSpace);
+  }
+
+  private normalizeModelRootPivot(root: THREE.Object3D) {
+    normalizeModelRootPivot(root);
+  }
+
+  private applyModelOriginOffset(root: THREE.Object3D, originOffset?: { x?: number; y?: number; z?: number }) {
+    applyModelOriginOffset(root, originOffset);
+  }
+
+  private async loadModelAssetObject(component: RuntimeSceneModelComponent) {
+    const modelId = String(component.modelId ?? '').trim();
+    const sourceCandidates = new Set<string>();
+    if (component.sourceFile) sourceCandidates.add(component.sourceFile);
+    if (component.sourcePath) sourceCandidates.add(component.sourcePath);
+    for (const file of component.files ?? []) sourceCandidates.add(file);
+    const candidates = Array.from(sourceCandidates).filter((value) => value.trim().length > 0);
+    if (!modelId || candidates.length === 0) {
+      throw new Error('missing_model_source');
+    }
+    const key = `${this.gameId}:${modelId}:${candidates.join('|')}:${component.originOffset?.x ?? 0}:${component.originOffset?.y ?? 0}:${component.originOffset?.z ?? 0}:${JSON.stringify(component.textures ?? {})}`;
+    let pending = this.modelLoadCache.get(key);
+    if (!pending) {
+      pending = (async () => {
+        let root: THREE.Object3D | null = null;
+        let lastError: unknown = null;
+        for (const candidate of candidates) {
+          try {
+            root = await this.loadFbxObject(this.getModelFileUrl(modelId, candidate));
+            break;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        if (!root) throw lastError instanceof Error ? lastError : new Error('failed_to_load_model');
+        this.normalizeModelRootPivot(root);
+        this.applyModelOriginOffset(root, component.originOffset);
+        const textures = component.textures ?? {};
+        const [baseColor, normal, roughness, metalness, emissive] = await Promise.all([
+          textures.baseColor
+            ? this.loadTexture(this.getModelFileUrl(modelId, textures.baseColor), THREE.SRGBColorSpace)
+            : Promise.resolve<THREE.Texture | null>(null),
+          textures.normal
+            ? this.loadTexture(this.getModelFileUrl(modelId, textures.normal), THREE.NoColorSpace)
+            : Promise.resolve<THREE.Texture | null>(null),
+          textures.roughness
+            ? this.loadTexture(this.getModelFileUrl(modelId, textures.roughness), THREE.NoColorSpace)
+            : Promise.resolve<THREE.Texture | null>(null),
+          textures.metalness
+            ? this.loadTexture(this.getModelFileUrl(modelId, textures.metalness), THREE.NoColorSpace)
+            : Promise.resolve<THREE.Texture | null>(null),
+          textures.emissive
+            ? this.loadTexture(this.getModelFileUrl(modelId, textures.emissive), THREE.SRGBColorSpace)
+            : Promise.resolve<THREE.Texture | null>(null),
+        ]);
+        root.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return;
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+          const asArray = Array.isArray(obj.material) ? obj.material : [obj.material];
+          const nextMaterials = asArray.map((base) => {
+            const material =
+              base instanceof THREE.MeshStandardMaterial
+                ? base
+                : new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0.1 });
+            if (baseColor) material.map = baseColor;
+            if (normal) material.normalMap = normal;
+            if (roughness) material.roughnessMap = roughness;
+            if (metalness) material.metalnessMap = metalness;
+            if (emissive) {
+              material.emissiveMap = emissive;
+              material.emissive.set(0xffffff);
+              material.emissiveIntensity = 0.6;
+            }
+            material.needsUpdate = true;
+            return material;
+          });
+          obj.material = Array.isArray(obj.material) ? nextMaterials : nextMaterials[0];
+        });
+        return root;
+      })();
+      this.modelLoadCache.set(key, pending);
+    }
+    const loaded = await pending;
+    return loaded.clone(true);
+  }
+
+  private async attachSceneModelInstances() {
+    if (!this.obstacleGroup) return;
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId) continue;
+      const componentRaw = this.sceneComponents[`obstacle:${obstacleId}`];
+      if (!componentRaw || typeof componentRaw !== 'object') continue;
+      const component = componentRaw as RuntimeSceneModelComponent;
+      if (component.type !== 'model_instance') continue;
+      try {
+        const instance = await this.loadModelAssetObject(component);
+        instance.position.set(
+          obstacle.position.x,
+          obstacle.position.y + obstacle.size.y / 2,
+          obstacle.position.z,
+        );
+        instance.scale.set(obstacle.size.x, obstacle.size.y, obstacle.size.z);
+        this.obstacleGroup.add(instance);
+        this.obstacleModelRoots.set(obstacleId, instance);
+        const placeholder = this.obstaclePlaceholderMeshes.get(obstacleId);
+        if (placeholder) placeholder.visible = false;
+      } catch (error) {
+        console.warn('Failed to load scene model instance', error);
+      }
+    }
   }
 
   private sampleGroundHeight(x: number, z: number) {
@@ -941,14 +2004,20 @@ export class GameApp {
       }
     }
     for (const obstacle of this.obstacles) {
-      const halfX = obstacle.size.x / 2;
-      const halfZ = obstacle.size.z / 2;
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      const halfX = proxy.size.x / 2;
+      const halfZ = proxy.size.z / 2;
       if (
-        Math.abs(x - obstacle.position.x) <= halfX &&
-        Math.abs(z - obstacle.position.z) <= halfZ
+        Math.abs(x - proxy.position.x) <= halfX &&
+        Math.abs(z - proxy.position.z) <= halfZ
       ) {
-        height = Math.max(height, obstacle.size.y + obstacle.position.y);
+        height = Math.max(height, proxy.size.y + proxy.position.y);
       }
+    }
+    const meshHeight = this.sampleMeshColliderHeight(x, z);
+    if (Number.isFinite(meshHeight)) {
+      height = Math.max(height, meshHeight);
     }
     return height;
   }
@@ -1002,6 +2071,31 @@ export class GameApp {
       material.emissiveIntensity = 0.25;
     }
     capsule.mesh.visible = true;
+    if (group === this.localPlayer) {
+      this.syncLocalFirstPersonVisuals();
+    }
+  }
+
+  private syncLocalFirstPersonVisuals() {
+    if (!this.localPlayer) return;
+    const shouldHide = this.firstPersonMode;
+    if (!shouldHide && !this.localFirstPersonVisualHidden) return;
+    const localVisibilityKey = '__localFirstPersonPrevVisible';
+    this.localPlayer.traverse((obj) => {
+      if (obj === this.localPlayer) return;
+      if (shouldHide) {
+        if (obj.userData[localVisibilityKey] === undefined) {
+          obj.userData[localVisibilityKey] = obj.visible;
+        }
+        obj.visible = false;
+        return;
+      }
+      if (obj.userData[localVisibilityKey] !== undefined) {
+        obj.visible = Boolean(obj.userData[localVisibilityKey]);
+        delete obj.userData[localVisibilityKey];
+      }
+    });
+    this.localFirstPersonVisualHidden = shouldHide;
   }
 
   private computeVrmGroundOffset(vrm: VRM) {
@@ -1317,6 +2411,7 @@ export class GameApp {
       this.localId = sessionId;
       this.setHud('connection', 'connected');
       this.roomClient.onSnapshot((players) => this.syncRemotePlayers(players));
+      this.roomClient.onObstacleDynamics((snapshot) => this.syncObstacleDynamics(snapshot));
       this.roomClient.onCrowd((snapshot) => {
         if (!this.crowdEnabled) return;
         const now = performance.now() / 1000;
@@ -1343,14 +2438,16 @@ export class GameApp {
     this.networkAccumulator = 0;
 
     const movement = this.input.getVector();
-    const rotated = this.rotateMovementByCamera(movement.x, movement.z);
+    const rotated = this.getControllerRelativeMovement(movement.x, movement.z);
     const flags = this.input.getFlags();
-    const movementLocked = this.localMovementLockTimer > 0;
+    const movementLocked = this.localMovementLockTimer > 0 || this.activeControllerMode === 'ragdoll';
     const moveX = movementLocked ? 0 : rotated.x;
     const moveZ = movementLocked ? 0 : rotated.z;
     this.updateInputHud(movement.x, movement.z);
     this.updateKeyHud();
 
+    const ragdollPatch =
+      this.activeControllerMode === 'ragdoll' ? ({ ragdoll: true } as Record<string, boolean>) : {};
     this.roomClient.sendInput({
       seq: this.seq++,
       moveX,
@@ -1364,10 +2461,20 @@ export class GameApp {
       interact: flags.interact,
       jump: movementLocked ? false : flags.jump,
       crouch: movementLocked ? false : flags.crouch,
+      ...ragdollPatch,
     });
   }
 
-  private animateLocalPlayer(delta: number) {
+  private animateLocalPlayer(
+    delta: number,
+    externalMovementLock = false,
+    controllerTuning: ControllerTuning = {},
+  ) {
+    const prevPlayerPos = {
+      x: this.localPlayer.position.x,
+      y: this.localPlayer.position.y,
+      z: this.localPlayer.position.z,
+    };
     const flags = this.input.getFlags();
     const movement = this.input.getVector();
     const rotated = this.rotateMovementByCamera(movement.x, movement.z);
@@ -1377,20 +2484,31 @@ export class GameApp {
       this.localPlayer.position.x,
       this.localPlayer.position.z,
     );
-    const onGround = this.localPlayer.position.y <= groundHeight + 0.001;
-    const movementLocked = this.localMovementLockTimer > 0;
+    const nearGround = this.localPlayer.position.y <= groundHeight + 0.06;
+    const descendingSlow = this.localVelocityY <= 0.65;
+    const onGround = nearGround && descendingSlow;
+    if (onGround) {
+      this.localJumpCoyoteTimer = JUMP_COYOTE_SECONDS;
+    } else {
+      this.localJumpCoyoteTimer = Math.max(0, this.localJumpCoyoteTimer - delta);
+    }
+    const canJumpFromGround = onGround || this.localJumpCoyoteTimer > 0;
+    const movementLocked = this.localMovementLockTimer > 0 || externalMovementLock;
 
     // Smooth velocity transition for better animation blending
     // Moderate acceleration (15x per second) stays tightly synced with server
-    const moveSpeed = this.playerConfig.moveSpeed ?? MOVE_SPEED;
-    const sprintMult = this.playerConfig.sprintMultiplier ?? SPRINT_MULTIPLIER;
-    const crouchMult = this.playerConfig.crouchMultiplier ?? CROUCH_MULTIPLIER;
-    const slideAccel = this.playerConfig.slideAccel ?? SLIDE_ACCEL;
-    const slideFriction = this.playerConfig.slideFriction ?? SLIDE_FRICTION;
-    const jumpSpeed = this.playerConfig.jumpSpeed ?? JUMP_SPEED;
-    const gravity = this.playerConfig.gravity ?? GRAVITY;
-    const walkThreshold = this.playerConfig.walkThreshold ?? 0.15;
-    const runThreshold = this.playerConfig.runThreshold ?? moveSpeed * 0.65;
+    const moveSpeed = controllerTuning.moveSpeed ?? this.playerConfig.moveSpeed ?? MOVE_SPEED;
+    const sprintMult =
+      controllerTuning.sprintMultiplier ?? this.playerConfig.sprintMultiplier ?? SPRINT_MULTIPLIER;
+    const crouchMult =
+      controllerTuning.crouchMultiplier ?? this.playerConfig.crouchMultiplier ?? CROUCH_MULTIPLIER;
+    const slideAccel = controllerTuning.slideAccel ?? this.playerConfig.slideAccel ?? SLIDE_ACCEL;
+    const slideFriction =
+      controllerTuning.slideFriction ?? this.playerConfig.slideFriction ?? SLIDE_FRICTION;
+    const jumpSpeed = controllerTuning.jumpSpeed ?? this.playerConfig.jumpSpeed ?? JUMP_SPEED;
+    const gravity = controllerTuning.gravity ?? this.playerConfig.gravity ?? GRAVITY;
+    const walkThreshold = controllerTuning.walkThreshold ?? this.playerConfig.walkThreshold ?? 0.15;
+    const runThreshold = controllerTuning.runThreshold ?? this.playerConfig.runThreshold ?? moveSpeed * 0.65;
 
     if (!movementLocked) {
       const speed = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
@@ -1425,10 +2543,10 @@ export class GameApp {
     const accel = Math.min(1, slideAccel * delta);
 
     const startSlide =
-      !movementLocked && onGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
+      !movementLocked && canJumpFromGround && flags.crouch && flags.sprint && this.slideCooldown <= 0;
     const startVault =
       !movementLocked &&
-      onGround &&
+      canJumpFromGround &&
       flags.jump &&
       this.vaultCooldown <= 0 &&
       this.checkVault(moveDir);
@@ -1440,7 +2558,7 @@ export class GameApp {
       this.checkClimb(moveDir);
     const startFlip =
       !movementLocked &&
-      onGround &&
+      canJumpFromGround &&
       flags.jump &&
       flags.sprint &&
       this.vaultCooldown <= 0 &&
@@ -1501,12 +2619,13 @@ export class GameApp {
       this.localVelocityZ = 0;
     }
 
-    if (!movementLocked && flags.jump && onGround && this.parkourState === 'normal') {
+    if (!movementLocked && flags.jump && canJumpFromGround && this.parkourState === 'normal') {
       const speed = Math.hypot(this.localVelocityX, this.localVelocityZ);
       if (speed <= walkThreshold) this.localJumpMode = 'jump_up';
       else if (speed > runThreshold) this.localJumpMode = 'run_jump';
       else this.localJumpMode = 'jump';
       this.localVelocityY = jumpSpeed;
+      this.localJumpCoyoteTimer = 0;
     }
 
     this.localVelocityY += gravity * delta;
@@ -1529,14 +2648,18 @@ export class GameApp {
 
     let resolved = next;
     for (const obstacle of this.obstacles) {
-      resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, proxy);
     }
+    resolved = this.resolveCircleMeshCollisions(this.localPlayer.position, resolved, PLAYER_RADIUS);
     for (const entry of this.crowdAgents.values()) {
       const agent = entry.agent;
       resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, agent.position, CROWD_RADIUS);
     }
     for (const [id, pos] of this.remoteLatest.entries()) {
       if (this.localId && id === this.localId) continue;
+      if (this.remoteRagdoll.get(id)) continue;
       resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, pos, PLAYER_RADIUS);
     }
 
@@ -1552,9 +2675,628 @@ export class GameApp {
       this.localVelocityY = 0;
     }
 
+    this.applyPlayerPushToDynamicObstacles(prevPlayerPos, resolved, delta);
+
     this.localPlayer.position.x = resolved.x;
     this.localPlayer.position.y = Math.max(resolved.y, floor - 0.02);
     this.localPlayer.position.z = resolved.z;
+  }
+
+  private animateLocalFirstPerson(
+    delta: number,
+    controllerTuning: ControllerTuning = {},
+  ) {
+    const prevPlayerPos = {
+      x: this.localPlayer.position.x,
+      y: this.localPlayer.position.y,
+      z: this.localPlayer.position.z,
+    };
+    const flags = this.input.getFlags();
+    const movement = this.input.getVector();
+    const rotated = this.rotateMovementByYaw(movement.x, movement.z, -this.orbitYaw);
+    const moveX = rotated.x;
+    const moveZ = rotated.z;
+    const groundHeight = this.sampleGroundHeight(
+      this.localPlayer.position.x,
+      this.localPlayer.position.z,
+    );
+    const nearGround = this.localPlayer.position.y <= groundHeight + 0.06;
+    const descendingSlow = this.localVelocityY <= 0.65;
+    const onGround = nearGround && descendingSlow;
+    if (onGround) {
+      this.localJumpCoyoteTimer = JUMP_COYOTE_SECONDS;
+    } else {
+      this.localJumpCoyoteTimer = Math.max(0, this.localJumpCoyoteTimer - delta);
+    }
+    const canJumpFromGround = onGround || this.localJumpCoyoteTimer > 0;
+    const movementLocked = this.localMovementLockTimer > 0;
+
+    const moveSpeed = controllerTuning.moveSpeed ?? this.playerConfig.moveSpeed ?? MOVE_SPEED;
+    const sprintMult =
+      controllerTuning.sprintMultiplier ?? this.playerConfig.sprintMultiplier ?? SPRINT_MULTIPLIER;
+    const crouchMult =
+      controllerTuning.crouchMultiplier ?? this.playerConfig.crouchMultiplier ?? CROUCH_MULTIPLIER;
+    const jumpSpeed = controllerTuning.jumpSpeed ?? this.playerConfig.jumpSpeed ?? JUMP_SPEED;
+    const gravity = controllerTuning.gravity ?? this.playerConfig.gravity ?? GRAVITY;
+    const walkThreshold = controllerTuning.walkThreshold ?? this.playerConfig.walkThreshold ?? 0.15;
+    const runThreshold = controllerTuning.runThreshold ?? this.playerConfig.runThreshold ?? moveSpeed * 0.65;
+
+    if (!movementLocked) {
+      const speed = moveSpeed * (flags.sprint ? sprintMult : flags.crouch ? crouchMult : 1);
+      const targetVx = moveX * speed;
+      const targetVz = moveZ * speed;
+      const accelRate = 20;
+      const blend = Math.min(1, delta * accelRate);
+      this.localVelocityX += (targetVx - this.localVelocityX) * blend;
+      this.localVelocityZ += (targetVz - this.localVelocityZ) * blend;
+    } else {
+      this.localVelocityX = 0;
+      this.localVelocityZ = 0;
+    }
+
+    if (!movementLocked && flags.jump && canJumpFromGround) {
+      const speed = Math.hypot(this.localVelocityX, this.localVelocityZ);
+      if (speed <= walkThreshold) this.localJumpMode = 'jump_up';
+      else if (speed > runThreshold) this.localJumpMode = 'run_jump';
+      else this.localJumpMode = 'jump';
+      this.localVelocityY = jumpSpeed;
+      this.localJumpCoyoteTimer = 0;
+    }
+
+    this.localVelocityY += gravity * delta;
+
+    const next = {
+      x: this.localPlayer.position.x + this.localVelocityX * delta,
+      y: this.localPlayer.position.y + this.localVelocityY * delta,
+      z: this.localPlayer.position.z + this.localVelocityZ * delta,
+    };
+    const nextGround = this.sampleGroundHeight(next.x, next.z);
+    if (next.y <= nextGround) {
+      next.y = nextGround;
+      this.localVelocityY = 0;
+    }
+
+    let resolved = next;
+    for (const obstacle of this.obstacles) {
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, proxy);
+    }
+    resolved = this.resolveCircleMeshCollisions(this.localPlayer.position, resolved, PLAYER_RADIUS);
+    for (const entry of this.crowdAgents.values()) {
+      const agent = entry.agent;
+      resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, agent.position, CROWD_RADIUS);
+    }
+    for (const [id, pos] of this.remoteLatest.entries()) {
+      if (this.localId && id === this.localId) continue;
+      if (this.remoteRagdoll.get(id)) continue;
+      resolved = resolveCircleCircle(resolved, PLAYER_RADIUS, pos, PLAYER_RADIUS);
+    }
+
+    const floor = this.sampleGroundHeight(resolved.x, resolved.z);
+    const terrainStickRange = 0.7;
+    const isNearGround = resolved.y <= floor + terrainStickRange;
+    if (isNearGround && this.localVelocityY <= 0) {
+      const stickStrength = Math.min(1, delta * 18);
+      resolved.y = THREE.MathUtils.lerp(resolved.y, floor, stickStrength);
+      if (Math.abs(resolved.y - floor) < 0.015) {
+        resolved.y = floor;
+      }
+      this.localVelocityY = 0;
+    }
+
+    this.applyPlayerPushToDynamicObstacles(prevPlayerPos, resolved, delta);
+
+    this.localPlayer.position.x = resolved.x;
+    this.localPlayer.position.y = Math.max(resolved.y, floor - 0.02);
+    this.localPlayer.position.z = resolved.z;
+    this.localPlayer.rotation.y = this.orbitYaw + Math.PI;
+  }
+
+  private async ensureRapierRuntime() {
+    if (this.rapierReady) return this.rapierReady;
+    this.rapierReady = import('@dimforge/rapier3d-compat')
+      .then(async (mod) => {
+        await mod.init();
+        this.rapier = mod;
+      })
+      .catch((error) => {
+        console.warn('Rapier init failed for runtime ragdoll:', error);
+      });
+    return this.rapierReady;
+  }
+
+  private getLocalRuntimeVrm() {
+    return this.vrmActors.get('local')?.vrm ?? null;
+  }
+
+  private async ensureRuntimeRagdollReady() {
+    if (this.activeControllerMode !== 'ragdoll') return;
+    if (this.runtimeRagdollWorld || this.runtimeRagdollBuildInFlight) return;
+    const vrm = this.getLocalRuntimeVrm();
+    if (!vrm) return;
+    this.runtimeRagdollBuildInFlight = true;
+    try {
+      await this.ensureRapierRuntime();
+      if (!this.rapier || this.activeControllerMode !== 'ragdoll') return;
+      this.buildRuntimeRagdoll(vrm);
+      this.runtimeRagdollMode = 'ragdoll';
+      this.runtimeRagdollActivationTime = 0;
+    } finally {
+      this.runtimeRagdollBuildInFlight = false;
+    }
+  }
+
+  private buildRuntimeRagdoll(vrm: VRM) {
+    if (!this.rapier) return;
+    const RAPIER = this.rapier;
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    this.runtimeRagdollWorld = world;
+    this.runtimeRagdollBones.clear();
+    this.runtimeRagdollControlKeys.clear();
+    const humanoid = vrm.humanoid;
+    const getBone = (name: string) => humanoid.getRawBoneNode(name as HumanBoneName);
+    const tmpVec = new THREE.Vector3();
+    const tmpVec2 = new THREE.Vector3();
+    const tmpQuat = new THREE.Quaternion();
+    const boneQuat = new THREE.Quaternion();
+    const muscleScaleByBone: Record<string, number> = {
+      hips: 1.25,
+      chest: 1.15,
+      head: 0.9,
+      leftUpperArm: 0.85,
+      leftLowerArm: 0.75,
+      rightUpperArm: 0.85,
+      rightLowerArm: 0.75,
+      leftUpperLeg: 1.0,
+      leftLowerLeg: 0.9,
+      rightUpperLeg: 1.0,
+      rightLowerLeg: 0.9,
+    };
+
+    const rootBone = getBone('hips');
+    if (rootBone) {
+      rootBone.getWorldPosition(tmpVec);
+      this.runtimeRagdollHipsOffset.copy(tmpVec).sub(this.localPlayer.position);
+    }
+
+    for (const segment of RAGDOLL_SEGMENT_PROFILE) {
+      const bone = getBone(segment.bone);
+      if (!bone) continue;
+      const child = resolveRagdollSegmentChildBone({
+        segmentName: segment.name,
+        sourceBone: bone,
+        preferredChildBone: segment.childBone,
+        jointProfileChildBone: RAGDOLL_JOINT_PROFILE.find((entry) => entry.parent === segment.name)
+          ?.child,
+        getBone,
+      });
+      bone.getWorldPosition(tmpVec);
+      bone.getWorldQuaternion(boneQuat);
+      child?.getWorldPosition(tmpVec2);
+      const segmentFrame = computeRagdollSegmentFrame({
+        segment,
+        bonePosition: tmpVec,
+        boneQuaternion: boneQuat,
+        childPosition: child ? tmpVec2 : null,
+      });
+      const center = segmentFrame.center;
+      tmpQuat.copy(segmentFrame.bodyQuaternion);
+      const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(center.x, center.y, center.z)
+        .setRotation({ x: tmpQuat.x, y: tmpQuat.y, z: tmpQuat.z, w: tmpQuat.w })
+        .setLinearDamping(0.5)
+        .setAngularDamping(1.5)
+        .setCanSleep(true)
+        .setCcdEnabled(true);
+      const body = world.createRigidBody(bodyDesc);
+      const membership = getRagdollBodyGroup(segment.name);
+      const filter = RAGDOLL_COLLISION_GROUP_ENV | (RAGDOLL_ALL_BODY_GROUPS & ~membership);
+      const collider =
+        segment.shape === 'sphere'
+          ? RAPIER.ColliderDesc.ball(
+              (segment.dimensions as { radius: number }).radius,
+            ).setCollisionGroups((membership << 16) | filter)
+          : RAPIER.ColliderDesc.cuboid(
+              (segment.dimensions as { width: number }).width / 2,
+              (segment.dimensions as { height: number }).height / 2,
+              (segment.dimensions as { depth: number }).depth / 2,
+            ).setCollisionGroups((membership << 16) | filter);
+      collider.setMass(segment.mass).setFriction(1.4).setRestitution(0);
+      world.createCollider(collider, body);
+      const drive = getRagdollDriveForBone(segment.name);
+      const radius =
+        segment.shape === 'sphere'
+          ? (segment.dimensions as { radius: number }).radius
+          : (segment.dimensions as { height: number }).height * 0.5;
+      const ragBone: RuntimeRagdollBone = {
+        name: segment.name,
+        driveGroup: drive.group,
+        bone,
+        child,
+        body,
+        bodyToBone: segmentFrame.bodyQuaternion.clone().invert().multiply(boneQuat),
+        muscleScale: muscleScaleByBone[segment.name] ?? 1,
+        radius,
+      };
+      const jointProfile = getRagdollJointForChild(segment.name);
+      const hinge =
+        jointProfile?.type === 'hinge'
+          ? {
+              axis: jointProfile.axis ?? ([1, 0, 0] as [number, number, number]),
+              min: jointProfile.limitMin ?? THREE.MathUtils.degToRad(-5),
+              max: jointProfile.limitMax ?? THREE.MathUtils.degToRad(130),
+            }
+          : null;
+      if (hinge) {
+        ragBone.hingeAxisLocal = new THREE.Vector3(
+          hinge.axis[0],
+          hinge.axis[1],
+          hinge.axis[2],
+        ).normalize();
+        ragBone.hingeMin = hinge.min;
+        ragBone.hingeMax = hinge.max;
+      }
+      if (jointProfile?.type === 'socket') {
+        ragBone.swingLimitRad = THREE.MathUtils.degToRad(
+          Math.max(Number(jointProfile.limitYDeg ?? 0), Number(jointProfile.limitZDeg ?? 0)),
+        );
+        ragBone.twistLimitRad = THREE.MathUtils.degToRad(
+          Math.max(
+            Math.abs(Number(jointProfile.twistMinDeg ?? 0)),
+            Math.abs(Number(jointProfile.twistMaxDeg ?? 0)),
+          ),
+        );
+        const parentName = RAGDOLL_BONE_DEFS.find((def) => def.name === segment.name)?.parent;
+        if (parentName) {
+          const parentBone = getBone(parentName);
+          if (parentBone) {
+            const parentWorldQuat = parentBone.getWorldQuaternion(new THREE.Quaternion());
+            ragBone.twistAxisLocal = segmentFrame.axis
+              .clone()
+              .applyQuaternion(parentWorldQuat.invert())
+              .normalize();
+          }
+        }
+      }
+      this.runtimeRagdollBones.set(segment.name, ragBone);
+    }
+
+    for (const jointDef of RAGDOLL_JOINT_PROFILE) {
+      const childBone = this.runtimeRagdollBones.get(jointDef.child);
+      const parentBone = this.runtimeRagdollBones.get(jointDef.parent);
+      if (!childBone || !parentBone) continue;
+      const parentBody = parentBone.body;
+      const childBody = childBone.body;
+      const jointWorld = childBone.bone.getWorldPosition(new THREE.Vector3());
+      const pPos = parentBody.translation();
+      const pRot = parentBody.rotation();
+      const cPos = childBody.translation();
+      const cRot = childBody.rotation();
+      const pQuatInv = new THREE.Quaternion(pRot.x, pRot.y, pRot.z, pRot.w).invert();
+      const cQuatInv = new THREE.Quaternion(cRot.x, cRot.y, cRot.z, cRot.w).invert();
+      const anchorParent = jointWorld
+        .clone()
+        .sub(new THREE.Vector3(pPos.x, pPos.y, pPos.z))
+        .applyQuaternion(pQuatInv);
+      const anchorChild = jointWorld
+        .clone()
+        .sub(new THREE.Vector3(cPos.x, cPos.y, cPos.z))
+        .applyQuaternion(cQuatInv);
+      const anchor1 = new RAPIER.Vector3(anchorParent.x, anchorParent.y, anchorParent.z);
+      const anchor2 = new RAPIER.Vector3(anchorChild.x, anchorChild.y, anchorChild.z);
+      const hinge =
+        jointDef.type === 'hinge'
+          ? {
+              axis: jointDef.axis ?? ([1, 0, 0] as [number, number, number]),
+              min: jointDef.limitMin ?? THREE.MathUtils.degToRad(-5),
+              max: jointDef.limitMax ?? THREE.MathUtils.degToRad(130),
+            }
+          : null;
+      const jointData = hinge
+        ? RAPIER.JointData.revolute(
+            anchor1,
+            anchor2,
+            new RAPIER.Vector3(hinge.axis[0], hinge.axis[1], hinge.axis[2]),
+          )
+        : RAPIER.JointData.spherical(anchor1, anchor2);
+      jointData.stiffness = jointDef.stiffness;
+      jointData.damping = jointDef.damping;
+      const joint = world.createImpulseJoint(jointData, parentBody, childBody, true);
+      if (hinge) {
+        (joint as unknown as { setLimits?: (min: number, max: number) => void }).setLimits?.(
+          hinge.min,
+          hinge.max,
+        );
+      }
+      childBone.parent = parentBone;
+      const parentBoneQuat = parentBone.bone.getWorldQuaternion(new THREE.Quaternion());
+      const childBoneQuat = childBone.bone.getWorldQuaternion(new THREE.Quaternion());
+      childBone.targetLocalQuat = parentBoneQuat.invert().multiply(childBoneQuat).normalize();
+      if (childBone.twistAxisLocal === undefined && jointDef.type === 'socket') {
+        childBone.twistAxisLocal = new THREE.Vector3(0, 1, 0);
+      }
+    }
+  }
+
+  private disableRuntimeRagdoll() {
+    this.runtimeRagdollWorld = null;
+    this.runtimeRagdollBones.clear();
+    this.runtimeRagdollMode = 'off';
+    this.runtimeRagdollActivationTime = 0;
+    this.runtimeRagdollBuildInFlight = false;
+    this.runtimeRagdollControlKeys.clear();
+  }
+
+  private getRuntimeRagdollMoveDirection() {
+    const move = this.input.getVector();
+    if (Math.abs(move.x) < 0.001 && Math.abs(move.z) < 0.001) return null;
+    const rotated = this.getControllerRelativeMovement(move.x, move.z);
+    const dir = new THREE.Vector3(rotated.x, 0, rotated.z);
+    if (dir.lengthSq() < 1e-6) return null;
+    return dir.normalize();
+  }
+
+  private applyRuntimeRagdollSteering(delta: number) {
+    if (this.runtimeRagdollMode !== 'ragdoll') return;
+    const dir = this.getRuntimeRagdollMoveDirection();
+    if (!dir) return;
+    const hips = this.runtimeRagdollBones.get('hips');
+    const chest = this.runtimeRagdollBones.get('chest');
+    const targets = [hips, chest].filter(Boolean) as RuntimeRagdollBone[];
+    if (targets.length === 0) return;
+    const impulseMag = 18 * delta;
+    const torqueAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
+    const torqueMag = 4 * delta;
+    for (const rag of targets) {
+      rag.body.applyImpulse({ x: dir.x * impulseMag, y: 0, z: dir.z * impulseMag }, true);
+      if (Number.isFinite(torqueAxis.x)) {
+        rag.body.applyTorqueImpulse(
+          { x: torqueAxis.x * torqueMag, y: torqueAxis.y * torqueMag, z: torqueAxis.z * torqueMag },
+          true,
+        );
+      }
+    }
+  }
+
+  private applyRuntimeRagdollMuscles(delta: number) {
+    if (this.runtimeRagdollMode !== 'ragdoll') return;
+    const parentQuat = new THREE.Quaternion();
+    const childQuat = new THREE.Quaternion();
+    const parentInv = new THREE.Quaternion();
+    const currentRel = new THREE.Quaternion();
+    const errorQuat = new THREE.Quaternion();
+    const axisLocal = new THREE.Vector3();
+    const axisWorld = new THREE.Vector3();
+    const parentAngVel = new THREE.Vector3();
+    const childAngVel = new THREE.Vector3();
+    const relAngVel = new THREE.Vector3();
+    const transitionDuration = 0.25;
+    const transitionStiffnessBoost = 3;
+    const transitionT = THREE.MathUtils.clamp(this.runtimeRagdollActivationTime / transitionDuration, 0, 1);
+    const transitionBoost = THREE.MathUtils.lerp(transitionStiffnessBoost, 1, transitionT);
+    for (const ragBone of this.runtimeRagdollBones.values()) {
+      if (!ragBone.parent || !ragBone.targetLocalQuat) continue;
+      const drive = getRagdollDriveForBone(ragBone.name);
+      const pRot = ragBone.parent.body.rotation();
+      const cRot = ragBone.body.rotation();
+      parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
+      childQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
+      parentInv.copy(parentQuat).invert();
+      currentRel.copy(parentInv).multiply(childQuat).normalize();
+      errorQuat.copy(currentRel).invert().multiply(ragBone.targetLocalQuat).normalize();
+      if (errorQuat.w < 0) {
+        errorQuat.set(-errorQuat.x, -errorQuat.y, -errorQuat.z, -errorQuat.w);
+      }
+      axisLocal.set(errorQuat.x, errorQuat.y, errorQuat.z);
+      const axisLen = axisLocal.length();
+      if (axisLen < 1e-6) continue;
+      axisLocal.multiplyScalar(1 / axisLen);
+      let angle = 2 * Math.atan2(axisLen, errorQuat.w);
+      if (angle > Math.PI) angle -= Math.PI * 2;
+      angle = THREE.MathUtils.clamp(angle, -0.8, 0.8);
+      axisWorld.copy(axisLocal).applyQuaternion(parentQuat).normalize();
+      const pVel = ragBone.parent.body.angvel();
+      const cVel = ragBone.body.angvel();
+      parentAngVel.set(pVel.x, pVel.y, pVel.z);
+      childAngVel.set(cVel.x, cVel.y, cVel.z);
+      relAngVel.copy(childAngVel).sub(parentAngVel);
+      const axisVel = relAngVel.dot(axisWorld);
+      const muscleScale = ragBone.muscleScale ?? 1;
+      const kp =
+        drive.stiffness *
+        RUNTIME_RAGDOLL_DRIVE_STIFFNESS_SCALE *
+        transitionBoost *
+        muscleScale;
+      const kd =
+        drive.damping *
+        RUNTIME_RAGDOLL_DRIVE_DAMPING_SCALE *
+        Math.sqrt(Math.max(0.2, muscleScale));
+      const maxTorque = drive.forceLimit * RUNTIME_RAGDOLL_DRIVE_FORCE_SCALE * muscleScale;
+      const torqueMag = THREE.MathUtils.clamp(kp * angle - kd * axisVel, -maxTorque, maxTorque);
+      if (!Number.isFinite(torqueMag) || Math.abs(torqueMag) < 1e-4) continue;
+      const maxImpulse = maxTorque * delta * 0.45;
+      const impulseMag = THREE.MathUtils.clamp(torqueMag * delta, -maxImpulse, maxImpulse);
+      const impulse = axisWorld.clone().multiplyScalar(impulseMag);
+      ragBone.body.applyTorqueImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
+      ragBone.parent.body.applyTorqueImpulse({ x: -impulse.x, y: -impulse.y, z: -impulse.z }, true);
+    }
+  }
+
+  private stepRuntimeRagdoll(delta: number) {
+    if (!this.runtimeRagdollWorld || this.runtimeRagdollBones.size === 0) return;
+    const vrm = this.getLocalRuntimeVrm();
+    if (!vrm) return;
+    this.runtimeRagdollActivationTime += delta;
+    this.applyRuntimeRagdollSteering(delta);
+    this.applyRuntimeRagdollMuscles(delta);
+    const clampedDelta = THREE.MathUtils.clamp(delta, 1 / 180, 1 / 20);
+    const maxSubsteps = 6;
+    const substepHz = 90;
+    const substeps = Math.max(1, Math.min(maxSubsteps, Math.ceil(clampedDelta / (1 / substepHz))));
+    const stepDt = clampedDelta / substeps;
+    this.runtimeRagdollWorld.timestep = stepDt;
+    for (let i = 0; i < substeps; i += 1) {
+      this.runtimeRagdollWorld.step();
+    }
+
+    const parentQuat = new THREE.Quaternion();
+    const parentQuatInv = new THREE.Quaternion();
+    const currentWorldQuat = new THREE.Quaternion();
+    const childQuat = new THREE.Quaternion();
+    const relQuat = new THREE.Quaternion();
+    const twistQuat = new THREE.Quaternion();
+    const swingQuat = new THREE.Quaternion();
+    const clampedRelQuat = new THREE.Quaternion();
+    const axisLocal = new THREE.Vector3();
+    const twistVec = new THREE.Vector3();
+    const childAng = new THREE.Vector3();
+    for (const ragBone of this.runtimeRagdollBones.values()) {
+      if (!ragBone.parent) continue;
+      const pRot = ragBone.parent.body.rotation();
+      const cRot = ragBone.body.rotation();
+      parentQuat.set(pRot.x, pRot.y, pRot.z, pRot.w);
+      childQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
+      parentQuatInv.copy(parentQuat).invert();
+      relQuat.copy(parentQuatInv).multiply(childQuat).normalize();
+      let changed = false;
+      const limitEpsilon = 0.03;
+      if (ragBone.hingeAxisLocal) {
+        const min = ragBone.hingeMin ?? -Math.PI;
+        const max = ragBone.hingeMax ?? Math.PI;
+        axisLocal.copy(ragBone.hingeAxisLocal).normalize();
+        twistVec.set(relQuat.x, relQuat.y, relQuat.z);
+        const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
+        twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
+        if (twistQuat.lengthSq() >= 1e-10) {
+          swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
+          const signedAngle =
+            2 *
+            Math.atan2(
+              axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
+              twistQuat.w,
+            );
+          const clampedAngle = THREE.MathUtils.clamp(signedAngle, min, max);
+          if (Math.abs(clampedAngle - signedAngle) > limitEpsilon) {
+            twistQuat.setFromAxisAngle(axisLocal, clampedAngle);
+            clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
+            relQuat.copy(clampedRelQuat);
+            changed = true;
+          }
+        }
+      }
+      if (ragBone.swingLimitRad || ragBone.twistLimitRad) {
+        const twistLimit = ragBone.twistLimitRad ?? Math.PI;
+        const swingLimit = ragBone.swingLimitRad ?? Math.PI;
+        axisLocal.copy(ragBone.twistAxisLocal ?? new THREE.Vector3(0, 1, 0)).normalize();
+        twistVec.set(relQuat.x, relQuat.y, relQuat.z);
+        const proj = axisLocal.clone().multiplyScalar(twistVec.dot(axisLocal));
+        twistQuat.set(proj.x, proj.y, proj.z, relQuat.w).normalize();
+        if (twistQuat.lengthSq() >= 1e-10) {
+          swingQuat.copy(relQuat).multiply(twistQuat.clone().invert()).normalize();
+          const signedTwist =
+            2 *
+            Math.atan2(
+              axisLocal.dot(new THREE.Vector3(twistQuat.x, twistQuat.y, twistQuat.z)),
+              twistQuat.w,
+            );
+          const clampedTwist = THREE.MathUtils.clamp(signedTwist, -twistLimit, twistLimit);
+          const swingAngle = 2 * Math.acos(THREE.MathUtils.clamp(swingQuat.w, -1, 1));
+          if (
+            Math.abs(clampedTwist - signedTwist) > limitEpsilon ||
+            swingAngle > swingLimit + limitEpsilon
+          ) {
+            twistQuat.setFromAxisAngle(axisLocal, clampedTwist);
+            if (swingAngle > 1e-5 && swingLimit < Math.PI) {
+              const scale = swingLimit / swingAngle;
+              swingQuat.slerp(new THREE.Quaternion(), 1 - scale).normalize();
+            }
+            clampedRelQuat.copy(swingQuat).multiply(twistQuat).normalize();
+            relQuat.copy(clampedRelQuat);
+            changed = true;
+          }
+        }
+      }
+      if (!changed) continue;
+      currentWorldQuat.set(cRot.x, cRot.y, cRot.z, cRot.w);
+      childQuat.copy(parentQuat).multiply(relQuat).normalize();
+      currentWorldQuat.slerp(childQuat, 0.45).normalize();
+      ragBone.body.setRotation(
+        {
+          x: currentWorldQuat.x,
+          y: currentWorldQuat.y,
+          z: currentWorldQuat.z,
+          w: currentWorldQuat.w,
+        },
+        false,
+      );
+      const avNow = ragBone.body.angvel();
+      childAng.set(avNow.x, avNow.y, avNow.z).multiplyScalar(0.35);
+      ragBone.body.setAngvel({ x: childAng.x, y: childAng.y, z: childAng.z }, false);
+    }
+
+    const lin = new THREE.Vector3();
+    const ang = new THREE.Vector3();
+    const maxLin = RUNTIME_RAGDOLL_MAX_LINEAR_VELOCITY;
+    const maxAng = RUNTIME_RAGDOLL_MAX_ANGULAR_VELOCITY;
+    for (const ragBone of this.runtimeRagdollBones.values()) {
+      const p = ragBone.body.translation();
+      const floor = this.sampleGroundHeight(p.x, p.z) + (ragBone.radius ?? 0.04);
+      if (p.y < floor) {
+        ragBone.body.setTranslation({ x: p.x, y: floor, z: p.z }, false);
+        const lv = ragBone.body.linvel();
+        ragBone.body.setLinvel({ x: lv.x * 0.7, y: Math.max(0, lv.y), z: lv.z * 0.7 }, false);
+      }
+      const lv = ragBone.body.linvel();
+      lin.set(lv.x, lv.y, lv.z).multiplyScalar(RUNTIME_RAGDOLL_LINEAR_BLEED);
+      ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, false);
+      const len = lin.length();
+      if (len > maxLin) {
+        lin.multiplyScalar(maxLin / len);
+        ragBone.body.setLinvel({ x: lin.x, y: lin.y, z: lin.z }, false);
+      }
+      const av = ragBone.body.angvel();
+      ang.set(av.x, av.y, av.z).multiplyScalar(RUNTIME_RAGDOLL_ANGULAR_BLEED);
+      ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, false);
+      const angLen = ang.length();
+      if (angLen > maxAng) {
+        ang.multiplyScalar(maxAng / angLen);
+        ragBone.body.setAngvel({ x: ang.x, y: ang.y, z: ang.z }, false);
+      }
+    }
+
+    const parentWorld = new THREE.Quaternion();
+    const invParent = new THREE.Quaternion();
+    const bodyQuat = new THREE.Quaternion();
+    const targetWorld = new THREE.Quaternion();
+    const bodyPos = new THREE.Vector3();
+    for (const ragBone of this.runtimeRagdollBones.values()) {
+      const rot = ragBone.body.rotation();
+      bodyQuat.set(rot.x, rot.y, rot.z, rot.w);
+      targetWorld.copy(bodyQuat);
+      if (ragBone.bodyToBone) {
+        targetWorld.multiply(ragBone.bodyToBone);
+      }
+      if (ragBone.bone.parent) {
+        ragBone.bone.parent.getWorldQuaternion(parentWorld);
+        invParent.copy(parentWorld).invert();
+        ragBone.bone.quaternion.copy(invParent.multiply(targetWorld));
+      } else {
+        ragBone.bone.quaternion.copy(targetWorld);
+      }
+    }
+    vrm.scene.updateMatrixWorld(true);
+    const hipsBody = this.runtimeRagdollBones.get('hips');
+    if (hipsBody) {
+      const pos = hipsBody.body.translation();
+      bodyPos.set(pos.x, pos.y, pos.z);
+      this.localPlayer.position.copy(bodyPos).sub(this.runtimeRagdollHipsOffset);
+      const lv = hipsBody.body.linvel();
+      this.localVelocityX = lv.x;
+      this.localVelocityY = lv.y;
+      this.localVelocityZ = lv.z;
+      this.localAnimState = 'ragdoll';
+    }
   }
 
   private checkVault(dir: THREE.Vector3) {
@@ -1562,16 +3304,20 @@ export class GameApp {
     const forward = 1.1;
     const pos = this.localPlayer.position;
     for (const obstacle of this.obstacles) {
-      const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
-      const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
-      const ox = obstacle.position.x;
-      const oz = obstacle.position.z;
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      const halfX = proxy.size.x / 2 + PLAYER_RADIUS;
+      const halfZ = proxy.size.z / 2 + PLAYER_RADIUS;
+      const ox = proxy.position.x;
+      const oz = proxy.position.z;
       const targetX = pos.x + dir.x * forward;
       const targetZ = pos.z + dir.z * forward;
       if (Math.abs(targetX - ox) <= halfX && Math.abs(targetZ - oz) <= halfZ) {
-        return obstacle.size.y <= 1.2;
+        return proxy.size.y <= 1.2;
       }
     }
+    const meshStep = this.getMeshObstacleStepHeightAhead(dir, forward);
+    if (meshStep > 0.2 && meshStep <= 1.2) return true;
     return false;
   }
 
@@ -1580,16 +3326,20 @@ export class GameApp {
     const forward = 0.9;
     const pos = this.localPlayer.position;
     for (const obstacle of this.obstacles) {
-      const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
-      const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
-      const ox = obstacle.position.x;
-      const oz = obstacle.position.z;
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      const halfX = proxy.size.x / 2 + PLAYER_RADIUS;
+      const halfZ = proxy.size.z / 2 + PLAYER_RADIUS;
+      const ox = proxy.position.x;
+      const oz = proxy.position.z;
       const targetX = pos.x + dir.x * forward;
       const targetZ = pos.z + dir.z * forward;
       if (Math.abs(targetX - ox) <= halfX && Math.abs(targetZ - oz) <= halfZ) {
-        return obstacle.size.y > 1.2 && obstacle.size.y <= 2.4;
+        return proxy.size.y > 1.2 && proxy.size.y <= 2.4;
       }
     }
+    const meshStep = this.getMeshObstacleStepHeightAhead(dir, forward);
+    if (meshStep > 1.2 && meshStep <= 2.4) return true;
     return false;
   }
 
@@ -1601,29 +3351,334 @@ export class GameApp {
     const probeZ = pos.z + dir.z * forward;
     let best = 0;
     for (const obstacle of this.obstacles) {
-      const halfX = obstacle.size.x / 2 + PLAYER_RADIUS;
-      const halfZ = obstacle.size.z / 2 + PLAYER_RADIUS;
+      const proxy = this.getObstacleColliderProxy(obstacle);
+      if (!proxy) continue;
+      const halfX = proxy.size.x / 2 + PLAYER_RADIUS;
+      const halfZ = proxy.size.z / 2 + PLAYER_RADIUS;
       if (
-        Math.abs(probeX - obstacle.position.x) <= halfX &&
-        Math.abs(probeZ - obstacle.position.z) <= halfZ
+        Math.abs(probeX - proxy.position.x) <= halfX &&
+        Math.abs(probeZ - proxy.position.z) <= halfZ
       ) {
-        if (obstacle.size.y <= 1.6) {
-          best = Math.max(best, obstacle.size.y);
+        if (proxy.size.y <= 1.6) {
+          best = Math.max(best, proxy.size.y);
         }
       }
     }
+    const meshStep = this.getMeshObstacleStepHeightAhead(dir, forward);
+    if (meshStep > 0 && meshStep <= 1.6) best = Math.max(best, meshStep);
     return best;
   }
 
+  private isDynamicObstacleBody(
+    config: RuntimeObstacleColliderConfig | undefined | null,
+  ): config is RuntimeObstacleColliderConfig {
+    if (!config) return false;
+    if (!config.physicsEnabled) return false;
+    if (config.bodyType !== 'dynamic') return false;
+    if (config.isTrigger) return false;
+    return true;
+  }
+
+  private getDynamicObstacleBodies(): DynamicObstacleBody[] {
+    const bodies: DynamicObstacleBody[] = [];
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId) continue;
+      const config = this.obstacleColliderConfig.get(obstacleId);
+      if (!this.isDynamicObstacleBody(config)) continue;
+      const velocity =
+        this.obstaclePhysicsVelocity.get(obstacleId) ?? new THREE.Vector3(0, 0, 0);
+      bodies.push({
+        id: obstacleId,
+        obstacle,
+        config,
+        velocity,
+      });
+    }
+    return bodies;
+  }
+
+  private getObstacleVerticalSpan(proxy: Obstacle) {
+    return { minY: proxy.position.y, maxY: proxy.position.y + proxy.size.y };
+  }
+
+  private hasVerticalOverlap(a: Obstacle, b: Obstacle, epsilon = 0.01) {
+    const aSpan = this.getObstacleVerticalSpan(a);
+    const bSpan = this.getObstacleVerticalSpan(b);
+    return aSpan.minY < bSpan.maxY - epsilon && bSpan.minY < aSpan.maxY - epsilon;
+  }
+
+  private syncDynamicObstacleTransform(
+    body: DynamicObstacleBody,
+    prevX: number,
+    prevY: number,
+    prevZ: number,
+  ) {
+    body.obstacle.position.x = body.config.proxy.position.x - body.config.offset.x;
+    body.obstacle.position.y = body.config.proxy.position.y - body.config.offset.y;
+    body.obstacle.position.z = body.config.proxy.position.z - body.config.offset.z;
+
+    const placeholder = this.obstaclePlaceholderMeshes.get(body.id);
+    if (placeholder) {
+      placeholder.position.set(
+        body.config.proxy.position.x,
+        body.config.proxy.position.y + body.config.proxy.size.y / 2,
+        body.config.proxy.position.z,
+      );
+    }
+
+    const modelRoot = this.obstacleModelRoots.get(body.id);
+    if (!modelRoot) return;
+    modelRoot.position.x += body.config.proxy.position.x - prevX;
+    modelRoot.position.y += body.config.proxy.position.y - prevY;
+    modelRoot.position.z += body.config.proxy.position.z - prevZ;
+  }
+
+  private resolveDynamicBodyGroundContact(body: DynamicObstacleBody, delta: number) {
+    const ground = this.sampleGroundHeightWithoutObstacle(
+      body.config.proxy.position.x,
+      body.config.proxy.position.z,
+      body.id,
+    );
+    if (body.config.proxy.position.y > ground) return;
+    body.config.proxy.position.y = ground;
+    if (Math.abs(body.velocity.y) < 0.25) {
+      body.velocity.y = 0;
+    } else {
+      body.velocity.y = -body.velocity.y * body.config.restitution;
+    }
+    const groundFriction = Math.max(0, 1 - body.config.friction * delta * 2);
+    body.velocity.x *= groundFriction;
+    body.velocity.z *= groundFriction;
+  }
+
+  private resolveDynamicBodyAgainstObstacle(body: DynamicObstacleBody, obstacle: Obstacle) {
+    if (!this.hasVerticalOverlap(body.config.proxy, obstacle)) return;
+
+    const bodyHalfX = body.config.proxy.size.x / 2;
+    const bodyHalfZ = body.config.proxy.size.z / 2;
+    const otherHalfX = obstacle.size.x / 2;
+    const otherHalfZ = obstacle.size.z / 2;
+
+    const dx = body.config.proxy.position.x - obstacle.position.x;
+    const dz = body.config.proxy.position.z - obstacle.position.z;
+    const overlapX = bodyHalfX + otherHalfX - Math.abs(dx);
+    const overlapZ = bodyHalfZ + otherHalfZ - Math.abs(dz);
+    if (overlapX <= 0 || overlapZ <= 0) return;
+
+    if (overlapX < overlapZ) {
+      const sign = dx >= 0 ? 1 : -1;
+      body.config.proxy.position.x += overlapX * sign;
+      const separating = body.velocity.x * sign;
+      if (separating < 0) body.velocity.x = -body.velocity.x * body.config.restitution;
+      body.velocity.z *= Math.max(0, 1 - body.config.friction * 0.15);
+      return;
+    }
+
+    const sign = dz >= 0 ? 1 : -1;
+    body.config.proxy.position.z += overlapZ * sign;
+    const separating = body.velocity.z * sign;
+    if (separating < 0) body.velocity.z = -body.velocity.z * body.config.restitution;
+    body.velocity.x *= Math.max(0, 1 - body.config.friction * 0.15);
+  }
+
+  private resolveDynamicBodyPair(a: DynamicObstacleBody, b: DynamicObstacleBody) {
+    if (!this.hasVerticalOverlap(a.config.proxy, b.config.proxy)) return;
+
+    const aHalfX = a.config.proxy.size.x / 2;
+    const aHalfZ = a.config.proxy.size.z / 2;
+    const bHalfX = b.config.proxy.size.x / 2;
+    const bHalfZ = b.config.proxy.size.z / 2;
+
+    const dx = a.config.proxy.position.x - b.config.proxy.position.x;
+    const dz = a.config.proxy.position.z - b.config.proxy.position.z;
+    const overlapX = aHalfX + bHalfX - Math.abs(dx);
+    const overlapZ = aHalfZ + bHalfZ - Math.abs(dz);
+    if (overlapX <= 0 || overlapZ <= 0) return;
+
+    const restitution = Math.min(a.config.restitution, b.config.restitution);
+    const friction = Math.max(0, 1 - Math.max(a.config.friction, b.config.friction) * 0.08);
+
+    if (overlapX < overlapZ) {
+      const sign = dx >= 0 ? 1 : -1;
+      const correction = overlapX * 0.5;
+      a.config.proxy.position.x += correction * sign;
+      b.config.proxy.position.x -= correction * sign;
+      const relative = (a.velocity.x - b.velocity.x) * sign;
+      if (relative < 0) {
+        const impulse = (-(1 + restitution) * relative) * 0.5;
+        a.velocity.x += impulse * sign;
+        b.velocity.x -= impulse * sign;
+      }
+      a.velocity.z *= friction;
+      b.velocity.z *= friction;
+      return;
+    }
+
+    const sign = dz >= 0 ? 1 : -1;
+    const correction = overlapZ * 0.5;
+    a.config.proxy.position.z += correction * sign;
+    b.config.proxy.position.z -= correction * sign;
+    const relative = (a.velocity.z - b.velocity.z) * sign;
+    if (relative < 0) {
+      const impulse = (-(1 + restitution) * relative) * 0.5;
+      a.velocity.z += impulse * sign;
+      b.velocity.z -= impulse * sign;
+    }
+    a.velocity.x *= friction;
+    b.velocity.x *= friction;
+  }
+
+  private applyPlayerPushToDynamicObstacles(
+    prevPlayerPos: { x: number; y: number; z: number },
+    nextPlayerPos: { x: number; y: number; z: number },
+    delta: number,
+  ) {
+    if (delta <= 1e-5) return;
+    const moveX = nextPlayerPos.x - prevPlayerPos.x;
+    const moveZ = nextPlayerPos.z - prevPlayerPos.z;
+    const moveLenSq = moveX * moveX + moveZ * moveZ;
+    if (moveLenSq < 1e-8) return;
+
+    const playerSpeedX = THREE.MathUtils.clamp(moveX / delta, -PLAYER_PUSH_MAX_SPEED, PLAYER_PUSH_MAX_SPEED);
+    const playerSpeedZ = THREE.MathUtils.clamp(moveZ / delta, -PLAYER_PUSH_MAX_SPEED, PLAYER_PUSH_MAX_SPEED);
+    const playerMinY = nextPlayerPos.y;
+    const playerMaxY = nextPlayerPos.y + PLAYER_PUSH_HEIGHT;
+
+    for (const body of this.getDynamicObstacleBodies()) {
+      const bodyMinY = body.config.proxy.position.y;
+      const bodyMaxY = body.config.proxy.position.y + body.config.proxy.size.y;
+      if (playerMinY >= bodyMaxY || playerMaxY <= bodyMinY) continue;
+
+      const halfX = body.config.proxy.size.x / 2;
+      const halfZ = body.config.proxy.size.z / 2;
+      const minX = body.config.proxy.position.x - halfX;
+      const maxX = body.config.proxy.position.x + halfX;
+      const minZ = body.config.proxy.position.z - halfZ;
+      const maxZ = body.config.proxy.position.z + halfZ;
+      const clampedX = THREE.MathUtils.clamp(nextPlayerPos.x, minX, maxX);
+      const clampedZ = THREE.MathUtils.clamp(nextPlayerPos.z, minZ, maxZ);
+      let normalX = nextPlayerPos.x - clampedX;
+      let normalZ = nextPlayerPos.z - clampedZ;
+      let distance = Math.hypot(normalX, normalZ);
+
+      if (distance < 1e-5) {
+        const left = Math.abs(nextPlayerPos.x - minX);
+        const right = Math.abs(maxX - nextPlayerPos.x);
+        const front = Math.abs(maxZ - nextPlayerPos.z);
+        const back = Math.abs(nextPlayerPos.z - minZ);
+        if (Math.min(left, right) < Math.min(front, back)) {
+          normalX = left < right ? -1 : 1;
+          normalZ = 0;
+        } else {
+          normalX = 0;
+          normalZ = back < front ? -1 : 1;
+        }
+        distance = 0;
+      } else {
+        normalX /= distance;
+        normalZ /= distance;
+      }
+
+      const penetration = PLAYER_RADIUS - distance;
+      if (penetration <= 0) continue;
+
+      const prevX = body.config.proxy.position.x;
+      const prevY = body.config.proxy.position.y;
+      const prevZ = body.config.proxy.position.z;
+      body.config.proxy.position.x += normalX * penetration;
+      body.config.proxy.position.z += normalZ * penetration;
+
+      const normalSpeed = Math.max(0, playerSpeedX * normalX + playerSpeedZ * normalZ);
+      const tangentX = playerSpeedX - normalX * normalSpeed;
+      const tangentZ = playerSpeedZ - normalZ * normalSpeed;
+      body.velocity.x += normalX * normalSpeed * PLAYER_PUSH_IMPULSE + tangentX * PLAYER_PUSH_TANGENT;
+      body.velocity.z += normalZ * normalSpeed * PLAYER_PUSH_IMPULSE + tangentZ * PLAYER_PUSH_TANGENT;
+
+      this.resolveDynamicBodyGroundContact(body, delta);
+      this.syncDynamicObstacleTransform(body, prevX, prevY, prevZ);
+      this.obstaclePhysicsVelocity.set(body.id, body.velocity);
+    }
+  }
+
+  private simulateObstaclePhysics(delta: number) {
+    if (delta <= 0) return;
+    const hasRecentAuthoritativeDynamics =
+      this.receivedObstacleDynamics && performance.now() - this.lastObstacleDynamicsAt <= 500;
+    if (hasRecentAuthoritativeDynamics) return;
+    const dynamicBodies = this.getDynamicObstacleBodies();
+    if (dynamicBodies.length === 0) return;
+
+    const previousPositions = new Map<string, { x: number; y: number; z: number }>();
+    for (const body of dynamicBodies) {
+      previousPositions.set(body.id, {
+        x: body.config.proxy.position.x,
+        y: body.config.proxy.position.y,
+        z: body.config.proxy.position.z,
+      });
+      body.velocity.y += (GRAVITY * body.config.gravityScale) * delta;
+      const airDamping = Math.max(0, 1 - body.config.linearDamping * delta);
+      body.velocity.multiplyScalar(airDamping);
+      body.config.proxy.position.x += body.velocity.x * delta;
+      body.config.proxy.position.y += body.velocity.y * delta;
+      body.config.proxy.position.z += body.velocity.z * delta;
+      this.resolveDynamicBodyGroundContact(body, delta);
+    }
+
+    for (let i = 0; i < DYNAMIC_PHYSICS_ITERATIONS; i += 1) {
+      for (const body of dynamicBodies) {
+        for (const obstacle of this.obstacles) {
+          const obstacleId = String(obstacle.id ?? '').trim();
+          if (!obstacleId || obstacleId === body.id) continue;
+          const otherConfig = this.obstacleColliderConfig.get(obstacleId);
+          if (this.isDynamicObstacleBody(otherConfig)) continue;
+          const proxy = this.getObstacleColliderProxy(obstacle);
+          if (!proxy) continue;
+          this.resolveDynamicBodyAgainstObstacle(body, proxy);
+        }
+        this.resolveDynamicBodyGroundContact(body, delta);
+      }
+
+      for (let a = 0; a < dynamicBodies.length; a += 1) {
+        for (let b = a + 1; b < dynamicBodies.length; b += 1) {
+          const bodyA = dynamicBodies[a];
+          const bodyB = dynamicBodies[b];
+          if (!bodyA || !bodyB) continue;
+          this.resolveDynamicBodyPair(bodyA, bodyB);
+        }
+      }
+
+      for (const body of dynamicBodies) {
+        this.resolveDynamicBodyGroundContact(body, delta);
+      }
+    }
+
+    for (const body of dynamicBodies) {
+      const prev = previousPositions.get(body.id);
+      if (!prev) continue;
+      this.syncDynamicObstacleTransform(body, prev.x, prev.y, prev.z);
+      this.obstaclePhysicsVelocity.set(body.id, body.velocity);
+    }
+  }
+
+  private isFirstPersonControllerActive() {
+    if (this.activeControllerMode === 'ragdoll') return false;
+    if (this.activeControllerMode === 'first_person') return true;
+    return this.firstPersonMode;
+  }
+
   private updateCamera(delta: number) {
-    const camHeight = this.playerConfig.cameraHeight ?? 1.4;
-    const camShoulder = this.playerConfig.cameraShoulder ?? 1.2;
-    const camShoulderHeight = this.playerConfig.cameraShoulderHeight ?? 0.4;
-    const camSmooth = this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
-    const camSense = this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
-    const minPolar = this.playerConfig.cameraMinPitch ?? 0.2;
-    const maxPolar = this.playerConfig.cameraMaxPitch ?? Math.PI - 0.2;
-    const targetSmoothSpeed = this.playerConfig.targetSmoothSpeed ?? 15;
+    const tuning = this.getActiveControllerTuning();
+    const camHeight = tuning.cameraHeight ?? this.playerConfig.cameraHeight ?? 1.4;
+    const camShoulder = tuning.cameraShoulder ?? this.playerConfig.cameraShoulder ?? 1.2;
+    const camShoulderHeight =
+      tuning.cameraShoulderHeight ?? this.playerConfig.cameraShoulderHeight ?? 0.4;
+    const camSmooth = tuning.cameraSmoothing ?? this.playerConfig.cameraSmoothing ?? this.cameraSmoothing;
+    const camSense =
+      tuning.cameraSensitivity ?? this.playerConfig.cameraSensitivity ?? this.cameraSensitivity;
+    const minPolar = tuning.cameraMinPitch ?? this.playerConfig.cameraMinPitch ?? 0.2;
+    const maxPolar = tuning.cameraMaxPitch ?? this.playerConfig.cameraMaxPitch ?? Math.PI - 0.2;
+    const targetSmoothSpeed = tuning.targetSmoothSpeed ?? this.playerConfig.targetSmoothSpeed ?? 15;
 
     // Desired target position (player position + visual offset for smooth corrections)
     const target = this.cameraTarget.set(
@@ -1644,7 +3699,9 @@ export class GameApp {
       this.orbitPitch -= look.y * rotateSpeed;
     }
 
-    this.orbitPitch = Math.max(minPolar, Math.min(maxPolar, this.orbitPitch));
+    if (!this.isFirstPersonControllerActive()) {
+      this.orbitPitch = Math.max(minPolar, Math.min(maxPolar, this.orbitPitch));
+    }
 
     // Use smoothed target for all camera calculations
     const smoothTarget = this.cameraTargetSmooth;
@@ -1726,7 +3783,31 @@ export class GameApp {
     }
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
     const world = new THREE.Vector3().addScaledVector(right, x).addScaledVector(forward, zAdjusted);
+    const magnitude = Math.hypot(world.x, world.z);
+    if (magnitude > 1) {
+      world.multiplyScalar(1 / magnitude);
+    }
     return { x: world.x, z: world.z };
+  }
+
+  private rotateMovementByYaw(x: number, z: number, yaw: number) {
+    const zAdjusted = -z;
+    const sin = Math.sin(yaw);
+    const cos = Math.cos(yaw);
+    const worldX = x * cos + zAdjusted * sin;
+    const worldZ = -x * sin + zAdjusted * cos;
+    const magnitude = Math.hypot(worldX, worldZ);
+    if (magnitude > 1) {
+      return { x: worldX / magnitude, z: worldZ / magnitude };
+    }
+    return { x: worldX, z: worldZ };
+  }
+
+  private getControllerRelativeMovement(x: number, z: number) {
+    if (this.isFirstPersonControllerActive()) {
+      return this.rotateMovementByYaw(x, z, -this.orbitYaw);
+    }
+    return this.rotateMovementByCamera(x, z);
   }
 
   private handleMouseDown = (event: MouseEvent) => {
@@ -1770,6 +3851,55 @@ export class GameApp {
     this.pointerLocked = document.pointerLockElement === this.renderer.domElement;
   };
 
+  private syncObstacleDynamics(snapshot: ObstacleDynamicsSnapshot) {
+    this.receivedObstacleDynamics = true;
+    this.lastObstacleDynamicsAt = performance.now();
+    for (const entry of snapshot.obstacles) {
+      const obstacleId = String(entry.id ?? '').trim();
+      if (!obstacleId) continue;
+      const config = this.obstacleColliderConfig.get(obstacleId);
+      if (!this.isDynamicObstacleBody(config)) continue;
+
+      const prevX = config.proxy.position.x;
+      const prevY = config.proxy.position.y;
+      const prevZ = config.proxy.position.z;
+      config.proxy.position.x = Number(entry.position?.x ?? prevX);
+      config.proxy.position.y = Number(entry.position?.y ?? prevY);
+      config.proxy.position.z = Number(entry.position?.z ?? prevZ);
+
+      const obstacle = this.obstacles.find((item) => String(item.id ?? '').trim() === obstacleId);
+      if (obstacle) {
+        obstacle.position.x = config.proxy.position.x - config.offset.x;
+        obstacle.position.y = config.proxy.position.y - config.offset.y;
+        obstacle.position.z = config.proxy.position.z - config.offset.z;
+      }
+
+      const velocity = this.obstaclePhysicsVelocity.get(obstacleId) ?? new THREE.Vector3();
+      const sampleDelta = 1 / 20;
+      velocity.set(
+        (config.proxy.position.x - prevX) / sampleDelta,
+        (config.proxy.position.y - prevY) / sampleDelta,
+        (config.proxy.position.z - prevZ) / sampleDelta,
+      );
+      this.obstaclePhysicsVelocity.set(obstacleId, velocity);
+
+      const placeholder = this.obstaclePlaceholderMeshes.get(obstacleId);
+      if (placeholder) {
+        placeholder.position.set(
+          config.proxy.position.x,
+          config.proxy.position.y + config.proxy.size.y / 2,
+          config.proxy.position.z,
+        );
+      }
+      const modelRoot = this.obstacleModelRoots.get(obstacleId);
+      if (modelRoot) {
+        modelRoot.position.x += config.proxy.position.x - prevX;
+        modelRoot.position.y += config.proxy.position.y - prevY;
+        modelRoot.position.z += config.proxy.position.z - prevZ;
+      }
+    }
+  }
+
   private syncRemotePlayers(snapshot: WorldSnapshot) {
     if (this.localId) {
       const staleLocalEntry = this.remotePlayers.get(this.localId);
@@ -1777,6 +3907,7 @@ export class GameApp {
         this.scene.remove(staleLocalEntry.mesh);
         this.remotePlayers.delete(this.localId);
         this.remoteLatest.delete(this.localId);
+        this.remoteRagdoll.delete(this.localId);
         this.remoteLatestVel.delete(this.localId);
         this.remoteLatestAnim.delete(this.localId);
       }
@@ -1842,6 +3973,8 @@ export class GameApp {
         yaw: playerSnap.yaw ?? 0,
       });
       this.remoteLatest.set(id, { ...playerSnap.position });
+      const ragdoll = (playerSnap as { ragdoll?: boolean }).ragdoll === true;
+      this.remoteRagdoll.set(id, ragdoll);
       // Velocity now set via interpolation in updateRemoteInterpolation
       this.remoteLatestLook.set(id, {
         yaw: playerSnap.lookYaw ?? 0,
@@ -1862,47 +3995,84 @@ export class GameApp {
       this.scene.remove(entry.mesh);
       this.remotePlayers.delete(id);
       this.remoteLatest.delete(id);
+      this.remoteRagdoll.delete(id);
       this.remoteLatestVel.delete(id);
       this.remoteLatestAnim.delete(id);
     }
   }
 
   private reconcileLocal(snapshot: PlayerSnapshot) {
+    if (this.activeControllerMode === 'ragdoll') return;
     // Visual smoothing layer: physics position can snap instantly for server authority,
     // but rendered position smoothly interpolates via localVisualOffset
 
+    const localFloor = this.sampleGroundHeight(this.localPlayer.position.x, this.localPlayer.position.z);
+    const snapshotFloor = this.sampleGroundHeight(snapshot.position.x, snapshot.position.z);
+    const localNearGround = this.localPlayer.position.y <= localFloor + 0.12;
+    const localFallingSlowly = this.localVelocityY <= 0.5;
+    const localGrounded = localNearGround && localFallingSlowly;
+    const snapshotNearGround = snapshot.position.y <= snapshotFloor + 0.12;
+    const snapshotFallingSlowly = snapshot.velocity.y <= 0.5;
+    const serverGrounded = snapshotNearGround && snapshotFallingSlowly;
+    const groundedContext = localGrounded || serverGrounded;
+    const airborneContext =
+      !groundedContext &&
+      (this.localPlayer.position.y > localFloor + 0.22 ||
+        snapshot.position.y > snapshotFloor + 0.22 ||
+        this.localVelocityY > 0.15 ||
+        snapshot.velocity.y > 0.15);
+    const targetY = groundedContext ? Math.max(snapshot.position.y, snapshotFloor) : snapshot.position.y;
+
     const dx = snapshot.position.x - this.localPlayer.position.x;
-    const dy = snapshot.position.y - this.localPlayer.position.y;
+    const dy = targetY - this.localPlayer.position.y;
     const dz = snapshot.position.z - this.localPlayer.position.z;
     const distSq = dx * dx + dz * dz;
 
     // Tight threshold (20cm) - catch drift early before it's noticeable
     const correctionThreshold = 0.2 * 0.2;
 
-    if (distSq > correctionThreshold || Math.abs(dy) > 0.1) {
+    const verticalCorrectionThreshold = groundedContext ? 0.1 : airborneContext ? 2.4 : 1.1;
+    if (distSq > correctionThreshold || Math.abs(dy) > verticalCorrectionThreshold) {
       // Store old position before correction
       const oldX = this.localPlayer.position.x;
       const oldY = this.localPlayer.position.y;
       const oldZ = this.localPlayer.position.z;
 
       // Apply server correction to physics position (instant for gameplay)
-      this.localPlayer.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+      const correctedY = groundedContext
+        ? targetY
+        : airborneContext
+          ? Math.abs(dy) > 2.8
+            ? targetY
+            : this.localPlayer.position.y
+          : Math.abs(dy) > 2.2
+            ? targetY
+            : THREE.MathUtils.lerp(
+                this.localPlayer.position.y,
+                targetY,
+                distSq > correctionThreshold ? 0.55 : 0.35,
+              );
+      this.localPlayer.position.set(snapshot.position.x, correctedY, snapshot.position.z);
 
       // Add correction delta to visual offset (accumulates smoothly)
       // The offset decays at 30x per second, so accumulation is balanced
       this.localVisualOffset.x += oldX - snapshot.position.x;
-      this.localVisualOffset.y += oldY - snapshot.position.y;
+      this.localVisualOffset.y += oldY - correctedY;
       this.localVisualOffset.z += oldZ - snapshot.position.z;
 
       // Sync velocity to server completely
       this.localVelocityX = snapshot.velocity.x;
-      this.localVelocityY = snapshot.velocity.y;
+      this.localVelocityY = groundedContext
+        ? 0
+        : THREE.MathUtils.lerp(this.localVelocityY, snapshot.velocity.y, airborneContext ? 0.2 : 0.55);
       this.localVelocityZ = snapshot.velocity.z;
     } else {
       // Small drift - sync velocity moderately to stay aligned
       const velocityMatch = 0.3;
       this.localVelocityX += (snapshot.velocity.x - this.localVelocityX) * velocityMatch;
-      this.localVelocityY += (snapshot.velocity.y - this.localVelocityY) * velocityMatch;
+      this.localVelocityY +=
+        (snapshot.velocity.y - this.localVelocityY) *
+        (groundedContext ? velocityMatch : airborneContext ? 0.12 : 0.2);
       this.localVelocityZ += (snapshot.velocity.z - this.localVelocityZ) * velocityMatch;
     }
   }
@@ -2025,8 +4195,14 @@ export class GameApp {
         group.add(vrm.scene);
         this.updateCapsuleToVrm(group, vrm);
         this.vrms.push(vrm);
+        if (actorId === 'local') {
+          this.syncLocalFirstPersonVisuals();
+        }
         await this.mixamoReady;
         this.setupVrmActor(vrm, actorId);
+        if (actorId === 'local' && this.activeControllerMode === 'ragdoll') {
+          void this.ensureRuntimeRagdollReady();
+        }
       },
       undefined,
       () => {
@@ -2074,7 +4250,14 @@ export class GameApp {
   private async loadPlayerConfig() {
     try {
       const data = await getGamePlayer<Partial<typeof this.playerConfig>>(this.gameId);
-      this.playerConfig = { ...this.playerConfig, ...data };
+      this.playerConfig = {
+        ...this.playerConfig,
+        ...data,
+        controllerModes: normalizeControllerModeConfigs(
+          (data as { controllerModes?: ControllerModeConfigs }).controllerModes ??
+            this.playerConfig.controllerModes,
+        ),
+      };
       if (typeof this.playerConfig.cameraDistance === 'number') {
         this.orbitRadius = this.playerConfig.cameraDistance;
       }
@@ -2084,6 +4267,7 @@ export class GameApp {
       if (typeof this.playerConfig.cameraSmoothing === 'number') {
         this.cameraSmoothing = this.playerConfig.cameraSmoothing;
       }
+      this.applyControllerModeFromConfig();
       for (const vrm of this.vrms) {
         const group = vrm.scene.parent as THREE.Group | null;
         if (group) this.updateCapsuleToVrm(group, vrm);
@@ -2098,6 +4282,10 @@ export class GameApp {
     try {
       const data = await getGameScenes(this.gameId);
       const scene = data.scenes?.find((entry) => entry.name === this.sceneName);
+      const sceneController =
+        typeof scene?.player?.controller === 'string' ? scene.player.controller : null;
+      this.sceneControllerModeOverride = sceneController as ControllerMode | null;
+      this.applyControllerModeFromConfig();
       const sceneAvatar = typeof scene?.player?.avatar === 'string' ? scene.player.avatar : '';
       const configAvatar =
         typeof this.playerConfig.avatar === 'string' ? this.playerConfig.avatar : '';
@@ -2130,8 +4318,13 @@ export class GameApp {
         if (crowdNode) crowdNode.textContent = this.statusLines.crowd;
       }
 
+      this.applySceneEnvironment(this.parseSceneEnvironment(scene?.environment));
       this.rebuildGroundMesh(this.parseSceneGround(scene?.ground));
       this.obstacles = this.parseSceneObstacles(scene?.obstacles);
+      this.sceneComponents =
+        scene?.components && typeof scene.components === 'object'
+          ? (scene.components as Record<string, Record<string, unknown>>)
+          : {};
       this.rebuildObstacleMeshes();
     } catch (err) {
       console.error('Failed to load scene config:', err);
@@ -2142,8 +4335,10 @@ export class GameApp {
     if (this.obstacleGroup) {
       this.scene.remove(this.obstacleGroup);
     }
+    this.obstacleModelRoots.clear();
     this.obstacleGroup = this.createObstacles();
     this.scene.add(this.obstacleGroup);
+    void this.attachSceneModelInstances();
   }
 
   private rebuildGroundMesh(
@@ -2153,15 +4348,25 @@ export class GameApp {
       this.scene.remove(this.groundMesh);
       this.groundMesh.geometry.dispose();
       if (this.groundMesh.material instanceof THREE.MeshStandardMaterial) {
-        this.groundMesh.material.map?.dispose();
         this.groundMesh.material.dispose();
       }
       this.groundMesh = null;
+    }
+    if (this.waterMesh) {
+      this.scene.remove(this.waterMesh);
+      this.waterMesh.geometry.dispose();
+      this.waterMesh = null;
+    }
+    if (this.waterMaterial) {
+      this.waterMaterial.dispose();
+      this.waterMaterial = null;
     }
     this.groundConfig = groundConfig;
     if (!groundConfig) return;
     this.groundMesh = this.createGround(groundConfig);
     this.scene.add(this.groundMesh);
+    this.waterMesh = this.createWaterMesh(groundConfig);
+    if (this.waterMesh) this.scene.add(this.waterMesh);
   }
 
   private updateVrms(delta: number) {
@@ -2169,6 +4374,10 @@ export class GameApp {
       vrm.update(delta);
     }
     for (const actor of this.vrmActors.values()) {
+      if (actor.id === 'local' && this.runtimeRagdollMode === 'ragdoll') {
+        this.syncCapsuleToHips(actor.vrm);
+        continue;
+      }
       actor.mixer.update(delta);
       this.updateActorAnimation(actor, delta);
       this.syncCapsuleToHips(actor.vrm);

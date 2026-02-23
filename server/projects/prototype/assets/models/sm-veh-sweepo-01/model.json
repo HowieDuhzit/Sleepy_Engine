@@ -1,0 +1,66 @@
+{
+  "id": "sm-veh-sweepo-01",
+  "name": "SM_Veh_Sweepo_01",
+  "sourceFile": "SM_Veh_Sweepo_01.fbx",
+  "originOffset": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "collider": {
+    "shape": "mesh",
+    "size": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "radius": 0.5,
+    "height": 1.8,
+    "offset": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "isTrigger": false
+  },
+  "physics": {
+    "enabled": true,
+    "bodyType": "dynamic",
+    "mass": 0.1,
+    "friction": 0.2,
+    "restitution": 0.05,
+    "linearDamping": 0,
+    "angularDamping": 0.5,
+    "gravityScale": 0.1,
+    "spawnHeightOffset": 0,
+    "initialVelocity": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    }
+  },
+  "textures": {
+    "baseColor": "PolygonSciFiSpace_Texture_01_A.png",
+    "normal": "",
+    "roughness": "",
+    "metalness": "",
+    "emissive": "PolygonSciFiSpace_Emissive_01.png"
+  },
+  "sourcePath": "SM_Veh_Sweepo_01.fbx",
+  "files": [
+    "SM_Veh_Sweepo_01.fbx",
+    "PolygonSciFiSpace_Texture_01_A.png",
+    "PolygonSciFiSpace_Emissive_01.png"
+  ],
+  "materials": [
+    {
+      "id": "default",
+      "name": "Default",
+      "textures": {
+        "baseColor": "PolygonSciFiSpace_Texture_01_A.png",
+        "emissive": "PolygonSciFiSpace_Emissive_01.png"
+      }
+    }
+  ],
+  "updatedAt": "2026-02-21T17:49:01.350Z"
+}

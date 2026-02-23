@@ -1,6 +1,6 @@
 import colyseusPkg from 'colyseus';
-import { RiotState, PlayerState } from '../state/RiotState.js';
-import { loadSceneConfig } from './scene-obstacle-loader.js';
+import { EngineState, PlayerState } from '../state/EngineState.js';
+import { loadSceneConfig, type SceneObstaclePhysicsConfig } from './scene-obstacle-loader.js';
 import {
   PROTOCOL,
   PlayerInput,
@@ -31,6 +31,7 @@ import {
   ATTACK_KNOCKBACK,
   OBSTACLES,
   type Obstacle,
+  type ObstacleDynamicsSnapshot,
   resolveCircleAabb,
   resolveCircleCircle,
 } from '@sleepy/shared';
@@ -53,6 +54,12 @@ type SceneTerrain = {
   roughness: number;
   seed: number;
 };
+const JUMP_COYOTE_SECONDS = 0.14;
+const DYNAMIC_OBSTACLE_PUSH_IMPULSE = 0.95;
+const DYNAMIC_OBSTACLE_PUSH_MAX_SPEED = 16;
+const DYNAMIC_OBSTACLE_SOLVER_ITERATIONS = 2;
+const DYNAMIC_OBSTACLE_MIN_MASS = 0.05;
+const DYNAMIC_OBSTACLE_PUSH_CONTACT_MARGIN = 0.1;
 
 class NavGrid {
   private half: number;
@@ -175,13 +182,22 @@ class NavGrid {
   }
 }
 
-export class RiotRoom extends Room {
-  declare state: RiotState;
+type DynamicObstacleBody = {
+  obstacle: Obstacle;
+  physics: SceneObstaclePhysicsConfig;
+  velocity: { x: number; y: number; z: number };
+};
+
+export class EngineRoom extends Room {
+  declare state: EngineState;
   private obstacles: Obstacle[] = OBSTACLES;
   private crowdEnabled = false;
+  private obstaclePhysics = new Map<string, SceneObstaclePhysicsConfig>();
+  private obstacleVelocity = new Map<string, { x: number; y: number; z: number }>();
   private groundY = GROUND_Y;
   private terrain: SceneTerrain | null = null;
   private inputBuffer = new Map<string, PlayerInput>();
+  private jumpCoyoteTimers = new Map<string, number>();
   private lastInputSeq = new Map<string, number>();
   private lastAttackAt = new Map<string, number>();
   private elapsed = 0;
@@ -295,9 +311,69 @@ export class RiotRoom extends Room {
     return height;
   }
 
+  private isDynamicObstacleId(obstacleId: string) {
+    const physics = this.obstaclePhysics.get(obstacleId);
+    if (!physics) return false;
+    if (!physics.enabled) return false;
+    if (physics.bodyType !== 'dynamic') return false;
+    if (physics.isTrigger) return false;
+    return true;
+  }
+
+  private getDynamicObstacleBodies() {
+    const bodies: DynamicObstacleBody[] = [];
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId || !this.isDynamicObstacleId(obstacleId)) continue;
+      const physics = this.obstaclePhysics.get(obstacleId);
+      if (!physics) continue;
+      const velocity = this.obstacleVelocity.get(obstacleId) ?? { x: 0, y: 0, z: 0 };
+      bodies.push({ obstacle, physics, velocity });
+    }
+    return bodies;
+  }
+
+  private sampleGroundHeightWithoutDynamic(ignoreObstacleId: string, x: number, z: number) {
+    let height = this.groundY;
+    const terrain = this.terrain?.enabled ? this.terrain : null;
+    if (terrain) {
+      const half = Math.max(16, terrain.size) * 0.5;
+      if (Math.abs(x) <= half && Math.abs(z) <= half) {
+        height = this.groundY + this.sampleTerrainHeight(terrain, x, z);
+      }
+    }
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId || obstacleId === ignoreObstacleId || this.isDynamicObstacleId(obstacleId)) continue;
+      const halfX = obstacle.size.x / 2;
+      const halfZ = obstacle.size.z / 2;
+      if (Math.abs(x - obstacle.position.x) <= halfX && Math.abs(z - obstacle.position.z) <= halfZ) {
+        height = Math.max(height, obstacle.position.y + obstacle.size.y);
+      }
+    }
+    return height;
+  }
+
   private async loadRoomObstacles(options?: RoomOptions) {
     const sceneConfig = await loadSceneConfig(options);
     this.obstacles = sceneConfig.obstacles;
+    this.obstaclePhysics.clear();
+    this.obstacleVelocity.clear();
+    for (const obstacle of this.obstacles) {
+      const obstacleId = String(obstacle.id ?? '').trim();
+      if (!obstacleId) continue;
+      const physics = sceneConfig.obstaclePhysics[obstacleId];
+      if (!physics) continue;
+      this.obstaclePhysics.set(obstacleId, physics);
+      if (physics.enabled && physics.bodyType === 'dynamic' && !physics.isTrigger) {
+        obstacle.position.y += physics.spawnHeightOffset;
+        this.obstacleVelocity.set(obstacleId, {
+          x: physics.initialVelocity.x,
+          y: physics.initialVelocity.y,
+          z: physics.initialVelocity.z,
+        });
+      }
+    }
     this.crowdEnabled = sceneConfig.crowdEnabled;
     this.groundY = Number.isFinite(sceneConfig.groundY) ? sceneConfig.groundY : GROUND_Y;
     this.terrain = sceneConfig.terrain;
@@ -312,10 +388,15 @@ export class RiotRoom extends Room {
     const sanitizeBool = (value: unknown) => value === true;
     const sanitizeNumber = (value: number, fallback = 0) =>
       Number.isFinite(value) ? value : fallback;
+    const moveX = clampUnit(input.moveX);
+    const moveZ = clampUnit(input.moveZ);
+    const magnitude = Math.hypot(moveX, moveZ);
+    const normalizedMoveX = magnitude > 1 ? moveX / magnitude : moveX;
+    const normalizedMoveZ = magnitude > 1 ? moveZ / magnitude : moveZ;
     return {
       seq: Math.max(0, Math.floor(sanitizeNumber(input.seq))),
-      moveX: clampUnit(input.moveX),
-      moveZ: clampUnit(input.moveZ),
+      moveX: normalizedMoveX,
+      moveZ: normalizedMoveZ,
       lookYaw: sanitizeNumber(input.lookYaw),
       lookPitch: sanitizeNumber(input.lookPitch),
       animState: typeof input.animState === 'string' ? input.animState : 'idle',
@@ -325,6 +406,7 @@ export class RiotRoom extends Room {
       interact: sanitizeBool(input.interact),
       jump: sanitizeBool(input.jump),
       crouch: sanitizeBool(input.crouch),
+      ragdoll: sanitizeBool(input.ragdoll),
     };
   }
 
@@ -337,7 +419,7 @@ export class RiotRoom extends Room {
     const sceneName = sanitizeSegment(options?.sceneName, 'prototype');
 
     this.setMetadata({ gameId, sceneName });
-    this.setState(new RiotState());
+    this.setState(new EngineState());
     this.maxClients = 16;
     this.setPrivate(false);
     await this.loadRoomObstacles({ gameId, sceneName });
@@ -361,12 +443,219 @@ export class RiotRoom extends Room {
     player.y = this.sampleGroundHeight(player.x, player.z);
     player.vy = 0;
     this.state.players.set(client.sessionId, player);
+    this.jumpCoyoteTimers.set(client.sessionId, 0);
   }
 
   onLeave(client: Client) {
     this.state.players.delete(client.sessionId);
     this.inputBuffer.delete(client.sessionId);
+    this.jumpCoyoteTimers.delete(client.sessionId);
     this.lastInputSeq.delete(client.sessionId);
+  }
+
+  private pushDynamicObstacleByPlayer(
+    player: PlayerState,
+    obstacle: Obstacle,
+    delta: number,
+    probeX: number,
+    probeY: number,
+    probeZ: number,
+  ) {
+    if (delta <= 0) return;
+    const obstacleId = String(obstacle.id ?? '').trim();
+    if (!obstacleId || !this.isDynamicObstacleId(obstacleId)) return;
+    const halfX = obstacle.size.x * 0.5;
+    const halfZ = obstacle.size.z * 0.5;
+    if (
+      Math.abs(probeX - obstacle.position.x) >
+        halfX + PLAYER_RADIUS + DYNAMIC_OBSTACLE_PUSH_CONTACT_MARGIN ||
+      Math.abs(probeZ - obstacle.position.z) >
+        halfZ + PLAYER_RADIUS + DYNAMIC_OBSTACLE_PUSH_CONTACT_MARGIN
+    ) {
+      return;
+    }
+    if (probeY >= obstacle.position.y + obstacle.size.y + 0.1) return;
+
+    const minX = obstacle.position.x - halfX;
+    const maxX = obstacle.position.x + halfX;
+    const minZ = obstacle.position.z - halfZ;
+    const maxZ = obstacle.position.z + halfZ;
+    const clampedX = Math.max(minX, Math.min(probeX, maxX));
+    const clampedZ = Math.max(minZ, Math.min(probeZ, maxZ));
+    let normalX = probeX - clampedX;
+    let normalZ = probeZ - clampedZ;
+    let distance = Math.hypot(normalX, normalZ);
+
+    if (distance < 1e-5) {
+      const left = Math.abs(probeX - minX);
+      const right = Math.abs(maxX - probeX);
+      const front = Math.abs(maxZ - probeZ);
+      const back = Math.abs(probeZ - minZ);
+      if (Math.min(left, right) < Math.min(front, back)) {
+        normalX = left < right ? -1 : 1;
+        normalZ = 0;
+      } else {
+        normalX = 0;
+        normalZ = back < front ? -1 : 1;
+      }
+      distance = 0;
+    } else {
+      normalX /= distance;
+      normalZ /= distance;
+    }
+
+    const penetration = PLAYER_RADIUS + DYNAMIC_OBSTACLE_PUSH_CONTACT_MARGIN - distance;
+    if (penetration <= 0) return;
+
+    obstacle.position.x += normalX * penetration;
+    obstacle.position.z += normalZ * penetration;
+
+    const playerSpeedX = Math.max(-DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, Math.min(DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, player.vx));
+    const playerSpeedZ = Math.max(-DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, Math.min(DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, player.vz));
+    const normalSpeed = Math.max(0, playerSpeedX * normalX + playerSpeedZ * normalZ);
+    const tangentX = playerSpeedX - normalX * normalSpeed;
+    const tangentZ = playerSpeedZ - normalZ * normalSpeed;
+
+    const physics = this.obstaclePhysics.get(obstacleId);
+    const mass = Math.max(DYNAMIC_OBSTACLE_MIN_MASS, physics?.mass ?? 1);
+    const inverseMassScale = 1 / mass;
+    const velocity = this.obstacleVelocity.get(obstacleId) ?? { x: 0, y: 0, z: 0 };
+    velocity.x +=
+      (normalX * normalSpeed * DYNAMIC_OBSTACLE_PUSH_IMPULSE + tangentX * 0.35) * inverseMassScale;
+    velocity.z +=
+      (normalZ * normalSpeed * DYNAMIC_OBSTACLE_PUSH_IMPULSE + tangentZ * 0.35) * inverseMassScale;
+    velocity.x = Math.max(-DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, Math.min(DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, velocity.x));
+    velocity.z = Math.max(-DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, Math.min(DYNAMIC_OBSTACLE_PUSH_MAX_SPEED, velocity.z));
+    this.obstacleVelocity.set(obstacleId, velocity);
+  }
+
+  private resolveDynamicObstacleVsStatic(body: DynamicObstacleBody, obstacle: Obstacle) {
+    const bodyHalfX = body.obstacle.size.x * 0.5;
+    const bodyHalfZ = body.obstacle.size.z * 0.5;
+    const otherHalfX = obstacle.size.x * 0.5;
+    const otherHalfZ = obstacle.size.z * 0.5;
+    const bodyTop = body.obstacle.position.y + body.obstacle.size.y;
+    const obstacleTop = obstacle.position.y + obstacle.size.y;
+    if (body.obstacle.position.y >= obstacleTop || obstacle.position.y >= bodyTop) return;
+
+    const dx = body.obstacle.position.x - obstacle.position.x;
+    const dz = body.obstacle.position.z - obstacle.position.z;
+    const overlapX = bodyHalfX + otherHalfX - Math.abs(dx);
+    const overlapZ = bodyHalfZ + otherHalfZ - Math.abs(dz);
+    if (overlapX <= 0 || overlapZ <= 0) return;
+
+    if (overlapX < overlapZ) {
+      const sign = dx >= 0 ? 1 : -1;
+      body.obstacle.position.x += overlapX * sign;
+      if (body.velocity.x * sign < 0) body.velocity.x = -body.velocity.x * body.physics.restitution;
+      return;
+    }
+
+    const sign = dz >= 0 ? 1 : -1;
+    body.obstacle.position.z += overlapZ * sign;
+    if (body.velocity.z * sign < 0) body.velocity.z = -body.velocity.z * body.physics.restitution;
+  }
+
+  private resolveDynamicObstaclePair(a: DynamicObstacleBody, b: DynamicObstacleBody) {
+    const aHalfX = a.obstacle.size.x * 0.5;
+    const aHalfZ = a.obstacle.size.z * 0.5;
+    const bHalfX = b.obstacle.size.x * 0.5;
+    const bHalfZ = b.obstacle.size.z * 0.5;
+    const aTop = a.obstacle.position.y + a.obstacle.size.y;
+    const bTop = b.obstacle.position.y + b.obstacle.size.y;
+    if (a.obstacle.position.y >= bTop || b.obstacle.position.y >= aTop) return;
+
+    const dx = a.obstacle.position.x - b.obstacle.position.x;
+    const dz = a.obstacle.position.z - b.obstacle.position.z;
+    const overlapX = aHalfX + bHalfX - Math.abs(dx);
+    const overlapZ = aHalfZ + bHalfZ - Math.abs(dz);
+    if (overlapX <= 0 || overlapZ <= 0) return;
+
+    const aMass = Math.max(DYNAMIC_OBSTACLE_MIN_MASS, a.physics.mass);
+    const bMass = Math.max(DYNAMIC_OBSTACLE_MIN_MASS, b.physics.mass);
+    const totalMass = aMass + bMass;
+    const aCorrection = bMass / totalMass;
+    const bCorrection = aMass / totalMass;
+    const restitution = Math.min(a.physics.restitution, b.physics.restitution);
+
+    if (overlapX < overlapZ) {
+      const sign = dx >= 0 ? 1 : -1;
+      a.obstacle.position.x += overlapX * aCorrection * sign;
+      b.obstacle.position.x -= overlapX * bCorrection * sign;
+      const relative = (a.velocity.x - b.velocity.x) * sign;
+      if (relative < 0) {
+        const impulse = (-(1 + restitution) * relative) / (1 / aMass + 1 / bMass);
+        a.velocity.x += (impulse / aMass) * sign;
+        b.velocity.x -= (impulse / bMass) * sign;
+      }
+      return;
+    }
+
+    const sign = dz >= 0 ? 1 : -1;
+    a.obstacle.position.z += overlapZ * aCorrection * sign;
+    b.obstacle.position.z -= overlapZ * bCorrection * sign;
+    const relative = (a.velocity.z - b.velocity.z) * sign;
+    if (relative < 0) {
+      const impulse = (-(1 + restitution) * relative) / (1 / aMass + 1 / bMass);
+      a.velocity.z += (impulse / aMass) * sign;
+      b.velocity.z -= (impulse / bMass) * sign;
+    }
+  }
+
+  private simulateDynamicObstacles(delta: number) {
+    if (delta <= 0) return;
+    const bodies = this.getDynamicObstacleBodies();
+    if (bodies.length === 0) return;
+
+    for (const body of bodies) {
+      body.velocity.y += GRAVITY * body.physics.gravityScale * delta;
+      const damping = Math.max(0, 1 - body.physics.linearDamping * delta);
+      body.velocity.x *= damping;
+      body.velocity.y *= damping;
+      body.velocity.z *= damping;
+      body.obstacle.position.x += body.velocity.x * delta;
+      body.obstacle.position.y += body.velocity.y * delta;
+      body.obstacle.position.z += body.velocity.z * delta;
+      const ground = this.sampleGroundHeightWithoutDynamic(
+        body.obstacle.id,
+        body.obstacle.position.x,
+        body.obstacle.position.z,
+      );
+      if (body.obstacle.position.y <= ground) {
+        body.obstacle.position.y = ground;
+        if (Math.abs(body.velocity.y) < 0.25) {
+          body.velocity.y = 0;
+        } else {
+          body.velocity.y = -body.velocity.y * body.physics.restitution;
+        }
+        const groundFriction = Math.max(0, 1 - body.physics.friction * delta * 2);
+        body.velocity.x *= groundFriction;
+        body.velocity.z *= groundFriction;
+      }
+    }
+
+    for (let iteration = 0; iteration < DYNAMIC_OBSTACLE_SOLVER_ITERATIONS; iteration += 1) {
+      for (const body of bodies) {
+        for (const obstacle of this.obstacles) {
+          const obstacleId = String(obstacle.id ?? '').trim();
+          if (!obstacleId || obstacleId === body.obstacle.id || this.isDynamicObstacleId(obstacleId)) continue;
+          this.resolveDynamicObstacleVsStatic(body, obstacle);
+        }
+      }
+
+      for (let i = 0; i < bodies.length; i += 1) {
+        for (let j = i + 1; j < bodies.length; j += 1) {
+          const bodyA = bodies[i];
+          const bodyB = bodies[j];
+          if (!bodyA || !bodyB) continue;
+          this.resolveDynamicObstaclePair(bodyA, bodyB);
+        }
+      }
+    }
+
+    for (const body of bodies) {
+      this.obstacleVelocity.set(body.obstacle.id, body.velocity);
+    }
   }
 
   private update(dt: number) {
@@ -377,10 +666,18 @@ export class RiotRoom extends Room {
       const input = this.inputBuffer.get(id);
       if (!input) continue;
 
+      player.ragdoll = input.ragdoll === true;
       player.lookYaw = input.lookYaw;
       player.lookPitch = input.lookPitch;
       player.animState = input.animState;
       player.animTime = input.animTime;
+
+      if (player.ragdoll) {
+        player.vx = 0;
+        player.vy = 0;
+        player.vz = 0;
+        continue;
+      }
 
       const speed =
         MOVE_SPEED * (input.sprint ? SPRINT_MULTIPLIER : input.crouch ? CROUCH_MULTIPLIER : 1);
@@ -405,36 +702,52 @@ export class RiotRoom extends Room {
         player.yaw = Math.atan2(player.vx, player.vz) + Math.PI;
       }
 
-      const groundHeight = this.sampleGroundHeight(player.x, player.z);
-      if (input.jump && player.y <= groundHeight + 0.001) {
-        player.vy = JUMP_SPEED;
+      const nextX = player.x + player.vx * delta;
+      const nextZ = player.z + player.vz * delta;
+      let resolved = { x: nextX, y: player.y, z: nextZ };
+      for (const obstacle of this.obstacles) {
+        const obstacleId = String(obstacle.id ?? '').trim();
+        if (obstacleId && this.isDynamicObstacleId(obstacleId)) {
+          this.pushDynamicObstacleByPlayer(player, obstacle, delta, nextX, player.y, nextZ);
+        }
+        resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
       }
+
+      const groundHeight = this.sampleGroundHeight(resolved.x, resolved.z);
+      const nearGround = player.y <= groundHeight + 0.06;
+      const descendingSlow = player.vy <= 0.5;
+      const grounded = nearGround && descendingSlow;
+      const coyote = this.jumpCoyoteTimers.get(id) ?? 0;
+      const nextCoyote = grounded ? JUMP_COYOTE_SECONDS : Math.max(0, coyote - delta);
+      const canJumpFromGround = grounded || coyote > 0;
+
+      if (input.jump && canJumpFromGround) {
+        player.vy = JUMP_SPEED;
+        this.jumpCoyoteTimers.set(id, 0);
+      } else if (grounded && player.vy < 0) {
+        // Keep motion glued to terrain while running over uneven surfaces.
+        player.vy = 0;
+        this.jumpCoyoteTimers.set(id, nextCoyote);
+      } else {
+        this.jumpCoyoteTimers.set(id, nextCoyote);
+      }
+
       player.vy += GRAVITY * delta;
       player.y += player.vy * delta;
       if (player.y <= groundHeight) {
         player.y = groundHeight;
-        player.vy = 0;
+        if (player.vy < 0) player.vy = 0;
       }
 
-      player.x += player.vx * delta;
-      player.z += player.vz * delta;
-
-      let resolved = { x: player.x, y: player.y, z: player.z };
-      for (const obstacle of this.obstacles) {
-        resolved = resolveCircleAabb(resolved, PLAYER_RADIUS, obstacle);
-      }
       player.x = resolved.x;
       player.z = resolved.z;
-      const floorY = this.sampleGroundHeight(player.x, player.z);
-      if (player.y < floorY) {
-        player.y = floorY;
-        player.vy = 0;
-      }
 
       player.stamina = Math.max(0, Math.min(100, player.stamina - (input.sprint ? 8 : 2) * delta));
     }
 
-    const playersArray = Array.from(this.state.players.values());
+    this.simulateDynamicObstacles(delta);
+
+    const playersArray = Array.from(this.state.players.values()).filter((player) => !player.ragdoll);
     for (let i = 0; i < playersArray.length; i += 1) {
       for (let j = i + 1; j < playersArray.length; j += 1) {
         const a = playersArray[i];
@@ -497,6 +810,7 @@ export class RiotRoom extends Room {
       let az = 0;
       let behaviorSpeed = CROWD_SPEED;
       for (const player of this.state.players.values()) {
+        if (player.ragdoll) continue;
         const dx = agent.x - player.x;
         const dz = agent.z - player.z;
         const distSq = dx * dx + dz * dz;
@@ -507,7 +821,7 @@ export class RiotRoom extends Room {
         az += (dz / dist) * force;
       }
       if (agent.behavior !== 'wander') {
-        const players = Array.from(this.state.players.values());
+        const players = Array.from(this.state.players.values()).filter((player) => !player.ragdoll);
         if (players.length > 0) {
           const firstPlayer = players[0];
           if (!firstPlayer) continue;
@@ -591,6 +905,7 @@ export class RiotRoom extends Room {
     }
 
     for (const player of this.state.players.values()) {
+      if (player.ragdoll) continue;
       let pos = { x: player.x, y: player.y, z: player.z };
       for (const agent of this.crowd) {
         pos = resolveCircleCircle(pos, PLAYER_RADIUS, agent, CROWD_RADIUS);
@@ -602,6 +917,7 @@ export class RiotRoom extends Room {
     for (const [id, player] of this.state.players.entries()) {
       const input = this.inputBuffer.get(id);
       if (!input || !input.attack) continue;
+      if (player.ragdoll) continue;
       const last = this.lastAttackAt.get(id) ?? -Infinity;
       if (this.elapsed - last < ATTACK_COOLDOWN) continue;
       this.lastAttackAt.set(id, this.elapsed);
@@ -609,6 +925,7 @@ export class RiotRoom extends Room {
 
       for (const [otherId, other] of this.state.players.entries()) {
         if (otherId === id) continue;
+        if (other.ragdoll) continue;
         const dx = other.x - player.x;
         const dz = other.z - player.z;
         const distSq = dx * dx + dz * dz;
@@ -658,6 +975,7 @@ export class RiotRoom extends Room {
         animState: string;
         animTime: number;
         yaw: number;
+        ragdoll: boolean;
       }
     > = {};
     for (const [id, player] of this.state.players.entries()) {
@@ -672,6 +990,7 @@ export class RiotRoom extends Room {
         animState: player.animState,
         animTime: player.animTime,
         yaw: player.yaw,
+        ragdoll: player.ragdoll,
       };
     }
     this.broadcast(PROTOCOL.snapshot, {
@@ -703,5 +1022,22 @@ export class RiotRoom extends Room {
         stateTime: agent.stateTime,
       })),
     });
+
+    const obstacleDynamicsSnapshot: ObstacleDynamicsSnapshot = {
+      obstacles: this.obstacles.map((obstacle) => ({
+        id: obstacle.id,
+        position: {
+          x: obstacle.position.x,
+          y: obstacle.position.y,
+          z: obstacle.position.z,
+        },
+        size: {
+          x: obstacle.size.x,
+          y: obstacle.size.y,
+          z: obstacle.size.z,
+        },
+      })),
+    };
+    this.broadcast(PROTOCOL.obstacleDynamics, obstacleDynamicsSnapshot);
   }
 }

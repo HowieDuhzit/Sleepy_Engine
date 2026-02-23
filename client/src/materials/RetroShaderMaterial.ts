@@ -1,16 +1,16 @@
 import * as THREE from 'three';
-import vertexShader from '../shaders/ps1-basic.vert?raw';
-import fragmentShader from '../shaders/ps1-basic.frag?raw';
-import unlitFragmentShader from '../shaders/ps1-unlit.frag?raw';
+import vertexShader from '../shaders/retro-basic.vert?raw';
+import fragmentShader from '../shaders/retro-basic.frag?raw';
+import unlitFragmentShader from '../shaders/retro-unlit.frag?raw';
 
-export interface PSXMaterialParameters {
+export interface RetroShaderMaterialParameters {
   map?: THREE.Texture;
   color?: THREE.Color | number;
   opacity?: number;
   transparent?: boolean;
   unlit?: boolean;
 
-  // PS1-specific parameters
+  // Retro-style parameters
   jitterIntensity?: number;
   useAffineMapping?: boolean;
   useColorQuantization?: boolean;
@@ -23,13 +23,13 @@ export interface PSXMaterialParameters {
   directionalLightDirection?: THREE.Vector3;
 }
 
-export class PSXMaterial extends THREE.ShaderMaterial {
+export class RetroShaderMaterial extends THREE.ShaderMaterial {
   private _resolution: THREE.Vector2;
   private uniform<T>(key: string) {
     return this.uniforms[key] as THREE.IUniform<T>;
   }
 
-  constructor(parameters: PSXMaterialParameters = {}) {
+  constructor(parameters: RetroShaderMaterialParameters = {}) {
     const defaultParams = {
       color: new THREE.Color(0xffffff),
       opacity: 1.0,

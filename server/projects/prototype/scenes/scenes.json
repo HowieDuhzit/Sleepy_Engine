@@ -4,29 +4,110 @@
       "name": "prototype",
       "obstacles": [
         {
-          "id": "obstacle_1",
-          "x": 0,
-          "y": 0,
-          "z": 0,
+          "id": "model_1",
+          "x": 1.5,
+          "y": 8.5,
+          "z": 0.03977545460841813,
           "width": 1,
           "height": 1,
           "depth": 1
         }
       ],
+      "zones": [],
+      "roads": [],
+      "environment": {
+        "preset": "foggy",
+        "fogNear": 12,
+        "fogFar": 140,
+        "skybox": {
+          "enabled": true,
+          "preset": "sunset_clouds",
+          "intensity": 1
+        }
+      },
+      "components": {
+        "obstacle:model_1": {
+          "type": "model_instance",
+          "name": "SM_Veh_Sweepo_01",
+          "modelId": "sm-veh-sweepo-01",
+          "sourceFile": "SM_Veh_Sweepo_01.fbx",
+          "originOffset": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "collider": {
+            "shape": "mesh",
+            "size": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "radius": 0.5,
+            "height": 1.8,
+            "offset": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "isTrigger": false
+          },
+          "physics": {
+            "enabled": true,
+            "bodyType": "dynamic",
+            "mass": 0.1,
+            "friction": 0.2,
+            "restitution": 0.05,
+            "linearDamping": 0,
+            "angularDamping": 0.5,
+            "gravityScale": 1,
+            "spawnHeightOffset": 0,
+            "initialVelocity": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          "textures": {
+            "baseColor": "PolygonSciFiSpace_Texture_01_A.png",
+            "normal": "",
+            "roughness": "",
+            "metalness": "",
+            "emissive": "PolygonSciFiSpace_Emissive_01.png"
+          }
+        }
+      },
+      "logic": {
+        "nodes": [],
+        "links": []
+      },
       "ground": {
         "type": "concrete",
         "width": 1012,
         "depth": 1012,
         "y": 0,
         "textureRepeat": 12,
+        "texturePreset": "sand",
+        "water": {
+          "enabled": true,
+          "level": 5,
+          "opacity": 0.29,
+          "waveAmplitude": 1,
+          "waveFrequency": 0.16,
+          "waveSpeed": 1.1,
+          "colorShallow": "#2f97d0",
+          "colorDeep": "#081c47",
+          "specularStrength": 1.35
+        },
         "terrain": {
           "enabled": true,
-          "preset": "dunes",
+          "preset": "islands",
           "size": 1000,
-          "resolution": 256,
-          "maxHeight": 15,
+          "resolution": 128,
+          "maxHeight": 25,
           "roughness": 0.56,
-          "seed": 1337
+          "seed": 319189,
+          "sculptStamps": []
         }
       },
       "player": {
