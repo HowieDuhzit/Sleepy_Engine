@@ -891,7 +891,7 @@ export class GameApp {
   constructor(
     container: HTMLElement | null,
     sceneName = 'main',
-    gameId = 'prototype',
+    gameId = '',
     onBackToMenu: (() => void) | null = null,
   ) {
     if (!container) {

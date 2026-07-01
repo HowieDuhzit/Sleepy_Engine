@@ -319,6 +319,32 @@ const ensureGameDir = async (gameId: string) => {
   await fs.mkdir(path.join(gamesDir, gameId, 'logic'), { recursive: true });
 };
 
+const createInitialScenesPayload = () => ({
+  scenes: [
+    {
+      name: 'main',
+      obstacles: [],
+      zones: [],
+      components: {},
+      roads: [],
+      logic: { nodes: [], links: [] },
+    },
+  ],
+});
+
+const scaffoldGameFiles = async (gameId: string) => {
+  const gamePath = path.join(gamesDir, gameId);
+  await fs.writeFile(path.join(gamePath, 'player.json'), '{}\n');
+  await fs.writeFile(
+    path.join(gamePath, 'scenes', 'scenes.json'),
+    `${JSON.stringify(createInitialScenesPayload(), null, 2)}\n`,
+  );
+  await fs.writeFile(
+    path.join(gamePath, 'animations', 'manifest.json'),
+    `${JSON.stringify({ clips: [] }, null, 2)}\n`,
+  );
+};
+
 const safeGameId = (id: string) => {
   return id.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
 };
@@ -477,6 +503,7 @@ app.post('/api/games', requireAdmin, async (req: Request, res: Response) => {
     };
 
     await fs.writeFile(path.join(gamePath, 'game.json'), JSON.stringify(meta, null, 2));
+    await scaffoldGameFiles(gameId);
 
     res.json({ ok: true, id: gameId, ...meta });
   } catch (err) {
@@ -493,11 +520,6 @@ app.delete('/api/games/:gameId', requireAdmin, async (req: Request, res: Respons
       res.status(400).json({ error: 'missing_game_id' });
       return;
     }
-    if (gameId === 'prototype') {
-      res.status(400).json({ error: 'cannot_delete_prototype' });
-      return;
-    }
-
     const gamePath = path.join(gamesDir, gameId);
     let stat;
     try {
@@ -731,13 +753,19 @@ app.post('/api/games/:gameId/player', requireAdmin, async (req: Request, res: Re
   }
 });
 
-// Legacy player config endpoint (prototype game)
+// Legacy player config endpoint (deprecated; game-scoped endpoint required)
 app.get('/api/player-config', async (_req: Request, res: Response) => {
-  res.redirect('/api/games/prototype/player');
+  res.status(410).json({
+    error: 'deprecated_endpoint',
+    detail: 'Use /api/games/:gameId/player',
+  });
 });
 
-app.post('/api/player-config', requireAdmin, async (req: Request, res: Response) => {
-  res.redirect(307, '/api/games/prototype/player');
+app.post('/api/player-config', requireAdmin, async (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'deprecated_endpoint',
+    detail: 'Use /api/games/:gameId/player',
+  });
 });
 
 // Save game animation
@@ -799,15 +827,7 @@ app.get('/api/games/:gameId/scenes', async (req: Request, res: Response) => {
       res.setHeader('Content-Type', 'application/json');
       res.send(raw);
     } catch {
-      // No scenes file, return default
-      res.json({
-        scenes: [
-          {
-            name: 'main',
-            obstacles: [],
-          },
-        ],
-      });
+      res.json(createInitialScenesPayload());
     }
   } catch (err) {
     res.status(500).json({ error: 'failed_to_read', detail: String(err) });

@@ -55,7 +55,7 @@ type SceneGroundTerrainConfig = {
   seed: number;
 };
 
-const defaultGameId = 'prototype';
+const defaultGameId = 'no_game_selected';
 const defaultSceneName = 'main';
 const gamesDir =
   process.env.GAMES_DIR ??

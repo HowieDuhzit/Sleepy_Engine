@@ -1442,9 +1442,6 @@ export class EditorApp {
     if (!gameId) {
       throw new Error('No game selected');
     }
-    if (gameId === 'prototype') {
-      throw new Error('Cannot delete prototype');
-    }
     await deleteGame(gameId);
     if (localStorage.getItem('editorGameId') === gameId) {
       localStorage.removeItem('editorGameId');
@@ -4465,10 +4462,19 @@ export class EditorApp {
 
   // Load assets for current game (triggers refresh of animations and scenes)
   private async loadGameAssets(retryCount = 0) {
-    console.log('Loading assets for game:', this.currentGameId, `(attempt ${retryCount + 1})`);
-    console.log('refreshClipsFunction available:', !!this.refreshClipsFunction);
-    console.log('refreshScenesFunction available:', !!this.refreshScenesFunction);
-    if (this.currentGameId) {
+    if (!this.currentGameId) {
+      this.playerConfig = this.normalizePlayerConfig(this.playerConfig);
+      this.loadVrm();
+      if (this.refreshPlayerAvatarsFunction) await this.refreshPlayerAvatarsFunction();
+      this.refreshPlayerInputsFunction?.();
+      this.syncPlayerCapsulePreview();
+      if (this.refreshClipsFunction) await this.refreshClipsFunction();
+      if (this.refreshScenesFunction) await this.refreshScenesFunction();
+      if (this.refreshModelsFunction) await this.refreshModelsFunction();
+      return;
+    }
+
+    {
       try {
         const res = await fetch(`/api/games/${this.currentGameId}/player`, { cache: 'no-store' });
         if (res.ok) {
@@ -4488,7 +4494,6 @@ export class EditorApp {
 
     // If functions aren't ready yet, retry after a delay (max 5 retries)
     if ((!this.refreshClipsFunction || !this.refreshScenesFunction) && retryCount < 5) {
-      console.log('Refresh functions not ready, retrying in 200ms...');
       setTimeout(() => {
         this.loadGameAssets(retryCount + 1);
       }, 200);
@@ -4497,36 +4502,30 @@ export class EditorApp {
 
     // Trigger refresh of animations list
     if (this.refreshClipsFunction) {
-      console.log('Calling refreshClipsFunction...');
       try {
         await this.refreshClipsFunction();
-        console.log('✓ Animations loaded successfully');
       } catch (err) {
-        console.error('✗ Failed to load animations:', err);
+        console.error('Failed to load animations:', err);
       }
     } else {
-      console.error('✗ refreshClipsFunction not available after retries');
+      console.error('refreshClipsFunction not available after retries');
     }
 
     // Trigger refresh of scenes
     if (this.refreshScenesFunction) {
-      console.log('Calling refreshScenesFunction...');
       try {
         await this.refreshScenesFunction();
-        console.log('✓ Scenes loaded successfully');
       } catch (err) {
-        console.error('✗ Failed to load scenes:', err);
+        console.error('Failed to load scenes:', err);
       }
     } else {
-      console.error('✗ refreshScenesFunction not available after retries');
+      console.error('refreshScenesFunction not available after retries');
     }
     if (this.refreshModelsFunction) {
-      console.log('Calling refreshModelsFunction...');
       try {
         await this.refreshModelsFunction();
-        console.log('✓ Models loaded successfully');
       } catch (err) {
-        console.error('✗ Failed to load models:', err);
+        console.error('Failed to load models:', err);
       }
     }
   }
@@ -5232,9 +5231,8 @@ export class EditorApp {
     });
     const updateDeleteGameButtonState = () => {
       const selectedId = this.currentGameId;
-      deleteGameBtn.disabled = !selectedId || selectedId === 'prototype';
-      deleteGameBtn.title =
-        selectedId === 'prototype' ? 'Prototype is protected and cannot be deleted' : '';
+      deleteGameBtn.disabled = !selectedId;
+      deleteGameBtn.title = selectedId ? '' : 'Select a game to delete';
     };
 
     // Fetch and populate games list
@@ -5249,9 +5247,8 @@ export class EditorApp {
           gameSelect.appendChild(option);
         }
 
-        // Load saved game from localStorage, or default to prototype
+        // Restore selected game from launch context or local storage.
         const savedGameId = localStorage.getItem('editorGameId');
-        const prototypeGame = games.find((p) => p.id === 'prototype');
         const initialGameExists =
           this.initialGameId && games.find((p) => p.id === this.initialGameId);
 
@@ -5261,61 +5258,18 @@ export class EditorApp {
           gameSelect.value = this.initialGameId;
           localStorage.setItem('editorGameId', this.initialGameId);
         } else if (savedGameId && games.find((p) => p.id === savedGameId)) {
-          // Saved game exists, use it
           this.currentGameId = savedGameId;
           gameSelect.value = savedGameId;
-        } else if (prototypeGame) {
-          // No saved game, fall back to prototype if it exists
-          this.currentGameId = 'prototype';
-          gameSelect.value = 'prototype';
-          localStorage.setItem('editorGameId', 'prototype');
         } else if (games[0]) {
           this.currentGameId = games[0].id;
           gameSelect.value = games[0].id;
           localStorage.setItem('editorGameId', games[0].id);
+        } else {
+          this.currentGameId = null;
+          localStorage.removeItem('editorGameId');
         }
 
-        // Schedule asset loading (will retry if functions not ready yet)
-        if (this.currentGameId) {
-          // First verify API endpoints are working
-          setTimeout(async () => {
-            console.log('=== Editor Initialization Debug ===');
-            console.log('Selected game:', this.currentGameId);
-
-            // Test animations endpoint
-            try {
-              const animPath = `/api/games/${this.currentGameId}/animations`;
-              console.log('Testing:', animPath);
-              const res = await fetch(animPath);
-              if (res.ok) {
-                const data = await res.json();
-                console.log('✓ Animations API response:', data);
-              } else {
-                console.error('✗ Animations API failed:', res.status);
-              }
-            } catch (err) {
-              console.error('✗ Animations API error:', err);
-            }
-
-            // Test scenes endpoint
-            try {
-              const scenesPath = `/api/games/${this.currentGameId}/scenes`;
-              console.log('Testing:', scenesPath);
-              const res = await fetch(scenesPath);
-              if (res.ok) {
-                const data = await res.json();
-                console.log('✓ Scenes API response:', data);
-              } else {
-                console.error('✗ Scenes API failed:', res.status);
-              }
-            } catch (err) {
-              console.error('✗ Scenes API error:', err);
-            }
-
-            console.log('Starting asset loading...');
-            this.loadGameAssets(0);
-          }, 100);
-        }
+        await this.loadGameAssets(0);
         updateDeleteGameButtonState();
       } catch (err) {
         console.error('Error loading games list:', err);
@@ -5371,10 +5325,6 @@ export class EditorApp {
       const gameId = this.currentGameId;
       if (!gameId) {
         alert('Select a game first.');
-        return;
-      }
-      if (gameId === 'prototype') {
-        alert('Prototype is protected and cannot be deleted.');
         return;
       }
       const label = gameSelect.options[gameSelect.selectedIndex]?.textContent?.trim() || gameId;
@@ -5471,7 +5421,14 @@ export class EditorApp {
     const floatingPanelsById = new Map<string, HTMLDivElement>();
     const floatingButtonsById = new Map<string, HTMLButtonElement>();
     let floatingPanelZ = 40;
-    const defaultOpenPanels = new Set<string>();
+    const defaultOpenPanels = new Set<string>([
+      'Scene',
+      'Level Tools',
+      'Inspector',
+      'Quick Actions',
+      'Context Inspector',
+      'No-Code Logic',
+    ]);
     const defaultPositionByTitle = new Map<string, { x: number; y: number }>([
       ['Scene', { x: 16, y: 74 }],
       ['Obstacles JSON', { x: 16, y: 288 }],
@@ -11046,17 +11003,42 @@ export class EditorApp {
   }
 
   private createSettingsScene() {
-    // Minimal scene for settings preview
-    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
-    this.settingsScene.add(ambient);
+    // Object preview scene: tri-light rig for readable forms/materials.
+    this.settingsScene.background = new THREE.Color(0x121722);
 
-    // Add floor
+    const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x141922, 0.32);
+    this.settingsScene.add(hemi);
+
+    const keyLight = new THREE.DirectionalLight(0xfff2de, 1.15);
+    keyLight.position.set(4.8, 5.6, 4.2);
+    this.settingsScene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x9fc0ff, 0.62);
+    fillLight.position.set(-4.2, 2.8, 2.2);
+    this.settingsScene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0x7bc9ff, 0.78);
+    rimLight.position.set(-2.4, 3.8, -4.6);
+    this.settingsScene.add(rimLight);
+
+    // Add neutral floor so contact and silhouette remain visible.
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(10, 10),
-      new THREE.MeshStandardMaterial({ color: 0x333333 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x242c3a,
+        roughness: 0.9,
+        metalness: 0.04,
+      }),
     );
     floor.rotation.x = -Math.PI / 2;
     this.settingsScene.add(floor);
+
+    const grid = new THREE.GridHelper(10, 20, 0x4f6283, 0x2a3448);
+    grid.position.y = 0.002;
+    const gridMaterial = grid.material as THREE.Material;
+    gridMaterial.transparent = true;
+    gridMaterial.opacity = 0.3;
+    this.settingsScene.add(grid);
 
     this.modelPreviewRoot.name = 'model-preview-root';
     this.modelPreviewRoot.position.set(0, 0, 0);

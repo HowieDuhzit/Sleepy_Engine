@@ -415,8 +415,8 @@ export class EngineRoom extends Room {
       const cleaned = (value ?? '').replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
       return cleaned || fallback;
     };
-    const gameId = sanitizeSegment(options?.gameId, 'prototype');
-    const sceneName = sanitizeSegment(options?.sceneName, 'prototype');
+    const gameId = sanitizeSegment(options?.gameId, 'no_game_selected');
+    const sceneName = sanitizeSegment(options?.sceneName, 'main');
 
     this.setMetadata({ gameId, sceneName });
     this.setState(new EngineState());

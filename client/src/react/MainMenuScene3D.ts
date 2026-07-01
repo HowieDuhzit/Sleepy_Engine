@@ -823,7 +823,10 @@ export function MainMenuScene3D({
     const idleClipPromise = loadIdleClip();
 
     const loadVrm = async () => {
-      const urls = ['/avatars/default.vrm', '/api/games/prototype/avatars/default.vrm'];
+      const urls = ['/avatars/default.vrm'];
+      if (gameIdRef.current) {
+        urls.unshift(`/api/games/${gameIdRef.current}/avatars/default.vrm`);
+      }
       try {
         let loaded: VRM | undefined;
         let gltfScene: THREE.Group | null = null;

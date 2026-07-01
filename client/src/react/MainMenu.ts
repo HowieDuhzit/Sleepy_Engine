@@ -88,7 +88,7 @@ export function MainMenu({ onPlay, onEditor, showForeground = true }: MainMenuPr
         setGames((prev) => (sameGames(prev, items) ? prev : items));
         setCurrentGameId((prev) => {
           if (prev && items.some((game) => game.id === prev)) return prev;
-          return items.find((g) => g.id === 'prototype')?.id ?? items[0]?.id ?? '';
+          return items[0]?.id ?? '';
         });
       } catch (error) {
         console.error('Failed to load games:', error);
@@ -141,7 +141,6 @@ export function MainMenu({ onPlay, onEditor, showForeground = true }: MainMenuPr
   };
 
   const handleEditor = () => {
-    if (!currentGameId) return;
     onEditor(currentGameId, currentStartScene);
   };
 

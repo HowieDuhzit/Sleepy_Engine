@@ -1,0 +1,14 @@
+wing: trashygame
+rooms:
+- name: frontend
+  description: Files from client/
+- name: backend
+  description: Files from server/
+- name: shared
+  description: Files from shared/
+- name: documentation
+  description: Files from docs/
+- name: docker
+  description: Files from docker/
+- name: general
+  description: Files that don't fit other rooms
